@@ -28,6 +28,13 @@ evidence pointers, are in [`docs/REVERSE_ENGINEERING.md`](docs/REVERSE_ENGINEERI
 | Candid + HTTP end-to-end on the local network (365 hard checks) | [`scripts/e2e_local.sh`](scripts/e2e_local.sh) |
 | What REA observed in Obsidian and what the rebuild keeps | [`docs/REVERSE_ENGINEERING.md`](docs/REVERSE_ENGINEERING.md) |
 
+
+## Live on mainnet
+
+- App: https://cmbgr-zqaaa-aaaae-ahakq-cai.icp.net/
+- Registry canister: `cfcnn-pyaaa-aaaae-ahala-cai` (deploy with `icp deploy -e ic`)
+- Frontend canister: `cmbgr-zqaaa-aaaae-ahakq-cai`
+
 ## How it works
 
 - **Notebook = canister.** `create_notebook(name)` on the registry creates a canister with 1 TC, installs
