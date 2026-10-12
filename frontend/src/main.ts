@@ -1149,7 +1149,9 @@ function aside(): string {
   const un = [...(S.idx.unresolved.get(c) ?? [])];
   const n = note(c);
   const ctx = (p: string) => {
-    const line = backlinkContext(note(p)!, c, all);
+    const from = note(p);
+    if (!from) return ""; // the index can name a note that is gone, or not loaded yet
+    const line = backlinkContext(from, c, all);
     return line ? `<div class="ctx">${esc(line).replace(/\[\[([^\]]+)\]\]/g, (m) => `<mark>${m}</mark>`)}</div>` : "";
   };
   const row = (p: string, withCtx: boolean) => `<div class="bl" data-action="open" data-path="${esc(p)}"><div class="t">${icon("file")}${esc(stem(p))}</div>${withCtx ? ctx(p) : ""}</div>`;
@@ -1608,7 +1610,8 @@ function reactionsHtml(m: Message): string {
   return `<div class="reacts">${rs.map((r) => `<button type="button" class="react ${r.by.some((p) => p.toText() === S.principal) ? "on" : ""}" data-action="chat-react" data-mid="${m.id}" data-emoji="${esc(r.emoji)}" title="${r.by.length} ${r.by.length === 1 ? "person" : "people"}">${esc(r.emoji)}<span class="n">${r.by.length}</span></button>`).join("")}<button type="button" class="react add" data-action="chat-emoji" data-mid="${m.id}" title="Add a reaction" aria-label="Add a reaction">+</button></div>`;
 }
 /** A gist is a note snapshot: rendered like a note, but links go dead and images vanish (community rule). */
-const gistMd = (t: string) => renderMd(t).replace(/<div class="pdf-embed"[^>]*><div class="pdf-head"><span class="pdf-name">([^<]*)<\/span>[\s\S]*?<\/div><\/div><\/div>/g, '<p class="dead">$1</p>').replace(/<a\b[^>]*>/gi, '<span class="dead">').replace(/<\/a>/gi, "</span>").replace(/<(img|video|audio|iframe)\b[^>]*>/gi, "");
+// snapshots drop heading ids: several gists of one note would repeat them, and they are not link targets here
+const gistMd = (t: string) => renderMd(t).replace(/(<h[1-6][^>]*?) id="[^"]*"/g, "$1").replace(/<div class="pdf-embed"[^>]*><div class="pdf-head"><span class="pdf-name">([^<]*)<\/span>[\s\S]*?<\/div><\/div><\/div>/g, '<p class="dead">$1</p>').replace(/<a\b[^>]*>/gi, '<span class="dead">').replace(/<\/a>/gi, "</span>").replace(/<(img|video|audio|iframe)\b[^>]*>/gi, "");
 function gistHtml(m: Message): string {
   const g = m.gist!;
   const open = `<button type="button" class="btn btn-ghost" data-action="gist-open" data-nb="${g.notebook.toText()}" data-path="${esc(g.path)}" title="Open the live note (if you have access)">${icon("out")}Open</button>`;
@@ -3957,6 +3960,7 @@ async function openNotebook(id: string, path?: string) {
   if (!v) return;
   S.notebook = v;
   S.notes = undefined;
+  S.idx = buildIndex([]); // the last notebook's links would point at notes this one has not loaded
   S.drafts.clear();
   S.tab = "notes";
   S.chat = { input: "", busy: false, messages: [], excluded: new Set(JSON.parse(store(`nb-chat-off-${id}`) ?? "[]") as string[]), stage: "" };

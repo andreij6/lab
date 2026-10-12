@@ -515,7 +515,7 @@ abbr.gl { text-decoration: underline dotted var(--accent-2); text-underline-offs
 .wallet { margin-top: auto; position: sticky; bottom: 0; background: var(--bg-1); border-top: 1px solid var(--line); padding: 6px 10px 10px; } .wallet-bal { display: flex; align-items: center; justify-content: space-between; font-size: 1.1rem; } .wallet .mono { display: flex; align-items: center; gap: 2px; margin-top: 6px; font-size: .72rem; }
 .chatpane { display: flex; flex-direction: column; min-height: 0; } .chat-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); } .chat-head .right-actions { margin-left: auto; }
 .msgrow { position: relative; padding: 2px 14px 2px 58px; } .msgrow:not(.cont) { margin-top: 10px; } .msgrow:hover { background: var(--bg-1); } .msgrow .who { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
-.avatar { position: absolute; left: 14px; width: 34px; height: 34px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: .75rem; font-weight: 700; color: #fff; background: hsl(var(--h) 55% 45%); } .msgrow .avatar { top: 2px; } .online-row .avatar { position: static; width: 26px; height: 26px; font-size: .65rem; }
+.avatar { position: absolute; left: 14px; width: 34px; height: 34px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: .75rem; font-weight: 700; color: #fff; background: hsl(var(--h) 55% 36%); } .msgrow .avatar { top: 2px; } .online-row .avatar { position: static; width: 26px; height: 26px; font-size: .65rem; }
 .mtext { line-height: 1.5; } .mtext p { margin: 0 0 4px; } .msgrow .quote { font-size: .78rem; color: var(--fg-2); margin: 0 0 2px; display: flex; gap: 4px; align-items: center; } .msgrow .quote .ico { width: 12px; height: 12px; }
 .mtools { position: absolute; right: 10px; top: 0; display: none; gap: 2px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 6px; } .msgrow:hover .mtools { display: inline-flex; } .mtools .icon-btn { width: 24px; height: 24px; }
 .replying { display: flex; align-items: center; gap: 6px; font-size: .8rem; color: var(--fg-2); width: 100%; padding: 6px 10px 4px; }
@@ -649,3 +649,7 @@ body .wsbar, body .topbar { padding-right: 50px; } /* keep the corner clear for 
 @media (max-width: 760px) { .msgrow.rainmsg { flex-wrap: wrap; row-gap: 2px; } .msgrow.rainmsg > .small { flex-basis: 100%; white-space: nowrap; } }
 /* touch screens have no hover: controls that hovering revealed stay visible (they were unreachable on phones and tablets) */
 @media (hover: none) { .kb-del, .nb-tools, .chart-x { opacity: .8; } .chart-tools { opacity: .9; } .pc-tools, .tile-tools { display: inline-flex; } .kb-del, .tile-tools .icon-btn, .chart-tools .icon-btn { min-width: 32px; min-height: 32px; } }
+/* iPhone Safari zooms the page into any text field under 16px and leaves it zoomed */
+@media (max-width: 760px) { input:not([type=checkbox]):not([type=radio]):not([type=range]):not(.title), textarea, select, .input, .cm-content, .compose-box textarea { font-size: max(16px, 1em); } }
+/* chips double as filter buttons; on touch they need a finger-sized target */
+@media (hover: none) { button.tag-chip, .tag-chip .chip-btn { min-height: 34px; } button.tag-chip { padding-inline: 12px; } }
