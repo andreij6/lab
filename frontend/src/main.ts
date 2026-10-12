@@ -156,7 +156,7 @@ type Tab = "notes" | "chat" | "graph" | "manage" | "study" | "work" | "organize"
 type Settings = { bookmarks: string[]; srs: Record<string, Record<string, Sched>>; deckStats: Record<string, { reviews: number; good: number }>; study: Record<string, number>; goals: { notesPerWeek?: number; cardsPerDay?: number }; searches: { name: string; q: string }[]; rules: Rule[]; resurface: Resurface; decayDays: number; hideFaded: boolean; kanbanArchiveDays: number; features: Partial<Record<Tab, boolean>>; onboarded?: boolean; writingGoal: number; citeStyle: Style };
 const parseSettings = (j: Partial<Settings> | undefined): Settings => ({ bookmarks: Array.isArray(j?.bookmarks) ? j!.bookmarks : [], srs: j?.srs ?? {}, deckStats: j?.deckStats ?? {}, study: j?.study ?? {}, goals: j?.goals ?? {}, searches: Array.isArray(j?.searches) ? j!.searches : [], rules: Array.isArray(j?.rules) ? j!.rules : [], resurface: j?.resurface ?? {}, decayDays: typeof j?.decayDays === "number" ? j.decayDays : 180, hideFaded: !!j?.hideFaded, kanbanArchiveDays: typeof j?.kanbanArchiveDays === "number" ? j.kanbanArchiveDays : 14, features: j?.features ?? {}, onboarded: j?.onboarded, writingGoal: typeof j?.writingGoal === "number" ? j.writingGoal : 500, citeStyle: j?.citeStyle === "chicago" ? "chicago" : "apa" });
 type ManageTab = "finance" | "notebook" | "sharing" | "agents" | "market";
-const MANAGE_TABS: [ManageTab, string, string][] = [["finance", "Cycles & money", "bolt"], ["notebook", "Notebook", "book"], ["sharing", "Sharing", "share"], ["agents", "Agents", "bot"], ["market", "Market", "tag"]];
+const MANAGE_TABS: [ManageTab, string, string][] = [["finance", "Cycles & money", "bolt"], ["notebook", "Notebook", "cog"], ["sharing", "Sharing", "share"], ["agents", "Agents", "bot"], ["market", "Market", "tag"]];
 type View = "edit" | "split" | "preview";
 type MobilePane = "files" | "note" | "links";
 /** A pane holds tabs (note paths); several panes sit side by side. */
@@ -356,7 +356,12 @@ const ICONS: Record<string, string> = {
   columns: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/>',
   split: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16M15 12h4M17 10l2 2-2 2"/>',
   x: '<path d="M6 6l12 12M18 6 6 18"/>',
-  book: '<path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 19a2 2 0 0 1 2-2h13"/>',
+  notebook: '<rect x="5" y="3" width="15" height="18" rx="2"/><path d="M3 7.5h4M3 12h4M3 16.5h4M15 3v18"/>',
+  cog: '<circle cx="12" cy="12" r="3"/><path d="M12 3l1.5 2.3 2.7-.6.6 2.7L19 9l-1 2.5 1 2.5-2.2 1.6-.6 2.7-2.7-.6L12 21l-1.5-2.3-2.7.6-.6-2.7L5 15l1-2.5L5 10l2.2-1.6.6-2.7 2.7.6z"/>',
+  cap: '<path d="M2 9.5L12 5l10 4.5L12 14z"/><path d="M6 11.5V16c3 2.5 9 2.5 12 0v-4.5M22 9.5V15"/>',
+  quote: '<path d="M7 11.5a2.5 2.5 0 1 1 2.5-2.5c0 4-1.8 6.6-5 7.8M16 11.5a2.5 2.5 0 1 1 2.5-2.5c0 4-1.8 6.6-5 7.8"/>',
+  type: '<path d="M5 7V4h14v3M9.5 20h5M12 4v16"/>',
+  target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>',
   copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
   refresh: '<path d="M21 12a9 9 0 1 1-3-6.7M21 3v6h-6"/>',
   fit: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
@@ -853,7 +858,7 @@ function routeSheet(el: HTMLElement) {
   const tab = (t: Tab, label: string, ic: string): R => ({ label, icon: ic, sub: true, hidden: !featureOn(t), on: inNb && S.tab === t, go: () => { const i = document.createElement("i"); i.dataset.tab = t; if (!inNb) { S.community = undefined; S.board = undefined; S.market = undefined; S.admin = undefined; location.hash = `#/notebook/${nbId}`; } void onAction("tab", i, new MouseEvent("click")); } });
   const routes: R[] = [
     { label: "Your notebooks", icon: "list", on: !S.notebook && !S.community && !S.board && !S.market && !S.admin, go: () => { location.hash = "#/"; } },
-    ...(S.notebook ? [{ label: S.notebook.name, icon: "book", on: inNb && S.tab === "notes", go: () => { if (!inNb) location.hash = `#/notebook/${nbId}`; else { const i = document.createElement("i"); i.dataset.tab = "notes"; void onAction("tab", i, new MouseEvent("click")); } } } as R, tab("chat", "Chat with your notes", "chat"), tab("graph", "Graph", "graph"), tab("study", "Study", "check"), tab("work", "Work", "briefcase"), tab("organize", "Organize", "sliders"), tab("research", "Research", "book"), tab("writing", "Writing", "edit"), tab("care", "Care", "heart"), tab("software", "Software", "terminal"), tab("trips", "Trips", "mountain"), tab("manage", "Manage", "bolt")].filter((r) => !r.hidden) : []),
+    ...(S.notebook ? [{ label: S.notebook.name, icon: "notebook", on: inNb && S.tab === "notes", go: () => { if (!inNb) location.hash = `#/notebook/${nbId}`; else { const i = document.createElement("i"); i.dataset.tab = "notes"; void onAction("tab", i, new MouseEvent("click")); } } } as R, tab("chat", "Chat with your notes", "chat"), tab("graph", "Graph", "graph"), tab("study", "Study", "check"), tab("work", "Work", "briefcase"), tab("organize", "Organize", "sliders"), tab("research", "Research", "cap"), tab("writing", "Writing", "edit"), tab("care", "Care", "heart"), tab("software", "Software", "terminal"), tab("trips", "Trips", "mountain"), tab("manage", "Manage", "bolt")].filter((r) => !r.hidden) : []),
     { label: "Community", icon: "users", on: !!S.community, go: () => { location.hash = "#/community"; } },
     ...(flag("board") ? [{ label: "Board", icon: "pin", on: !!S.board, go: () => { location.hash = "#/board"; } } as R] : []),
     ...(flag("market") ? [{ label: "Market", icon: "tag", on: !!S.market, go: () => { location.hash = "#/market"; } } as R] : []),
@@ -888,7 +893,7 @@ function moreMenu(el: HTMLElement) {
   const go = (hash: string) => () => { location.hash = hash; };
   const items: MenuItem[] = [];
   if (S.notebook && !S.market && !S.admin) items.push({ label: "Search or open a note", icon: "search", action: () => openPalette() });
-  if (S.notebook && (S.market || S.admin || S.community)) items.push({ label: `Back to “${S.notebook.name}”`, icon: "book", action: go(`#/notebook/${S.notebook.canister.toText()}`) });
+  if (S.notebook && (S.market || S.admin || S.community)) items.push({ label: `Back to “${S.notebook.name}”`, icon: "notebook", action: go(`#/notebook/${S.notebook.canister.toText()}`) });
   if (S.notebook || S.market || S.admin || S.community) items.push({ label: "Your notebooks", icon: "list", action: go("#/") });
   if (!S.community) items.push({ label: "Community chat", icon: "users", action: go("#/community") });
   if (!S.market && flag("market")) items.push({ label: "Notebook market", icon: "tag", action: go("#/market") });
@@ -910,7 +915,7 @@ function landing(): string {
       <h1>Organize your thoughts. Get feedback. Build a knowledge base.</h1>
       <p class="lede">A notebook is a folder of markdown files: <code>[[links]]</code>, backlinks, tags, a knowledge graph. Here every notebook is its own canister on the Internet Computer. You sign in with Internet Identity, you are its controller, and you keep it running with cycles. Nobody else can read it, not even the registry that created it.</p>
       <div class="features">
-        <div class="feature">${icon("book")}<b>One canister per notebook</b><p>Spawned for you, controlled by you. Download it as a zip any time; it is yours on-chain.</p></div>
+        <div class="feature">${icon("notebook")}<b>One canister per notebook</b><p>Spawned for you, controlled by you. Download it as a zip any time; it is yours on-chain.</p></div>
         <div class="feature">${icon("graph")}<b>Links that think</b><p>[[Wiki links]], backlinks with context, tags, search and a force-directed graph of how your notes connect.</p></div>
         <div class="feature">${icon("bolt")}<b>Keep it running</b><p>See the cycles left, send ICP from any wallet or top up in one click. Links are rewritten when you rename.</p></div>
       </div>
@@ -1002,7 +1007,7 @@ function ribbonHtml(i?: Info, low = false): string {
   const inNb = !!S.notebook && !S.community && !S.board && !S.market && !S.admin;
   const rb = (tab: Tab, label: string, ic: string, extra = "") => !featureOn(tab) ? "" : `<button type="button" class="rb ${inNb && S.tab === tab ? "on" : ""}" data-action="ribbon-tab" data-tab="${tab}" title="${label}" aria-label="${label}" aria-pressed="${inNb && S.tab === tab}">${icon(ic)}${extra}</button>`;
   return `<nav class="ribbon" aria-label="Sections">
-      <div class="rb-group">${rb("notes", "Notes", "file")}${rb("chat", "Chat with your notes", "chat")}${rb("graph", "Knowledge graph", "graph")}${rb("study", `Study${dueTotal() ? ` · ${dueTotal()} cards due` : ""}`, "check", dueTotal() ? `<i class="rb-count">${dueTotal()}</i>` : "")}${rb("work", `Work${overdueCount() ? ` · ${overdueCount()} overdue` : ""}`, "briefcase", overdueCount() ? `<i class="rb-count danger">${overdueCount()}</i>` : "")}${rb("organize", "Organize: saved searches, triage, rules, tidy-up", "sliders")}${rb("research", "Research: sources, citations, claims, thesis", "book")}${rb("writing", "Writing: manuscript, story bible, timeline", "edit")}${rb("care", "Care: log, appointments, care team", "heart")}${rb("software", "Software: decisions, runbooks, changelog", "terminal")}${rb("trips", S.trips.watching.some((w) => w.overdue && !w.closed) ? "Trips · someone is overdue" : "Trips", "mountain", S.trips.watching.some((w) => w.overdue && !w.closed) ? `<i class="rb-dot"></i>` : "")}</div>
+      <div class="rb-group">${rb("notes", "Notes", "file")}${rb("chat", "Chat with your notes", "chat")}${rb("graph", "Knowledge graph", "graph")}${rb("study", `Study${dueTotal() ? ` · ${dueTotal()} cards due` : ""}`, "check", dueTotal() ? `<i class="rb-count">${dueTotal()}</i>` : "")}${rb("work", `Work${overdueCount() ? ` · ${overdueCount()} overdue` : ""}`, "briefcase", overdueCount() ? `<i class="rb-count danger">${overdueCount()}</i>` : "")}${rb("organize", "Organize: saved searches, triage, rules, tidy-up", "sliders")}${rb("research", "Research: sources, citations, claims, thesis", "cap")}${rb("writing", "Writing: manuscript, story bible, timeline", "edit")}${rb("care", "Care: log, appointments, care team", "heart")}${rb("software", "Software: decisions, runbooks, changelog", "terminal")}${rb("trips", S.trips.watching.some((w) => w.overdue && !w.closed) ? "Trips · someone is overdue" : "Trips", "mountain", S.trips.watching.some((w) => w.overdue && !w.closed) ? `<i class="rb-dot"></i>` : "")}</div>
       <div class="rb-group bottom">${rb("manage", `Manage${i ? ` · ${tc(i.cycles)}` : ""}`, "bolt", low ? `<i class="rb-dot"></i>` : "")}<a class="rb ${S.community ? "on" : ""}" href="#/community" data-action="nav" title="Community${S.mentions ? ` · ${S.mentions} new mention${S.mentions === 1 ? "" : "s"}` : ""}" aria-label="Community">${icon("users")}${S.mentions ? `<i class="rb-badge">${S.mentions > 9 ? "9+" : S.mentions}</i>` : ""}</a>${flag("board") ? `<a class="rb ${S.board ? "on" : ""}" href="#/board" data-action="nav" title="Board: posts and discussion" aria-label="Board">${icon("pin")}</a>` : ""}${flag("market") ? `<a class="rb ${S.market ? "on" : ""}" href="#/market" data-action="nav" title="Notebook market" aria-label="Notebook market">${icon("tag")}</a>` : ""}${S.isAdmin ? `<a class="rb ${S.admin ? "on" : ""}" href="#/admin" data-action="nav" title="Reports and ideas" aria-label="Reports and ideas">${icon("bug")}</a>` : ""}<button type="button" class="rb" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="rb" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button><button type="button" class="rb" data-action="sign-out" title="Sign out" aria-label="Sign out">${icon("out")}</button></div>
     </nav>`;
 }
@@ -1222,7 +1227,7 @@ function editorBody(p: Pane): string {
         <button type="button" class="btn btn-ghost icon-btn ${S.settings.bookmarks.includes(c) ? "accent" : ""}" data-action="bookmark" data-path="${esc(c)}" title="${S.settings.bookmarks.includes(c) ? "Remove bookmark" : "Bookmark"}" aria-label="Bookmark">${icon("star")}</button>
         ${c.endsWith(".md") && isMeeting(d.text) ? `<button type="button" class="btn btn-ghost" data-action="follow-up" data-path="${esc(c)}" title="Decisions and actions for mail or chat">${icon("mail")}<span class="small lbl">Follow-up</span></button>` : ""}
         ${c.endsWith(".md") && isSlides(d.text) ? `<button type="button" class="btn btn-ghost" data-action="present" data-path="${esc(c)}" title="Present full screen (→ next, ← back, Esc leaves)">${icon("columns")}<span class="small lbl">Present</span></button>` : ""}
-        ${c.endsWith(".md") ? `<button type="button" class="btn btn-ghost icon-btn ${p.study ? "accent" : ""}" data-action="study-mode" data-pane="${p.id}" title="Study mode: one section at a time" aria-label="Study mode" aria-pressed="${!!p.study}">${icon("book")}</button>` : ""}
+        ${c.endsWith(".md") ? `<button type="button" class="btn btn-ghost icon-btn ${p.study ? "accent" : ""}" data-action="study-mode" data-pane="${p.id}" title="Study mode: one section at a time" aria-label="Study mode" aria-pressed="${!!p.study}">${icon("target")}</button>` : ""}
         <button type="button" class="btn btn-ghost" data-action="view" data-pane="${p.id}" title="Edit, split or reading (${MOD}E)">${icon(viewIcon)}<span class="small lbl">${p.view === "edit" ? "Editing" : p.view === "split" ? "Split" : "Reading"}</span></button>
         <button type="button" class="btn btn-ghost icon-btn ${(S.asideMode === "comments" && S.asideOpen) || unreadComments(c) ? "accent" : ""}" data-action="comments" title="Comments${unreadComments(c) ? ` · ${unreadComments(c)} new` : ""}" aria-label="Comments">${icon("chat")}${S.comments.filter((x) => x.path === c).length ? `<span class="badge">${S.comments.filter((x) => x.path === c).length}</span>` : ""}</button>
         <button type="button" class="btn btn-ghost icon-btn" data-action="menu-current" data-pane="${p.id}" title="More" aria-label="Note actions">${icon("more")}</button>
@@ -1687,7 +1692,7 @@ function boardPage(): string {
       <section class="main chatpane board">${main}</section>
       <aside class="aside" aria-label="Rules">${aside}</aside>
     </div>
-    ${S.mobile ? `<nav class="mobilebar" aria-label="Panes"><button type="button" class="mtab" data-action="chat-pane" data-pane="files">${icon("tag")}Topics</button><button type="button" class="mtab" aria-selected="true" data-action="chat-pane" data-pane="note">${icon("pin")}Posts</button><button type="button" class="mtab" data-action="chat-pane" data-pane="links">${icon("help")}Rules</button><button type="button" class="mtab" data-action="nav-home">${icon("book")}Notes</button></nav>` : ""}
+    ${S.mobile ? `<nav class="mobilebar" aria-label="Panes"><button type="button" class="mtab" data-action="chat-pane" data-pane="files">${icon("tag")}Topics</button><button type="button" class="mtab" aria-selected="true" data-action="chat-pane" data-pane="note">${icon("pin")}Posts</button><button type="button" class="mtab" data-action="chat-pane" data-pane="links">${icon("help")}Rules</button><button type="button" class="mtab" data-action="nav-home">${icon("file")}Notes</button></nav>` : ""}
   </div></div>`;
 }
 type PostPrefill = { notebook?: string; path?: string; text?: string; title?: string; body?: string; topic?: string };
@@ -1734,7 +1739,7 @@ function communityPage(): string {
       <section class="main chatpane">${chatHtmlC()}</section>
       <aside class="aside" id="onlinepane" aria-label="Online">${onlineHtml()}</aside>
     </div>
-    ${S.mobile ? `<nav class="mobilebar" aria-label="Panes"><button type="button" class="mtab" data-action="chat-pane" data-pane="files">${icon("list")}Channels</button><button type="button" class="mtab" aria-selected="true" data-action="chat-pane" data-pane="note">${icon("chat")}Chat</button><button type="button" class="mtab" data-action="chat-pane" data-pane="links">${icon("users")}Online</button><button type="button" class="mtab" data-action="nav-home">${icon("book")}Notes</button></nav>` : ""}
+    ${S.mobile ? `<nav class="mobilebar" aria-label="Panes"><button type="button" class="mtab" data-action="chat-pane" data-pane="files">${icon("list")}Channels</button><button type="button" class="mtab" aria-selected="true" data-action="chat-pane" data-pane="note">${icon("chat")}Chat</button><button type="button" class="mtab" data-action="chat-pane" data-pane="links">${icon("users")}Online</button><button type="button" class="mtab" data-action="nav-home">${icon("file")}Notes</button></nav>` : ""}
   </div></div>`;
 }
 async function createPoll() {
@@ -1993,7 +1998,7 @@ const FEATURES: { id: Tab; label: string; icon: string; desc: string }[] = [
   { id: "study", label: "Study", icon: "check", desc: "Flashcards, quizzes, spaced repetition, study mode." },
   { id: "work", label: "Work", icon: "briefcase", desc: "Tasks, projects, meetings, decisions, weekly review." },
   { id: "organize", label: "Organize", icon: "sliders", desc: "Saved searches, property tables, triage, periodic notes, rules, tidy-up." },
-  { id: "research", label: "Research", icon: "book", desc: "Sources from BibTeX or a DOI, [@citations], literature matrix, claims, a thesis compiler." },
+  { id: "research", label: "Research", icon: "cap", desc: "Sources from BibTeX or a DOI, [@citations], literature matrix, claims, a thesis compiler." },
   { id: "writing", label: "Writing", icon: "edit", desc: "Manuscript of scenes, word goals, story bible, continuity, timeline, beta readers." },
   { id: "care", label: "Care", icon: "heart", desc: "Symptom and medication log, care-team sharing and check-ins, appointment prep." },
   { id: "software", label: "Software", icon: "terminal", desc: "Decision records, runbooks, a changelog, runnable snippets." },
@@ -2097,7 +2102,7 @@ function researchTab(): string {
   const theses = notes.filter((n) => (frontmatter(n.content).data.type ?? "") === "thesis");
   const missingCites = [...new Set(notes.flatMap((n) => citedKeys(n.content)))].filter((k) => !src.some((s) => s.key === k));
   return `<section class="main" style="overflow:auto"><div class="page wide kit">
-    <div class="card band"><div class="row"><h2>${icon("book")} Sources</h2><span class="right-actions"><label class="btn">${icon("upload")}BibTeX file<input type="file" name="bib" accept=".bib,.bibtex,text/plain" hidden></label><button type="button" class="btn" data-action="bib-paste">Paste BibTeX</button><button type="button" class="btn btn-primary" data-action="doi-add">${icon("plus")}By DOI</button></span></div>
+    <div class="card band"><div class="row"><h2>${icon("quote")} Sources</h2><span class="right-actions"><label class="btn">${icon("upload")}BibTeX file<input type="file" name="bib" accept=".bib,.bibtex,text/plain" hidden></label><button type="button" class="btn" data-action="bib-paste">Paste BibTeX</button><button type="button" class="btn btn-primary" data-action="doi-add">${icon("plus")}By DOI</button></span></div>
       <p class="small muted">Each source is a note in <code>Sources/</code>. Cite it anywhere as <code>[@key]</code> or <code>[@key, p. 4]</code>; it renders as <span class="cite-ref">${src[0] ? esc(citeIn(src[0], citeStyle())) : "(Author, Year)"}</span> and links to the source.</p>
       <div class="row tight"><label class="field"><span class="label">Citation style</span><select class="input" name="citestyle"><option value="apa" ${citeStyle() === "apa" ? "selected" : ""}>APA 7</option><option value="chicago" ${citeStyle() === "chicago" ? "selected" : ""}>Chicago author-date</option></select></label>${missingCites.length ? `<p class="small" style="color:var(--danger)">Cited but not in Sources: ${missingCites.map((k) => `<code>@${esc(k)}</code>`).join(", ")}</p>` : ""}</div>
     </div>
@@ -2806,7 +2811,7 @@ function studyTab(): string {
       ${S.settings.goals.notesPerWeek || S.settings.goals.cardsPerDay ? `<div class="row tight nudge">${S.settings.goals.notesPerWeek ? `<span class="small">Notes: ${notesWeek.done}/${notesWeek.goal} this week <span class="meter inline"><i style="width:${Math.round(notesWeek.ratio * 100)}%"></i></span></span>` : ""}${S.settings.goals.cardsPerDay ? `<span class="small">Cards: ${cardsToday.done}/${cardsToday.goal} today <span class="meter inline"><i style="width:${Math.round(cardsToday.ratio * 100)}%"></i></span></span>` : ""}</div>` : ""}
     </form>
     <div class="card band">
-      <h2>${icon("book")} Glossary <span class="count">${g.length}</span></h2>
+      <h2>${icon("type")} Glossary <span class="count">${g.length}</span></h2>
       <p class="muted small">Every <code>Term:: definition</code> line in your notes. Terms are underlined in reading view; hover for the definition.</p>
       ${g.length ? `<dl class="glossary">${g.map((e) => `<div class="gl-row"><dt>${esc(e.term)}</dt><dd>${esc(e.definition)} <a href="#" class="small muted" data-action="open" data-path="${esc(e.path)}">${esc(title(e.path))}</a></dd></div>`).join("")}</dl>` : `<p class="small muted">Nothing defined yet.</p>`}
     </div>
@@ -5056,7 +5061,7 @@ function marketPage(): string {
     const mine = l.listing.seller.toText() === S.principal;
     const a = l.attestation;
     return `<div class="nb-card listing">
-      <span class="name">${icon("book")}${esc(l.name)}${a ? `<span class="grade g-${esc(a.grade)}" title="${esc(a.summary)}">${esc(a.grade)} · ${a.score}</span>` : ""}</span>
+      <span class="name">${icon("notebook")}${esc(l.name)}${a ? `<span class="grade g-${esc(a.grade)}" title="${esc(a.summary)}">${esc(a.grade)} · ${a.score}</span>` : ""}</span>
       ${l.listing.blurb ? `<span class="small">${esc(l.listing.blurb)}</span>` : ""}
       <span class="meta"><span class="pill ok">${fmtAmt(l.listing.price, t)}</span>${a ? `<span>${String(a.notes)} notes · ${String(a.words)} words${a.decks ? ` · ${String(a.decks)} deck${a.decks === 1n ? "" : "s"}` : ""}</span>` : ""}</span>
       <span class="small muted">${l.rating_count ? `<span class="stars">${stars(l.rating_avg)}</span> ${l.rating_avg.toFixed(1)} from ${String(l.rating_count)} buyer${l.rating_count === 1n ? "" : "s"}` : "No ratings yet"} · seller ${shortPrincipal(l.listing.seller.toText())}</span>
@@ -5884,7 +5889,7 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
       return helpDialog();
     case "nb-menu": {
       const r = el.getBoundingClientRect();
-      const items: MenuItem[] = (S.notebooks ?? []).map((n) => ({ label: n.name, icon: "book", checked: n.canister.toText() === S.notebook?.canister.toText(), action: () => { if (n.canister.toText() !== S.notebook?.canister.toText()) void saveAll().then(() => openNotebook(n.canister.toText())); } }));
+      const items: MenuItem[] = (S.notebooks ?? []).map((n) => ({ label: n.name, icon: "notebook", checked: n.canister.toText() === S.notebook?.canister.toText(), action: () => { if (n.canister.toText() !== S.notebook?.canister.toText()) void saveAll().then(() => openNotebook(n.canister.toText())); } }));
       items.push("-", { label: "New notebook…", icon: "plus", action: () => void ask({ title: "New notebook", label: "Name", placeholder: "Research", ok: "Create" }).then((v) => { if (v?.trim()) { S.newNotebook = v.trim(); void saveAll().then(() => { location.hash = "#/"; void createNotebook(); }); } }) }, { label: "All notebooks", icon: "updown", action: () => { void saveAll(); location.hash = "#/"; } }, { label: "Manage this notebook", icon: "bolt", action: () => { S.tab = "manage"; render(); } });
       return contextMenu(r.left, r.top - 8 - items.length * 34, "Notebooks", items);
     }
