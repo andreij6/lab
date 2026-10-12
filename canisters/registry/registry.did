@@ -526,6 +526,11 @@ service : () -> {
   top_up_notebook : (principal, nat64, opt principal) -> (Result_9);
   // Strips headers so every replica sees the same response.
   transform_github : (TransformArgs) -> (HttpRequestResult) query;
+  // New (not deleted) messages in every channel after the id the caller last saw there, capped at
+  // 100 a channel, in one call: the chat used to fetch up to 100 messages from each channel to count.
+  unread_counts : (vec record { text; nat64 }) -> (
+      vec record { text; nat32 },
+    ) query;
   // Move a report along and leave a note (admin only).
   update_bug : (nat64, BugStatus, text) -> (Result_21);
   // Upgrade every notebook to the wasm embedded in this registry (controller only).

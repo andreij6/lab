@@ -1530,11 +1530,11 @@ async function refreshUnread() {
   const c = S.community;
   if (!c) return;
   const seen = chatSeen();
+  // one query for every channel (it used to be one, of up to 100 messages, per channel)
+  const r = await registry().unread_counts(c.channels.map((ch) => [ch.name, BigInt(seen[ch.name] ?? "0")] as [string, bigint])).catch(() => undefined);
+  if (!r) return;
   const counts: Record<string, number> = {};
-  await Promise.all(c.channels.filter((ch) => ch.name !== c.channel).map(async (ch) => {
-    const r = await registry().messages(ch.name, BigInt(seen[ch.name] ?? "0"), 100).catch(() => undefined);
-    if (r?.__kind__ === "Ok" && r.Ok.length) counts[ch.name] = r.Ok.filter((m) => !m.deleted).length;
-  }));
+  for (const [name, n] of r) if (name !== c.channel) counts[name] = n;
   if (JSON.stringify(counts) !== JSON.stringify(c.unread)) { c.unread = counts; renderChannels(); }
 }
 /** Members chat as long as they own a notebook; no ICP has to sit anywhere. */

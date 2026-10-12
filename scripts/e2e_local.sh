@@ -520,6 +520,11 @@ expect "only the registry can bill a notebook" "Unauthorized" icp canister call 
 icp canister settings update "$ON" --freezing-threshold 1000000d --identity "$OTHER" >/dev/null
 expect "a member whose notebooks cannot pay is refused" "too low on cycles" icp canister call registry post '("general", "nope", null)' --identity "$OTHER"
 icp canister settings update "$ON" --freezing-threshold 90d --identity "$OTHER" >/dev/null
+echo "== unread counts for every channel in one query"
+icp canister call registry post '("help", "is anyone around?", null)' --identity "$OTHER" >/dev/null
+expect "a channel with messages after what you saw is counted" 'record { "help";' reg unread_counts '(vec { record { "general"; 0 : nat64 } })' --query
+HELPID=$(icp canister call registry messages '("help", 0, 100)' --query | grep -o 'id = [0-9_]*' | tail -1 | sed 's/id = //; s/_//g')
+if reg unread_counts "(vec { record { \"help\"; $HELPID : nat64 } })" --query | grep -qF '"help"'; then echo "FAIL: a channel read to its last message still counted"; exit 1; else echo "  ok: read to the last message, the channel drops out"; PASS=$((PASS+1)); fi
 echo "== rain is paid from a registered wallet (OISY), not the sign-in account"
 OWNER2P=$(icp identity principal --identity "$OWNER2"); icp token transfer 1 "$OWNER2P" -q >/dev/null
 expect "a member registers their wallet" "Ok" reg set_wallet "(opt principal \"$OWNER2P\")"

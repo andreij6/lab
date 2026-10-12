@@ -2102,6 +2102,25 @@ fn messages(channel: String, after: u64, limit: u32) -> Result<Vec<Message>, Str
     })
 }
 
+/// New (not deleted) messages in every channel after the id the caller last saw there, capped at
+/// 100 a channel, in one call: the chat used to fetch up to 100 messages from each channel to count.
+#[query]
+fn unread_counts(seen: Vec<(String, u64)>) -> Vec<(String, u32)> {
+    let seen: std::collections::HashMap<String, u64> = seen.into_iter().collect();
+    let names: Vec<String> = CHANNELS.with_borrow(|c| c.iter().map(|e| e.key().clone()).collect());
+    MESSAGES.with_borrow(|x| {
+        names
+            .into_iter()
+            .filter_map(|ch| {
+                let prefix = format!("{ch}#");
+                let from = msg_key(&ch, seen.get(&ch).copied().unwrap_or(0) + 1);
+                let n = x.range(from..).take_while(|e| e.key().starts_with(&prefix)).filter(|e| !e.value().0.deleted).take(100).count() as u32;
+                (n > 0).then_some((ch, n))
+            })
+            .collect()
+    })
+}
+
 /// Remove a message you wrote (or any, as an admin); the slot stays with the text blanked.
 #[update]
 fn delete_message(channel: String, id: u64) -> Result<(), String> {
