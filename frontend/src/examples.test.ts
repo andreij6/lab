@@ -8,9 +8,10 @@ import { parseNotebook } from "./ipynb.ts";
 import { parseCanvas } from "./canvasview.ts";
 import { isSlides, splitSlides } from "./slides.ts";
 import { applications } from "./career.ts";
+import { isOpen, journalStats, theses, trade } from "./crypto.ts";
 import { frontmatter } from "./notes.ts";
 
-const ALL = new Set(["chat", "graph", "study", "work", "organize", "research", "writing", "care", "software", "career", "trips"]);
+const ALL = new Set(["chat", "graph", "study", "work", "organize", "research", "writing", "care", "software", "career", "crypto", "trips"]);
 
 test("every notebook gets one working example of each core note type", () => {
   const files = new Map(examples(new Set(), "2026-10-12"));
@@ -44,6 +45,10 @@ test("each tool adds examples its tab can read", () => {
   assert.deepEqual(applications(files.get("Career/Applications.md")!).map((a) => a.stage), ["Saved", "Applied"]);
   assert.equal(parseCards(files.get("Career/Interview stories.md")!).length, 1);
   assert.ok(parseWorkbook(files.get("Trips/First trip/Gear.sheet")!).sheets.length >= 1);
+  const trades = [...files].filter(([p]) => p.startsWith("Crypto/Trades/")).map(([p, c]) => trade(p, c));
+  assert.deepEqual([trades.length, trades.filter(isOpen).length, journalStats(trades, "2026-10-12").realized], [2, 1, 30]);
+  assert.equal(theses([...files].map(([path, content]) => ({ path, content })), "2026-10-12")[0].asset, "BTC");
+  assert.equal(trades.find((t) => !isOpen(t))?.thesis, "Crypto/Theses/BTC holds up better than the rest");
   // every markdown example explains how to make one; nothing is listed twice
   const md = [...files].filter(([p, c]) => p.endsWith(".md") && !/quiz: choice|kanban-plugin|type: slides|type: runbook|type: adr|^---\ntype: (trip|experience|resume|person)/m.test(c) && !p.startsWith("Sources/") && !p.startsWith("Decisions/") && p !== "Examples/Start here.md" && p !== "Career/Interview stories.md" && p !== "Trips/First trip/Plan.md" && p !== "Examples/Slides.md");
   for (const [p, c] of md) assert.match(c, /\[!tip\] How to make one/, p);

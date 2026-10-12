@@ -2,6 +2,7 @@
 // every note type, each opening with a "How to make one" box, plus the files each tool's tab reads
 // (Career/, Trips/, Sources/, ...). Pure: the app writes whatever this returns that is not there yet.
 import { APPLICATIONS_BOARD, EXPERIENCE_TEMPLATE, PERSON_TEMPLATE, RESUME_TEMPLATE, STORIES_DECK, addApplication, addDays, applicationCard, storyCard } from "./career.ts";
+import { THESIS_TEMPLATE, TRADE_TEMPLATE, closeTrade } from "./crypto.ts";
 import { NEW_DRAWING } from "./excalidraw.ts";
 import { NEW_IPYNB } from "./ipynb.ts";
 import { parseBibtex, sourceNote, careWorkbook, adrTemplate, RUNBOOK_TEMPLATE } from "./kits.ts";
@@ -17,7 +18,7 @@ const how = (text: string) => `> [!tip] How to make one\n> ${text.replace(/\n/g,
 const fill = (t: string, title: string, date: string) => t.replace(/\{\{title\}\}/g, title).replace(/\{\{date\}\}/g, date);
 
 /** The examples for a set of tools (the ids from onboarding: chat, graph, study, work, organize,
- *  research, writing, care, software, career, trips). Everyone gets the core note types. */
+ *  research, writing, care, software, career, crypto, trips). Everyone gets the core note types. */
 export function examples(tools: Set<string>, today: string): ExampleFile[] {
   const out: ExampleFile[] = [];
   const add = (path: string, content: string) => out.push([path, content]);
@@ -90,6 +91,14 @@ export function examples(tools: Set<string>, today: string): ExampleFile[] {
     add("Career/Résumé.md", RESUME_TEMPLATE("Your name", ["Career/Experience/Your current role"]));
     add("Career/Interview stories.md", `${STORIES_DECK}\n${storyCard({ question: "Tell me about a time you disagreed with someone", situation: "What was going on.", task: "What you had to do.", action: "What you did.", result: "What happened, with a number if you have one." })}\n`);
     add("People/A recruiter.md", PERSON_TEMPLATE("A recruiter", "Met at a meetup", "Example company", today));
+  }
+  if (has("crypto")) {
+    const thesis = "Crypto/Theses/BTC holds up better than the rest";
+    add(`${thesis}.md`, THESIS_TEMPLATE({ asset: "BTC", belief: "BTC holds up better than the rest", because: "Example: more of the supply is held long-term every year\nExample: a reason with a source, cited like [@key]", wrongIf: "It falls further than ETH and SOL in the next drawdown", today, reviewIn: 30 }).replace("# BTC holds up better than the rest\n", `# BTC holds up better than the rest\n\n${how("Crypto → + Thesis. Today's price is saved with it; Crypto shows how far it has moved, and the review comes back in Work.")}`));
+    const tradeHow = (c: string) => c.replace(/^(# .+\n)/m, `$1\n${how("Crypto → Log a trade. Its coin, side, size, entry, stop and exit are properties, so the journal can add up your win rate and profit and loss.")}`);
+    add(`Crypto/Trades/${addDays(today, -7)} BTC long.md`, tradeHow(closeTrade(TRADE_TEMPLATE({ asset: "BTC", side: "long", size: 0.01, entry: 90000, stop: 87000, opened: addDays(today, -7), thesis }, "An example trade, closed with a profit."), 93000, addDays(today, -2), "Took profit at the target.")));
+    add(`Crypto/Trades/${today} ETH long.md`, tradeHow(TRADE_TEMPLATE({ asset: "ETH", side: "long", size: 0.5, entry: 3500, stop: 3300, target: 4000, opened: today }, "An example open trade. Crypto → Close records the exit and the profit or loss.")));
+    add("Crypto/Watchlist.md", `# Watchlist\n\n${how("A `prices` code block shows live prices in any note, from ICP's exchange rate canister.")}\`\`\`prices\nBTC ETH SOL HYPE\n\`\`\`\n`);
   }
   return out;
 }

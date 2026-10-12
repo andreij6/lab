@@ -922,6 +922,103 @@ fn resolve_location(current: &str, loc: &str) -> String {
     format!("{dir}/{loc}")
 }
 
+// ---- live prices for the Crypto kit, from ICP's exchange rate canister (XRC)
+
+#[derive(CandidType, Deserialize, Clone)]
+enum AssetClass {
+    Cryptocurrency,
+    FiatCurrency,
+}
+#[derive(CandidType, Deserialize, Clone)]
+struct Asset {
+    symbol: String,
+    class: AssetClass,
+}
+#[derive(CandidType)]
+struct RateRequest {
+    base_asset: Asset,
+    quote_asset: Asset,
+    timestamp: Option<u64>,
+}
+/// The fields of XRC's ExchangeRate this notebook reads; candid skips the rest.
+#[derive(Deserialize, CandidType)]
+struct RateMeta {
+    decimals: u32,
+}
+#[derive(Deserialize, CandidType)]
+struct Rate {
+    rate: u64,
+    timestamp: u64,
+    metadata: RateMeta,
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug)]
+pub struct Price {
+    pub symbol: String,
+    /// in US dollars; None when the exchanges the XRC reads do not list it
+    pub usd: Option<f64>,
+    /// the minute the rate is for, in seconds since the epoch
+    pub at: u64,
+}
+
+/// XRC takes 1B cycles with each request and refunds what it does not use.
+const XRC_CYCLES: u128 = 1_000_000_000;
+const MAX_PRICES: usize = 8;
+
+/// Await every future at once (the XRC's outcalls take seconds each; one after another adds up).
+async fn join_all<F: std::future::Future>(fs: Vec<F>) -> Vec<F::Output> {
+    let mut fs: Vec<_> = fs.into_iter().map(Box::pin).collect();
+    let mut out: Vec<Option<F::Output>> = fs.iter().map(|_| None).collect();
+    std::future::poll_fn(|cx| {
+        let mut done = true;
+        for (f, o) in fs.iter_mut().zip(out.iter_mut()) {
+            if o.is_none() {
+                match f.as_mut().poll(cx) {
+                    std::task::Poll::Ready(v) => *o = Some(v),
+                    std::task::Poll::Pending => done = false,
+                }
+            }
+        }
+        if done { std::task::Poll::Ready(()) } else { std::task::Poll::Pending }
+    })
+    .await;
+    out.into_iter().map(|o| o.unwrap()).collect()
+}
+
+fn valid_symbol(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 10 && s.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+}
+
+/// The last minute's USD price of each symbol (BTC, ETH, SOL, ...), from `xrc`: the exchange rate
+/// canister on mainnet, a stand-in locally. Owner only; the notebook pays up to 1B cycles a symbol.
+#[update]
+async fn prices(xrc: Principal, symbols: Vec<String>) -> Result<Vec<Price>, NotebookError> {
+    owner()?;
+    let symbols: Vec<String> = symbols.into_iter().map(|s| s.trim().to_ascii_uppercase()).collect();
+    if symbols.len() > MAX_PRICES || !symbols.iter().all(|s| valid_symbol(s)) {
+        return Err(NotebookError::Invalid(format!("up to {MAX_PRICES} symbols like BTC or ETH")));
+    }
+    if ic_cdk::api::canister_liquid_cycle_balance() < symbols.len() as u128 * XRC_CYCLES + PAY_FLOOR {
+        return Err(NotebookError::Invalid("this notebook is too low on cycles; top it up".into()));
+    }
+    // the previous whole minute: every exchange has reported it by now
+    let minute = time() / 1_000_000_000 / 60 * 60 - 60;
+    let usd = Asset { symbol: "USD".into(), class: AssetClass::FiatCurrency };
+    let calls = symbols.iter().map(|s| {
+        let req = RateRequest { base_asset: Asset { symbol: s.clone(), class: AssetClass::Cryptocurrency }, quote_asset: usd.clone(), timestamp: Some(minute) };
+        async move {
+            let r = Call::bounded_wait(xrc, "get_exchange_rate").change_timeout(60).with_cycles(XRC_CYCLES).with_arg(&req).await.ok()?;
+            let r: Result<Rate, candid::Reserved> = r.candid().ok()?;
+            r.ok()
+        }
+    });
+    let rates = join_all(calls.collect()).await;
+    Ok(symbols.into_iter().zip(rates).map(|(symbol, r)| match r {
+        Some(r) => Price { symbol, usd: Some(r.rate as f64 / 10f64.powi(r.metadata.decimals as i32)), at: r.timestamp },
+        None => Price { symbol, usd: None, at: minute },
+    }).collect())
+}
+
 /// The most one community fee may be (a long board post is ~0.03 B cycles), and what a notebook keeps
 /// above its freezing reserve after paying: chatting never freezes anyone's notes.
 const MAX_FEE: u128 = 1_000_000_000;

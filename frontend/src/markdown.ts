@@ -190,6 +190,8 @@ const md = new Marked(
         const safe = escaped ? text : esc(text);
         if (l === "mermaid") return `<pre class="mermaid-src" data-mermaid>${safe}</pre>`;
         if (l === "track") return trackHtml(parseTrackBlock(text));
+        // live prices (Crypto kit): the app fills a chip per coin after rendering
+        if (l === "prices") { const syms = [...new Set(text.toUpperCase().match(/[A-Z0-9]{1,10}/g) ?? [])].slice(0, 8); return `<div class="price-embed" data-symbols="${syms.join(" ")}">${syms.map((x) => `<span class="price-chip"><b>${x}</b><span>…</span></span>`).join("")}</div>`; }
         return `<pre><code class="hljs${l ? ` language-${esc(l)}` : ""}">${safe}\n</code></pre>`;
       },
       heading({ tokens, depth }: Tokens.Heading) {

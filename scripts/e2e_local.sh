@@ -391,6 +391,7 @@ icp token transfer 1 "$OTHERP" -q >/dev/null; icp token approve 0.5 "$(icp canis
 SUF=$(date +%s | tail -c 5)
 expect "six channels exist" "general" icp canister call registry channels '()' --query
 expect "#careers is seeded for the Career kit" 'name = "careers"; section = opt "Lab"' icp canister call registry channels '()' --query
+expect "#crypto is seeded for the Crypto kit" 'name = "crypto"; section = opt "Lab"' icp canister call registry channels '()' --query
 expect "the built-in channels sit in sections" 'section = opt "Lab"' icp canister call registry channels '()' --query
 expect "only admins move channels between sections" "admin only" reg set_channel_section '("help", opt "Support")'
 expect "an admin moves one" 'section = opt "Support"' icp canister call registry set_channel_section '("help", opt "Support")'
@@ -587,6 +588,14 @@ expect "a stranger cannot make the notebook fetch" "Unauthorized" icp canister c
 expect "only https links" "only https" notebook fetch_url '("http://example.com/x.pdf")'
 expect "a public PDF comes back as bytes" '\25\50\44\46' notebook fetch_url '("https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf")'
 expect "redirects are followed" 'url = "https://raw.githubusercontent.com/' notebook fetch_url '("https://github.com/mozilla/pdf.js/raw/master/web/compressed.tracemonkey-pldi-09.pdf")'
+echo "== crypto prices from the exchange rate canister (the local stand-in)"
+XRC=$(icp canister status xrc -i 2>/dev/null || true)
+if [ -n "$XRC" ]; then
+  expect "a stranger cannot spend the notebook's cycles on prices" "Unauthorized" icp canister call "$V" prices "(principal \"$XRC\", vec { \"BTC\" })" --identity "$OTHER"
+  expect "symbols are checked" "up to 8 symbols" notebook prices "(principal \"$XRC\", vec { \"not a coin!\" })"
+  expect "a coin comes back in dollars" 'usd = opt (' notebook prices "(principal \"$XRC\", vec { \"eth\" })"
+  expect "a coin the exchanges do not list has no price" 'usd = null; symbol = "NOPE"' notebook prices "(principal \"$XRC\", vec { \"NOPE\" })"
+else echo "  skip: no local xrc canister (icp deploy xrc)"; fi
 echo "== upgrade all notebooks from the registry (controller only)"
 expect "a stranger cannot upgrade" "controller only" reg upgrade_notebooks '()'
 N=$(icp canister call registry stats '()' --query | grep -o 'notebooks = [0-9_]*' | tr -d 'notebooks =_')

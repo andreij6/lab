@@ -1,0 +1,14 @@
+[package]
+name = "xrc_dev"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Local stand-in for ICP's exchange rate canister: same get_exchange_rate interface, made-up prices."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+candid.workspace = true
+ic-cdk.workspace = true
+serde.workspace = true

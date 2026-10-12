@@ -258,7 +258,7 @@ fn init() {
     seed_tokens();
     seed_channels();
     seed_developers();
-    seed_careers();
+    seed_kit_channels();
     seed_sections();
     start_timers();
 }
@@ -267,7 +267,7 @@ fn post_upgrade() {
     seed_tokens();
     seed_channels();
     seed_developers();
-    seed_careers();
+    seed_kit_channels();
     seed_sections();
     start_timers();
 }
@@ -1242,12 +1242,15 @@ fn set_channel_section(name: String, section: Option<String>) -> Result<Channel,
         Ok(ch)
     })
 }
-/// #careers: résumé reviews, interview practice and job leads, for the Career kit.
-fn seed_careers() {
-    if CHANNELS.with_borrow(|c| c.contains_key(&"careers".to_string())) {
-        return;
+/// The kits' channels: #careers (résumé reviews, interview practice, job leads) for the Career kit
+/// and #crypto (theses and trade reviews) for the Crypto kit.
+fn seed_kit_channels() {
+    for (name, topic) in [("careers", "Résumés, interviews and job leads"), ("crypto", "Theses, trade reviews and what you are watching")] {
+        if CHANNELS.with_borrow(|c| c.contains_key(&name.to_string())) {
+            continue;
+        }
+        CHANNELS.with_borrow_mut(|c| c.insert(name.into(), C(Channel { name: name.into(), topic: topic.into(), created_by: canister_self(), created_at: time(), gate: None, section: Some("Lab".into()) })));
     }
-    CHANNELS.with_borrow_mut(|c| c.insert("careers".into(), C(Channel { name: "careers".into(), topic: "Résumés, interviews and job leads".into(), created_by: canister_self(), created_at: time(), gate: None, section: Some("Lab".into()) })));
 }
 fn gate_of(channel: &str) -> Option<String> {
     CHANNELS.with_borrow(|c| c.get(&channel.to_string()).and_then(|x| x.0.gate))

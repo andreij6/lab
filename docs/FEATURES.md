@@ -193,6 +193,17 @@ For working professionals looking for a new job; turn it on in Manage → Notebo
 - **Networking follow-ups.** Person notes with `last_contacted`, `next_follow_up` and `referral_for`; someone comes due on their follow-up date or after a month of quiet, and Contacted today pushes the next follow-up two weeks out.
 - **#careers.** A community channel for résumé reviews, interview practice and job leads; Get feedback compiles a résumé and shares a snapshot there.
 
+## Crypto
+
+For people who hold or trade BTC, ETH, SOL, HYPE and the rest; turn it on in Manage → Notebook → Features or pick the Trader preset.
+
+- **Live prices.** The notebook asks ICP's exchange rate canister (`uf6dk-hyaaa-aaaaq-qaaaq-cai`) for the last minute's dollar price of each coin on the watchlist, plus any coin with an open trade or a live thesis, up to eight. It pays up to 1B cycles a coin per refresh (a fraction of a cent) and prices are reused for five minutes. Coins the exchanges it reads do not list show as "not listed". Locally `canisters/xrc-dev` stands in with made-up prices.
+- **Prices in notes.** A `prices` code block (`BTC ETH SOL`) shows a live price chip per coin in reading view.
+- **Trade journal.** One note per trade in `Crypto/Trades/` with `type: trade`, coin, side, size, entry, stop, target, opened, exit, closed, fees and an optional thesis link as properties, and Why, What happened and Lesson in the body. Log a trade and Close fill in today's live price when the price is left empty.
+- **Journal numbers.** Closed trades, win rate, realized profit and loss, unrealized on open trades at live prices, average win and loss, average R (profit over what the stop risked), a profit-and-loss bar per week for the last eight, and totals per coin.
+- **Theses.** `type: crypto-thesis` notes (not `type: thesis`, which is Research's): what you believe, `Claim::` reasons that Research checks for sources, what would prove you wrong, and the price on the day it was written; the tab shows how far it has moved. Each has a review task that shows in Work; Still holds records the price and schedules the next review in 30 days, Broke marks it `status: broken`.
+- **#crypto.** A community channel for theses and trade reviews; Get feedback shares a thesis snapshot with its prices there.
+
 ## Documents from the web
 
 - **PDF embeds.** `![[https://….pdf]]` or `![title](https://….pdf)` (arXiv `/pdf/` links too) shows the pages in the note. The browser fetches it when the site allows; otherwise the notebook does, over HTTPS, following up to three redirects, up to 1.9 MB, for about 0.02 TC of its cycles on mainnet (outcalls are priced by the 1.9 MB response cap, not the file size). Fetched PDFs stay on this device, so they open instantly and offline afterwards. The first three pages show; Show all draws the rest.

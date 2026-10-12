@@ -24,6 +24,7 @@ import { countByDay, dayKey, gridWeeks, level, streak } from "./activity";
 import { examples } from "./examples";
 import { minDepositE8s } from "./pricing";
 import { APPLICATIONS_BOARD, EXPERIENCE_TEMPLATE, PERSON_TEMPLATE, RESUME_TEMPLATE, STAGES, STORIES_DECK, addApplication, addDays, applicationCard, applications, compileResume, contacts, experience, isExperience, markContacted, parseStar, searchStats, storyCard, updateApplication, waiting } from "./career";
+import { DEFAULT_WATCH, MAX_WATCH, THESIS_TEMPLATE, TRADE_TEMPLATE, closeTrade, isOpen, isThesis, isTrade, journalStats, pnl, reviewThesis, rMultiple, symbolOf, theses, trade, tradePath, usd, watchSymbols, type Side, type Trade } from "./crypto";
 import { cardKey, isDue, review as srsReview, type Rating, type Sched } from "./srs";
 import { align, isLeanNote, leanCode, parseLean, statementCard, unmentionedHyps } from "./lean";
 import { NEW_IPYNB, addCell as nbAddCell, isNotebookPath, moveCell as nbMoveCell, parseNotebook, serializeNotebook, type Cell as NbCell, type Notebook as Nb, type Output as NbOutput } from "./ipynb";
@@ -82,7 +83,7 @@ async function icpBalance(): Promise<bigint> {
 
 // ---------- environment ----------
 
-type Env = { "PUBLIC_CANISTER_ID:registry"?: string; "PUBLIC_CANISTER_ID:llm"?: string; IC_ROOT_KEY?: Uint8Array };
+type Env = { "PUBLIC_CANISTER_ID:registry"?: string; "PUBLIC_CANISTER_ID:llm"?: string; "PUBLIC_CANISTER_ID:xrc"?: string; IC_ROOT_KEY?: Uint8Array };
 const env: Env = (safeGetCanisterEnv() as Env | undefined) ?? {};
 const REGISTRY = env["PUBLIC_CANISTER_ID:registry"] ?? "";
 const isLocal = /(^|\.)localhost$|^127\.0\.0\.1$/.test(location.hostname);
@@ -168,7 +169,7 @@ const nb = (): NotebookApi => notebookOf(S.notebook!.canister.toText());
 
 // ---------- state ----------
 
-type Tab = "notes" | "chat" | "graph" | "manage" | "study" | "work" | "organize" | "trips" | "research" | "writing" | "care" | "software" | "career";
+type Tab = "notes" | "chat" | "graph" | "manage" | "study" | "work" | "organize" | "trips" | "research" | "writing" | "care" | "software" | "career" | "crypto";
 type Settings = { bookmarks: string[]; srs: Record<string, Record<string, Sched>>; deckStats: Record<string, { reviews: number; good: number }>; study: Record<string, number>; goals: { notesPerWeek?: number; cardsPerDay?: number }; searches: { name: string; q: string }[]; rules: Rule[]; resurface: Resurface; decayDays: number; hideFaded: boolean; kanbanArchiveDays: number; features: Partial<Record<Tab, boolean>>; onboarded?: boolean; writingGoal: number; citeStyle: Style };
 const parseSettings = (j: Partial<Settings> | undefined): Settings => ({ bookmarks: Array.isArray(j?.bookmarks) ? j!.bookmarks : [], srs: j?.srs ?? {}, deckStats: j?.deckStats ?? {}, study: j?.study ?? {}, goals: j?.goals ?? {}, searches: Array.isArray(j?.searches) ? j!.searches : [], rules: Array.isArray(j?.rules) ? j!.rules : [], resurface: j?.resurface ?? {}, decayDays: typeof j?.decayDays === "number" ? j.decayDays : 180, hideFaded: !!j?.hideFaded, kanbanArchiveDays: typeof j?.kanbanArchiveDays === "number" ? j.kanbanArchiveDays : 14, features: j?.features ?? {}, onboarded: j?.onboarded, writingGoal: typeof j?.writingGoal === "number" ? j.writingGoal : 500, citeStyle: j?.citeStyle === "chicago" ? "chicago" : "apa" });
 type ManageTab = "finance" | "notebook" | "sharing" | "agents" | "market";
@@ -182,6 +183,8 @@ type ChatMsg = { role: "you" | "notes"; text: string; picks?: Pick[]; model?: st
 /** The ICP LLM canister; locally the stand-in in canisters/llm-dev that answers with Ollama. */
 const LLM_CANISTER = env["PUBLIC_CANISTER_ID:llm"] ?? "w36hm-eqaaa-aaaal-qr76a-cai";
 const LLM_LOCAL = !!env["PUBLIC_CANISTER_ID:llm"];
+/** ICP's exchange rate canister, for the Crypto kit's prices; locally the stand-in in canisters/xrc-dev. */
+const XRC_CANISTER = env["PUBLIC_CANISTER_ID:xrc"] ?? "uf6dk-hyaaa-aaaaq-qaaaq-cai";
 /** The chat model: the strongest free model on the LLM canister, so questions never spend the notebook's cycles. */
 const LLM_MODEL = "qwen3:32b";
 const LLM_MODEL_NAME = "Qwen3 32B";
@@ -414,6 +417,7 @@ const ICONS: Record<string, string> = {
   "panel-right": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/>',
   mountain: '<path d="M3 20l6-10 4 6 3-4 5 8z"/><path d="M8.2 11.4l1.8 1.6 1.4-1.2"/>',
   sliders: '<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
+  coin: '<circle cx="12" cy="12" r="9"/><path d="M14.8 9.4c-.5-.9-1.5-1.4-2.8-1.4-1.6 0-2.7.8-2.7 2s1.1 1.6 2.7 2 2.7.8 2.7 2-1.1 2-2.7 2c-1.3 0-2.4-.5-2.9-1.4M12 6.5v11"/>',
   compass: '<circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/>',
   heart: '<path d="M12 20s-7.5-4.6-9.2-9.3A4.8 4.8 0 0 1 12 6.6a4.8 4.8 0 0 1 9.2 4.1C19.5 15.4 12 20 12 20z"/>',
   users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14a6.5 6.5 0 0 1 3.5 6"/>',
@@ -569,6 +573,7 @@ function afterRender(root: ParentNode = document) {
   decorateGlossary(root);
   decorateTables(root);
   hydratePdfs(root);
+  hydratePrices(root);
   root.querySelectorAll<HTMLElement>("[data-excalidraw-embed]:not([data-done])").forEach((el) => {
     el.dataset.done = "1";
     const path = el.dataset.excalidrawEmbed!;
@@ -877,7 +882,7 @@ function routeSheet(el: HTMLElement) {
   const tab = (t: Tab, label: string, ic: string): R => ({ label, icon: ic, sub: true, hidden: !featureOn(t), on: inNb && S.tab === t, go: () => { const i = document.createElement("i"); i.dataset.tab = t; if (!inNb) { S.community = undefined; S.board = undefined; S.market = undefined; S.admin = undefined; location.hash = `#/notebook/${nbId}`; } void onAction("tab", i, new MouseEvent("click")); } });
   const routes: R[] = [
     { label: "Your notebooks", icon: "list", on: !S.notebook && !S.community && !S.board && !S.market && !S.admin, go: () => { location.hash = "#/"; } },
-    ...(S.notebook ? [{ label: S.notebook.name, icon: "notebook", on: inNb && S.tab === "notes", go: () => { if (!inNb) location.hash = `#/notebook/${nbId}`; else { const i = document.createElement("i"); i.dataset.tab = "notes"; void onAction("tab", i, new MouseEvent("click")); } } } as R, tab("chat", "Chat with your notes", "chat"), tab("graph", "Graph", "graph"), tab("study", "Study", "check"), tab("work", "Work", "briefcase"), tab("organize", "Organize", "sliders"), tab("research", "Research", "cap"), tab("writing", "Writing", "edit"), tab("care", "Care", "heart"), tab("software", "Software", "terminal"), tab("career", "Career", "compass"), tab("trips", "Trips", "mountain"), tab("manage", "Manage", "bolt")].filter((r) => !r.hidden) : []),
+    ...(S.notebook ? [{ label: S.notebook.name, icon: "notebook", on: inNb && S.tab === "notes", go: () => { if (!inNb) location.hash = `#/notebook/${nbId}`; else { const i = document.createElement("i"); i.dataset.tab = "notes"; void onAction("tab", i, new MouseEvent("click")); } } } as R, tab("chat", "Chat with your notes", "chat"), tab("graph", "Graph", "graph"), tab("study", "Study", "check"), tab("work", "Work", "briefcase"), tab("organize", "Organize", "sliders"), tab("research", "Research", "cap"), tab("writing", "Writing", "edit"), tab("care", "Care", "heart"), tab("software", "Software", "terminal"), tab("career", "Career", "compass"), tab("crypto", "Crypto", "coin"), tab("trips", "Trips", "mountain"), tab("manage", "Manage", "bolt")].filter((r) => !r.hidden) : []),
     { label: "Community", icon: "users", on: !!S.community, go: () => { location.hash = "#/community"; } },
     ...(flag("board") ? [{ label: "Board", icon: "pin", on: !!S.board, go: () => { location.hash = "#/board"; } } as R] : []),
     ...(flag("market") ? [{ label: "Market", icon: "tag", on: !!S.market, go: () => { location.hash = "#/market"; } } as R] : []),
@@ -1029,7 +1034,7 @@ function ribbonHtml(i?: Info, low = false): string {
   const inNb = !!S.notebook && !S.community && !S.board && !S.market && !S.admin;
   const rb = (tab: Tab, label: string, ic: string, extra = "") => !featureOn(tab) ? "" : `<button type="button" class="rb ${inNb && S.tab === tab ? "on" : ""}" data-action="ribbon-tab" data-tab="${tab}" title="${label}" aria-label="${label}" aria-pressed="${inNb && S.tab === tab}">${icon(ic)}${extra}</button>`;
   return `<nav class="ribbon" aria-label="Sections">
-      <div class="rb-group">${rb("notes", "Notes", "file")}${rb("chat", "Chat with your notes", "chat")}${rb("graph", "Knowledge graph", "graph")}${rb("study", `Study${dueTotal() ? ` · ${dueTotal()} cards due` : ""}`, "check", dueTotal() ? `<i class="rb-count">${dueTotal()}</i>` : "")}${rb("work", `Work${overdueCount() ? ` · ${overdueCount()} overdue` : ""}`, "briefcase", overdueCount() ? `<i class="rb-count danger">${overdueCount()}</i>` : "")}${rb("organize", "Organize: saved searches, triage, rules, tidy-up", "sliders")}${rb("research", "Research: sources, citations, claims, thesis", "cap")}${rb("writing", "Writing: manuscript, story bible, timeline", "edit")}${rb("care", "Care: log, appointments, care team", "heart")}${rb("software", "Software: decisions, runbooks, changelog", "terminal")}${rb("career", "Career: applications, résumés, interviews, networking", "compass")}${rb("trips", S.trips.watching.some((w) => w.overdue && !w.closed) ? "Trips · someone is overdue" : "Trips", "mountain", S.trips.watching.some((w) => w.overdue && !w.closed) ? `<i class="rb-dot"></i>` : "")}</div>
+      <div class="rb-group">${rb("notes", "Notes", "file")}${rb("chat", "Chat with your notes", "chat")}${rb("graph", "Knowledge graph", "graph")}${rb("study", `Study${dueTotal() ? ` · ${dueTotal()} cards due` : ""}`, "check", dueTotal() ? `<i class="rb-count">${dueTotal()}</i>` : "")}${rb("work", `Work${overdueCount() ? ` · ${overdueCount()} overdue` : ""}`, "briefcase", overdueCount() ? `<i class="rb-count danger">${overdueCount()}</i>` : "")}${rb("organize", "Organize: saved searches, triage, rules, tidy-up", "sliders")}${rb("research", "Research: sources, citations, claims, thesis", "cap")}${rb("writing", "Writing: manuscript, story bible, timeline", "edit")}${rb("care", "Care: log, appointments, care team", "heart")}${rb("software", "Software: decisions, runbooks, changelog", "terminal")}${rb("career", "Career: applications, résumés, interviews, networking", "compass")}${rb("crypto", "Crypto: prices, trade journal, theses", "coin")}${rb("trips", S.trips.watching.some((w) => w.overdue && !w.closed) ? "Trips · someone is overdue" : "Trips", "mountain", S.trips.watching.some((w) => w.overdue && !w.closed) ? `<i class="rb-dot"></i>` : "")}</div>
       <div class="rb-group bottom">${rb("manage", `Manage${i ? ` · ${tc(i.cycles)}` : ""}`, "bolt", low ? `<i class="rb-dot"></i>` : "")}<a class="rb ${S.community ? "on" : ""}" href="#/community" data-action="nav" title="Community${S.mentions ? ` · ${S.mentions} new mention${S.mentions === 1 ? "" : "s"}` : ""}" aria-label="Community">${icon("users")}${S.mentions ? `<i class="rb-badge">${S.mentions > 9 ? "9+" : S.mentions}</i>` : ""}</a>${flag("board") ? `<a class="rb ${S.board ? "on" : ""}" href="#/board" data-action="nav" title="Board: posts and discussion" aria-label="Board">${icon("pin")}</a>` : ""}${flag("market") ? `<a class="rb ${S.market ? "on" : ""}" href="#/market" data-action="nav" title="Notebook market" aria-label="Notebook market">${icon("tag")}</a>` : ""}${S.isAdmin ? `<a class="rb ${S.admin ? "on" : ""}" href="#/admin" data-action="nav" title="Reports and ideas" aria-label="Reports and ideas">${icon("bug")}</a>` : ""}<button type="button" class="rb" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="rb" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button><button type="button" class="rb" data-action="sign-out" title="Sign out" aria-label="Sign out">${icon("out")}</button></div>
     </nav>`;
 }
@@ -1037,10 +1042,10 @@ function shellBody(body: string, i: Info | undefined, low: boolean, alert: strin
   const ribbon = ribbonHtml(i, low);
   return `<div class="shell ${S.mobile ? "is-mobile" : ""}">${ribbon}<div class="shell-main">
     ${alert}
-    <header class="wsbar">${brand()}${S.mobile ? seg : `<span class="crumb"><b>${esc(S.notebook!.name)}</b><span class="faint">/</span><span>${S.tab === "notes" ? (cur() ? esc(title(cur()!)) : "Notes") : S.tab === "chat" ? "Chat" : S.tab === "graph" ? "Graph" : S.tab === "study" ? "Study" : S.tab === "work" ? "Work" : S.tab === "organize" ? "Organize" : S.tab === "trips" ? "Trips" : S.tab === "research" ? "Research" : S.tab === "writing" ? "Writing" : S.tab === "care" ? "Care" : S.tab === "career" ? "Career" : S.tab === "software" ? "Software" : "Manage"}</span></span>`}
+    <header class="wsbar">${brand()}${S.mobile ? seg : `<span class="crumb"><b>${esc(S.notebook!.name)}</b><span class="faint">/</span><span>${S.tab === "notes" ? (cur() ? esc(title(cur()!)) : "Notes") : S.tab === "chat" ? "Chat" : S.tab === "graph" ? "Graph" : S.tab === "study" ? "Study" : S.tab === "work" ? "Work" : S.tab === "organize" ? "Organize" : S.tab === "trips" ? "Trips" : S.tab === "research" ? "Research" : S.tab === "writing" ? "Writing" : S.tab === "care" ? "Care" : S.tab === "career" ? "Career" : S.tab === "crypto" ? "Crypto" : S.tab === "software" ? "Software" : "Manage"}</span></span>`}
       <span class="right">${S.mobile ? "" : `<button type="button" class="btn btn-ghost" data-action="palette" title="Open or create a note (${MOD}K)">${icon("search")}<span class="kbd">${MOD}K</span></button>`}${S.mobile ? moreBtn() : ""}</span>
     </header>
-    ${panebar({ on: S.sideOpen, what: "the file pane", action: "side-toggle", off: S.tab === "graph" || S.tab === "manage" || S.tab === "study" || S.tab === "work" || S.tab === "organize" || S.tab === "trips" || S.tab === "research" || S.tab === "writing" || S.tab === "care" || S.tab === "software" || S.tab === "career" }, { on: S.asideOpen, what: "the right pane", action: "aside-toggle", off: S.tab === "graph" || S.tab === "manage" || S.tab === "study" || S.tab === "work" || S.tab === "organize" || S.tab === "trips" || S.tab === "research" || S.tab === "writing" || S.tab === "care" || S.tab === "software" || S.tab === "career" })}
+    ${panebar({ on: S.sideOpen, what: "the file pane", action: "side-toggle", off: S.tab === "graph" || S.tab === "manage" || S.tab === "study" || S.tab === "work" || S.tab === "organize" || S.tab === "trips" || S.tab === "research" || S.tab === "writing" || S.tab === "care" || S.tab === "software" || S.tab === "career" || S.tab === "crypto" }, { on: S.asideOpen, what: "the right pane", action: "aside-toggle", off: S.tab === "graph" || S.tab === "manage" || S.tab === "study" || S.tab === "work" || S.tab === "organize" || S.tab === "trips" || S.tab === "research" || S.tab === "writing" || S.tab === "care" || S.tab === "software" || S.tab === "career" || S.tab === "crypto" })}
     ${body}
     ${mobileNav}
   </div></div>`;
@@ -2069,6 +2074,7 @@ const FEATURES: { id: Tab; label: string; icon: string; desc: string }[] = [
   { id: "care", label: "Care", icon: "heart", desc: "Symptom and medication log, care-team sharing and check-ins, appointment prep." },
   { id: "software", label: "Software", icon: "terminal", desc: "Decision records, runbooks, a changelog, runnable snippets." },
   { id: "career", label: "Career", icon: "compass", desc: "Job applications board, experience bank and résumés, interview stories, networking follow-ups, a weekly search review." },
+  { id: "crypto", label: "Crypto", icon: "coin", desc: "Live prices for BTC, ETH, SOL, HYPE and more, a trade journal with win rate and profit and loss, theses you review on a schedule." },
   { id: "trips", label: "Trips", icon: "mountain", desc: "Trip plans, gear, food, water, GPX routes, field journal, check-ins." },
 ];
 /** Notebooks made before features existed keep every tab they had; the new kits start off. */
@@ -2082,6 +2088,7 @@ const PRESETS: Record<string, Tab[]> = {
   Developer: ["chat", "graph", "work", "software", "organize"],
   Hiker: ["chat", "trips", "study"],
   "Job seeker": ["chat", "career", "study", "work", "organize"],
+  Trader: ["chat", "crypto", "research", "work", "organize"],
   Everything: FEATURES.map((f) => f.id),
 };
 function featuresCard(): string {
@@ -2350,6 +2357,226 @@ async function careerAction(action: string, el: HTMLElement) {
       return render();
     }
     case "career-channel": { store("nb-chat-channel", "careers"); location.hash = "#/community"; return; }
+  }
+}
+
+// --- the Crypto kit
+
+type Quote = { usd?: number; at: number; got: number };
+/** Last known prices, kept across reloads: each refresh costs the notebook up to 1B cycles a coin. */
+const QUOTES = new Map<string, Quote>((() => { try { return Object.entries(JSON.parse(store("nb-prices") ?? "{}") as Record<string, Quote>); } catch { return []; } })());
+const QUOTE_FRESH = 5 * 60_000;
+let quoting: Promise<void> | undefined;
+let quoteError = "", quoteFailed = 0;
+const priceOf = (sym: string) => QUOTES.get(symbolOf(sym))?.usd;
+const cryptoWatch = () => (store("nb-crypto-watch") ?? DEFAULT_WATCH.join(" ")).split(/[\s,]+/).map(symbolOf).filter(Boolean);
+const amount = (x?: string) => (x?.trim() ? Number(x.replace(/[$,\s]/g, "")) : undefined);
+/** Price the coins missing or older than five minutes (all of them when `force`), through the notebook. */
+function loadPrices(symbols: string[], force = false): Promise<void> {
+  if (quoting) return quoting.then(() => loadPrices(symbols));
+  const want = [...new Set(symbols.map(symbolOf).filter(Boolean))].filter((s) => force || Date.now() - (QUOTES.get(s)?.got ?? 0) > QUOTE_FRESH).slice(0, MAX_WATCH);
+  // after a failure, wait a minute before asking again (the tab re-renders often)
+  if (!want.length || !S.notebook || (!force && Date.now() - quoteFailed < 60_000)) return Promise.resolve();
+  quoting = (async () => {
+    try {
+      for (const p of unwrap(await nb().prices(Principal.fromText(XRC_CANISTER), want))) QUOTES.set(p.symbol, { usd: p.usd, at: Number(p.at), got: Date.now() });
+      quoteError = "";
+      store("nb-prices", JSON.stringify(Object.fromEntries(QUOTES)));
+    } catch (e) {
+      quoteError = errMsg(e);
+      quoteFailed = Date.now();
+    } finally {
+      quoting = undefined;
+    }
+    if (S.tab === "crypto" && !document.querySelector(".scrim")) render();
+    document.querySelectorAll<HTMLElement>(".price-embed").forEach(fillPriceEmbed);
+  })();
+  return quoting;
+}
+const quoteText = (s: string) => { const q = QUOTES.get(s); return q ? (q.usd === undefined ? "not listed" : usd(q.usd)) : quoteError ? "–" : "…"; };
+function fillPriceEmbed(el: HTMLElement) {
+  el.innerHTML = el.dataset.symbols!.split(" ").filter(Boolean).map((s) => `<span class="price-chip"><b>${esc(s)}</b><span>${quoteText(s)}</span></span>`).join("");
+  el.title = quoteError ? `Prices: ${quoteError}` : "Live prices from ICP's exchange rate canister";
+}
+/** ```prices blocks in reading view: a chip per coin, filled once the notebook has priced them. */
+function hydratePrices(root: ParentNode) {
+  const els = [...root.querySelectorAll<HTMLElement>(".price-embed:not([data-done])")];
+  if (!els.length) return;
+  els.forEach((el) => { el.dataset.done = "1"; fillPriceEmbed(el); });
+  void loadPrices(els.flatMap((el) => el.dataset.symbols!.split(" ")));
+}
+
+type Field = { name: string; label: string; value?: string; placeholder?: string; kind?: "text" | "number" | "date" | "area" | "choice"; choices?: { value: string; label: string }[]; required?: boolean; wide?: boolean };
+/** A dialog with several fields; resolves to their values by name, or null when cancelled. */
+function fieldsDialog(title: string, body: string, fields: Field[], ok: string): Promise<Record<string, string> | null> {
+  return new Promise((res) => {
+    const scrim = document.createElement("div");
+    scrim.className = "scrim";
+    const attrs = (f: Field) => `name="${f.name}" ${f.required ? "required" : ""} placeholder="${esc(f.placeholder ?? "")}"`;
+    const input = (f: Field) => f.kind === "choice"
+      ? `<select class="input" name="${f.name}">${f.choices!.map((c) => `<option value="${esc(c.value)}" ${c.value === f.value ? "selected" : ""}>${esc(c.label)}</option>`).join("")}</select>`
+      : f.kind === "area"
+        ? `<textarea class="input" ${attrs(f)} rows="3">${esc(f.value ?? "")}</textarea>`
+        : `<input class="input" ${attrs(f)} type="${f.kind === "date" ? "date" : "text"}" ${f.kind === "number" ? `inputmode="decimal" pattern="\\$?[0-9][0-9,]*(\\.[0-9]+)?|\\$?\\.[0-9]+" title="A number, like 0.5 or 62,000"` : ""} value="${esc(f.value ?? "")}" autocomplete="off" spellcheck="false">`;
+    scrim.innerHTML = `<form class="modal" role="dialog" aria-modal="true" aria-labelledby="fd-t"><h2 id="fd-t">${esc(title)}</h2>${body ? `<p class="muted">${esc(body)}</p>` : ""}
+      <div class="fields-grid">${fields.map((f) => `<label class="field${f.wide || f.kind === "area" ? " wide" : ""}"><span class="label">${esc(f.label)}</span>${input(f)}</label>`).join("")}</div>
+      <div class="actions"><button type="button" class="btn" data-x="cancel">Cancel</button><button type="submit" class="btn btn-primary">${esc(ok)}</button></div></form>`;
+    const form = scrim.querySelector("form")!;
+    const done = (v: Record<string, string> | null) => { scrim.remove(); document.removeEventListener("keydown", onKey); res(v); };
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && done(null);
+    scrim.addEventListener("click", (e) => e.target === scrim && done(null));
+    form.querySelector("[data-x=cancel]")!.addEventListener("click", () => done(null));
+    form.addEventListener("submit", (e) => { e.preventDefault(); done(Object.fromEntries([...new FormData(form)].map(([k, v]) => [k, String(v).trim()]))); });
+    document.addEventListener("keydown", onKey);
+    document.body.append(scrim);
+    form.querySelector<HTMLElement>("input, select, textarea")?.focus();
+  });
+}
+
+const cryptoTrades = () => orgNotes().filter((n) => n.path.endsWith(".md") && isTrade(n.content)).map((n) => trade(n.path, n.content)).sort((a, b) => b.opened.localeCompare(a.opened));
+const money = (n: number | undefined, sign = true) => `<span class="${n === undefined ? "muted" : n >= 0 ? "ok" : "danger"}">${usd(n, sign)}</span>`;
+function cryptoTab(): string {
+  const today = dayKey(new Date());
+  const trades = cryptoTrades();
+  const ts = theses(orgNotes(), today);
+  const syms = watchSymbols(cryptoWatch(), trades, ts);
+  void loadPrices(syms);
+  const st = journalStats(trades, today);
+  const open = trades.filter(isOpen);
+  const unreal = open.map((t) => pnl(t, priceOf(t.asset))).filter((p): p is number => p !== undefined);
+  const recent = trades.filter((t) => !isOpen(t)).sort((a, b) => (b.closed ?? "").localeCompare(a.closed ?? "")).slice(0, 5);
+  const latest = Math.max(0, ...syms.map((s) => QUOTES.get(s)?.at ?? 0));
+  const max = Math.max(1, ...st.weeks.map((w) => Math.abs(w.pnl)));
+  const bars = `<svg class="career-bars pnl-bars" viewBox="0 0 ${st.weeks.length * 34} 70" role="img" aria-label="Realized profit and loss per week">${st.weeks.map((w, i) => { const h = (Math.abs(w.pnl) / max) * 26 || 1; return `<rect class="${w.pnl < 0 ? "neg" : ""}" x="${i * 34 + 6}" y="${w.pnl < 0 ? 31 : 31 - h}" width="22" height="${h}" rx="3"><title>Week of ${w.week}: ${usd(w.pnl, true)}</title></rect><text x="${i * 34 + 17}" y="69">${w.week.slice(5).replace("-", "/")}</text>`; }).join("")}<line x1="0" x2="${st.weeks.length * 34}" y1="31" y2="31"/></svg>`;
+  const r = (x: number | undefined) => (x === undefined ? "" : ` <span class="small muted">${x.toFixed(1)}R</span>`);
+  const openRow = (t: Trade) => { const p = priceOf(t.asset); return `<div class="run"><span><a href="#" data-action="open" data-path="${esc(t.path)}"><b>${esc(t.asset)}</b> ${t.side}</a> <span class="small muted">${t.size} at ${usd(t.entry)}${p !== undefined ? ` · now ${usd(p)}` : ""}${t.stop !== undefined ? ` · stop ${usd(t.stop)}` : ""}</span> ${money(pnl(t, p))}${r(rMultiple(t, p))}</span><span class="row-actions"><button type="button" class="btn btn-ghost" data-action="crypto-trade-close" data-path="${esc(t.path)}">Close</button></span></div>`; };
+  const closedRow = (t: Trade) => `<div class="run"><span><a href="#" data-action="open" data-path="${esc(t.path)}"><b>${esc(t.asset)}</b> ${t.side}</a> <span class="small muted">${t.size} · ${usd(t.entry)} → ${usd(t.exit)} · ${esc(t.closed ?? "")}</span> ${money(pnl(t))}${r(rMultiple(t))}</span></div>`;
+  const live = ts.filter((t) => t.status === "holds");
+  const thesisRow = (t: (typeof ts)[number]) => {
+    const p = priceOf(t.asset);
+    const ch = p !== undefined && t.priceThen ? (p / t.priceThen - 1) * 100 : undefined;
+    return `<div class="run"><span><a href="#" data-action="open" data-path="${esc(t.path)}">${esc(t.title)}</a> <span class="small muted">${esc(t.asset)}${t.priceThen ? ` · ${usd(t.priceThen)} when written` : ""}</span>${ch !== undefined ? ` <span class="small ${ch >= 0 ? "ok" : "danger"}">${ch >= 0 ? "+" : "−"}${Math.abs(ch).toFixed(1)}%</span>` : ""} <span class="small ${t.due ? "" : "muted"}" ${t.due ? 'style="color:var(--danger)"' : ""}>${t.due ? "review now" : t.review ? `· review ${esc(t.review)}` : ""}</span>${t.wrongIf ? `<div class="small muted">Wrong if: ${esc(t.wrongIf)}</div>` : ""}</span>
+      <span class="row-actions">${t.due ? `<button type="button" class="btn btn-ghost" data-action="crypto-thesis-held" data-path="${esc(t.path)}">Still holds</button><button type="button" class="btn btn-ghost" data-action="crypto-thesis-broke" data-path="${esc(t.path)}">Broke</button>` : ""}<button type="button" class="btn btn-ghost" data-action="crypto-thesis-share" data-path="${esc(t.path)}" title="Share a snapshot in #crypto">${icon("users")}Get feedback</button></span></div>`;
+  };
+  return `<section class="main" style="overflow:auto"><div class="page wide kit">
+    <div class="card band"><div class="row"><h2>${icon("coin")} Prices</h2><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="crypto-watch">Edit watchlist</button><button type="button" class="btn" data-action="crypto-refresh">${icon("refresh")}Refresh</button></span></div>
+      <div class="coin-tiles">${syms.map((s) => `<div class="coin-tile"><span>${esc(s)}</span><b>${quoteText(s)}</b></div>`).join("")}</div>
+      <p class="small muted nudge">${quoteError ? `<span style="color:var(--danger)">Could not get prices: ${esc(quoteError)}</span> ` : latest ? `As of ${new Date(latest * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}, from ICP's exchange rate canister. ` : "Asking ICP's exchange rate canister… "}Each refresh costs this notebook a fraction of a cent in cycles. A <code>prices</code> code block shows live prices in any note.</p>
+    </div>
+    <div class="card band"><div class="row"><h2>${icon("list")} Trade journal</h2><span class="right-actions"><button type="button" class="btn btn-primary" data-action="crypto-trade-add">${icon("plus")}Log a trade</button></span></div>
+      <div class="career-stats"><div><b>${st.closed}</b><span>closed</span></div><div><b>${st.winRate}%</b><span>win rate</span></div><div><b>${money(st.realized)}</b><span>realized</span></div>${unreal.length ? `<div><b>${money(unreal.reduce((a, b) => a + b, 0))}</b><span>open, unrealized</span></div>` : ""}<div><b>${money(st.avgWin || undefined, false)}</b><span>average win</span></div><div><b>${money(st.avgLoss || undefined, false)}</b><span>average loss</span></div>${st.avgR !== undefined ? `<div><b>${st.avgR.toFixed(1)}R</b><span>average R</span></div>` : ""}${bars}</div>
+      ${st.byAsset.length ? `<div class="tags nudge">${st.byAsset.map((a) => `<span class="tag-chip"><span>${esc(a.asset)}</span><span class="cnt">${usd(a.pnl, true)}</span></span>`).join("")}</div>` : ""}
+      ${open.length ? `<div class="band-title">Open <span class="count">${open.length}</span></div><div class="runs">${open.map(openRow).join("")}</div>` : ""}
+      ${recent.length ? `<div class="band-title">Recently closed</div><div class="runs">${recent.map(closedRow).join("")}</div>` : ""}
+      ${trades.length ? "" : `<p class="small muted">Each trade is a note in <code>Crypto/Trades/</code> with its coin, side, size, entry, stop and exit as properties and your reasons in the body, so Organize can show them all as a table.</p>`}
+    </div>
+    <div class="grid2">
+      <div class="card band"><div class="row"><h2>${icon("target")} Theses</h2><span class="right-actions"><button type="button" class="btn btn-primary" data-action="crypto-thesis-add">${icon("plus")}Thesis</button></span></div>
+        <p class="small muted">What you believe, why, and what would prove you wrong, with the price on the day you wrote it. Each comes back for review in Work; its reasons are <code>Claim::</code> lines that Research checks for sources.</p>
+        ${live.length ? `<div class="runs">${live.map(thesisRow).join("")}</div>` : `<p class="small muted">No theses yet.</p>`}
+        ${ts.length > live.length ? `<p class="small muted">${ts.length - live.length} broken: ${ts.filter((t) => t.status !== "holds").map((t) => `<a href="#" data-action="open" data-path="${esc(t.path)}">${esc(t.title)}</a>`).join(", ")}</p>` : ""}
+      </div>
+      <div class="card band"><div class="row"><h2>${icon("chat")} #crypto</h2><span class="right-actions"><button type="button" class="btn" data-action="crypto-channel">Open #crypto</button></span></div>
+        <p class="small muted">Theses, trade reviews and what people are watching. Sharing a thesis posts a snapshot; your notebook stays private.</p>
+      </div>
+    </div>
+  </div></section>`;
+}
+const safeName = (s: string) => s.replace(/[\\/#^[\]|:?*"<>]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80) || "Untitled";
+async function cryptoLogTrade() {
+  const today = dayKey(new Date());
+  const live = theses(orgNotes(), today).filter((t) => t.status === "holds");
+  const v = await fieldsDialog("Log a trade", "Leave the entry price empty to use the live price.", [
+    { name: "asset", label: "Coin", placeholder: "BTC", required: true },
+    { name: "side", label: "Side", kind: "choice", value: "long", choices: [{ value: "long", label: "Long" }, { value: "short", label: "Short" }] },
+    { name: "size", label: "Size, in coins", kind: "number", placeholder: "0.1", required: true },
+    { name: "entry", label: "Entry price ($)", kind: "number", placeholder: "Live price" },
+    { name: "stop", label: "Stop ($, optional)", kind: "number" },
+    { name: "target", label: "Target ($, optional)", kind: "number" },
+    { name: "opened", label: "Opened", kind: "date", value: today },
+    ...(live.length ? [{ name: "thesis", label: "Thesis", kind: "choice" as const, value: "", choices: [{ value: "", label: "None" }, ...live.map((t) => ({ value: t.path.replace(/\.md$/, ""), label: t.title }))] }] : []),
+    { name: "why", label: "Why", kind: "area", placeholder: "What you saw, and what would make you get out" },
+  ], "Log it");
+  if (!v) return;
+  const asset = symbolOf(v.asset);
+  let entry = amount(v.entry);
+  if (entry === undefined) {
+    await loadPrices([asset], true);
+    entry = priceOf(asset);
+    if (entry === undefined) return toast(`No live price for ${asset}; type the entry price.`, "error");
+  }
+  const t = { asset, side: v.side as Side, size: amount(v.size) ?? 0, entry, stop: amount(v.stop), target: amount(v.target), opened: /^\d{4}-\d{2}-\d{2}$/.test(v.opened) ? v.opened : today, thesis: v.thesis || undefined };
+  let path = tradePath(t);
+  for (let i = 2; note(path); i++) path = path.replace(/( \d+)?\.md$/, ` ${i}.md`);
+  await createQuiet(path, TRADE_TEMPLATE(t, v.why ?? ""));
+  toast(`Logged ${asset} ${t.side} at ${usd(entry)}.`, "ok");
+  render();
+}
+async function cryptoAction(action: string, el: HTMLElement) {
+  const today = dayKey(new Date());
+  const p = el.dataset.path ?? "";
+  switch (action) {
+    case "crypto-refresh": return loadPrices(watchSymbols(cryptoWatch(), cryptoTrades(), theses(orgNotes(), today)), true);
+    case "crypto-watch": {
+      const v = await ask({ title: "Watchlist", label: `Coins to price, up to ${MAX_WATCH}; open trades and theses are added`, value: cryptoWatch().join(" "), ok: "Save" });
+      if (v === null) return;
+      store("nb-crypto-watch", v.split(/[\s,]+/).map(symbolOf).filter(Boolean).slice(0, MAX_WATCH).join(" ") || null);
+      return render();
+    }
+    case "crypto-trade-add": return cryptoLogTrade();
+    case "crypto-trade-close": {
+      const t = trade(p, textOf(p)!);
+      void loadPrices([t.asset]);
+      const v = await fieldsDialog(`Close ${t.asset} ${t.side}`, `${t.size} at ${usd(t.entry)}. Leave the exit price empty to use the live price.`, [
+        { name: "exit", label: "Exit price ($)", kind: "number", placeholder: "Live price" },
+        { name: "closed", label: "Closed", kind: "date", value: today },
+        { name: "lesson", label: "Lesson", kind: "area", placeholder: "What you would do the same, or differently" },
+      ], "Close it");
+      if (!v) return;
+      let exit = amount(v.exit);
+      if (exit === undefined) {
+        await loadPrices([t.asset]);
+        exit = priceOf(t.asset);
+        if (exit === undefined) return toast(`No live price for ${t.asset}; type the exit price.`, "error");
+      }
+      const next = closeTrade(textOf(p)!, exit, /^\d{4}-\d{2}-\d{2}$/.test(v.closed) ? v.closed : today, v.lesson);
+      await writeNote(p, next);
+      const made = pnl(trade(p, next))!;
+      toast(`Closed at ${usd(exit)}: ${usd(made, true)}.`, made >= 0 ? "ok" : "info");
+      return render();
+    }
+    case "crypto-thesis-add": {
+      const v = await fieldsDialog("New thesis", "What you believe and what would prove you wrong. Today's price is saved with it.", [
+        { name: "asset", label: "Coin", placeholder: "BTC", required: true },
+        { name: "review", label: "First review in (days)", kind: "number", value: "30" },
+        { name: "belief", label: "What you believe", placeholder: "BTC outperforms ETH this cycle", required: true, wide: true },
+        { name: "because", label: "Because (one reason per line)", kind: "area" },
+        { name: "wrong", label: "I am wrong if", placeholder: "ETH/BTC closes a month above 0.06", wide: true },
+      ], "Save it");
+      if (!v) return;
+      const asset = symbolOf(v.asset);
+      await loadPrices([asset]);
+      let path = `Crypto/Theses/${safeName(v.belief)}.md`;
+      for (let i = 2; note(path); i++) path = path.replace(/( \d+)?\.md$/, ` ${i}.md`);
+      const days = Math.max(1, Math.round(amount(v.review) ?? 30));
+      await createQuiet(path, THESIS_TEMPLATE({ asset, belief: v.belief, because: v.because ?? "", wrongIf: v.wrong ?? "", price: priceOf(asset), today, reviewIn: days }));
+      toast(`Saved${priceOf(asset) !== undefined ? ` at ${usd(priceOf(asset))}` : ""}. It comes back for review in ${days} day${days === 1 ? "" : "s"}, in Work.`, "ok");
+      return render();
+    }
+    case "crypto-thesis-held": case "crypto-thesis-broke": {
+      const [t] = theses([{ path: p, content: textOf(p)! }], today);
+      await loadPrices([t.asset]);
+      await writeNote(p, reviewThesis(textOf(p)!, action === "crypto-thesis-held", today, priceOf(t.asset)));
+      toast(action === "crypto-thesis-held" ? "Noted. It comes back in 30 days." : "Marked broken. It stays in your notebook as a record.", "ok");
+      return render();
+    }
+    case "crypto-thesis-share": {
+      const [t] = theses([{ path: p, content: textOf(p)! }], today);
+      const now = priceOf(t.asset);
+      const body = frontmatter(textOf(p)!).body.replace(/^# .+\n/m, (h) => `${h}\n**${t.asset}**${t.priceThen ? ` · ${usd(t.priceThen)} on ${t.written ?? "the day it was written"}` : ""}${now !== undefined ? ` · ${usd(now)} now` : ""}\n`);
+      return shareGist({ notebook: S.notebook!.canister.toText(), path: p, text: body }, "crypto");
+    }
+    case "crypto-channel": { store("nb-chat-channel", "crypto"); location.hash = "#/community"; return; }
   }
 }
 
@@ -3594,6 +3821,7 @@ function workspace(): string {
   if (S.tab === "writing") return shell(writingTab());
   if (S.tab === "care") return shell(careTab());
   if (S.tab === "career") return shell(careerTab());
+  if (S.tab === "crypto") return shell(cryptoTab());
   if (S.tab === "software") return shell(softwareTab());
   if (S.tab === "trips") return shell(tripsTab());
   if (S.tab === "chat") return shell(`<div class="workspace m-${S.mobilePane} ${S.sideOpen ? "" : "no-side"} ${S.asideOpen ? "" : "no-aside"}"><nav id="side" class="side" aria-label="Files">${side()}</nav>${chatHtml()}<aside id="aside" class="aside" aria-label="Sources">${chatAside()}</aside></div>`);
@@ -5864,6 +6092,7 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
     case "deck-add": { const k = el.dataset.deck!; await createQuiet(`Skills/${k}.md`, DECKS[k]); S.tab = "notes"; return open(`Skills/${k}.md`); }
     case "conflicts-open": return conflictDialog();
     case "keep-offline": return keepOffline();
+    case "crypto-refresh": case "crypto-watch": case "crypto-trade-add": case "crypto-trade-close": case "crypto-thesis-add": case "crypto-thesis-held": case "crypto-thesis-broke": case "crypto-thesis-share": case "crypto-channel": return cryptoAction(action, el);
     case "career-app-add": case "career-board": case "career-followed": case "career-heard": case "career-exp-add": case "career-resume-new": case "career-compile": case "career-feedback": case "career-story-add": case "career-practice": case "career-contacted": case "career-person-add": case "career-channel": return careerAction(action, el);
     case "pdf-load": case "pdf-all": {
       const box = el.closest<HTMLElement>(".pdf-embed");

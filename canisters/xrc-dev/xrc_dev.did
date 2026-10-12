@@ -1,0 +1,26 @@
+type Asset = record { class : AssetClass; symbol : text };
+type AssetClass = variant { Cryptocurrency; FiatCurrency };
+type ExchangeRate = record {
+  metadata : ExchangeRateMetadata;
+  rate : nat64;
+  timestamp : nat64;
+  quote_asset : Asset;
+  base_asset : Asset;
+};
+type ExchangeRateError = variant { CryptoBaseAssetNotFound; NotEnoughCycles };
+type ExchangeRateMetadata = record {
+  decimals : nat32;
+  forex_timestamp : opt nat64;
+  quote_asset_num_received_rates : nat64;
+  base_asset_num_received_rates : nat64;
+  base_asset_num_queried_sources : nat64;
+  standard_deviation : nat64;
+  quote_asset_num_queried_sources : nat64;
+};
+type GetExchangeRateRequest = record {
+  timestamp : opt nat64;
+  quote_asset : Asset;
+  base_asset : Asset;
+};
+type Result = variant { Ok : ExchangeRate; Err : ExchangeRateError };
+service : { get_exchange_rate : (GetExchangeRateRequest) -> (Result) }

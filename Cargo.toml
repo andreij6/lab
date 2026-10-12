@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["canisters/notebook", "canisters/registry", "canisters/llm-dev"]
+members = ["canisters/notebook", "canisters/registry", "canisters/llm-dev", "canisters/xrc-dev"]
 
 [workspace.dependencies]
 candid = "0.10"

@@ -16,6 +16,13 @@ canisters:
       steps:
         - type: script
           command: ./scripts/build_llm_dev.sh
+  # Local only: a stand-in for ICP's exchange rate canister with made-up prices, for the Crypto kit.
+  # On mainnet notebooks call uf6dk-hyaaa-aaaaq-qaaaq-cai directly.
+  - name: xrc
+    build:
+      steps:
+        - type: script
+          command: ./scripts/build_xrc_dev.sh
 
 networks:
   - name: local
@@ -28,7 +35,7 @@ networks:
 environments:
   - name: local
     network: local
-    canisters: [registry, frontend, llm]
+    canisters: [registry, frontend, llm, xrc]
   - name: ic
     network: ic
     canisters: [registry, frontend]
