@@ -27,6 +27,7 @@ import { NEW_IPYNB, addCell as nbAddCell, isNotebookPath, moveCell as nbMoveCell
 import { pythonLoaded, restartPython, runPython } from "./pyodide";
 import { isSlides, splitSlides, SLIDES_TEMPLATE } from "./slides";
 import { QUERY_METHODS } from "./queries";
+import { ADR_STATUSES, CITE_KEY, RUNBOOK_TEMPLATE, adrTemplate, careQuestions, careSummary, careWorkbook, changelog, citeIn, citedKeys, claims, compileThesis, continuity, fromCrossref, manuscript, nextAdr, parseBibtex, sourceFromNote, sourceNote, timeline, type Source, type Style } from "./kits";
 import { applyRule, isFaded, keepLater, lint, ms as nsToMs, nextToResurface, periodPath, periodRollup, propertyColumns, renameProperty, renameTag, retarget as retargetLinks, runQuery, setProperty, splitAtHeadings, type Issue, type OrgNote, type Period, type PropColumn, type Resurface, type Rule } from "./organize";
 import { DECKS, GEAR_BASE_REF, localStamp, REVIEW_TEMPLATE, TRIP_TEMPLATE, applyReviewToGear, baseWeight, fieldEntry, foodWorkbook, gearWorkbook, isGearWorkbook, parseGpx, routeNote, waterWorkbook } from "./outdoor";
 import { NEW_WORKBOOK, PALETTES, addChart, chartSvg, colName, evaluate, fmt, isSheetPath, newSheet, parseCsv, parseRef, parseWorkbook, serializeWorkbook, sheetCsv, toCsv, type Chart, type ChartType, type Workbook } from "./sheet";
@@ -151,9 +152,9 @@ const nb = (): NotebookApi => notebookOf(S.notebook!.canister.toText());
 
 // ---------- state ----------
 
-type Tab = "notes" | "chat" | "graph" | "manage" | "study" | "work" | "organize" | "trips";
-type Settings = { bookmarks: string[]; srs: Record<string, Record<string, Sched>>; deckStats: Record<string, { reviews: number; good: number }>; study: Record<string, number>; goals: { notesPerWeek?: number; cardsPerDay?: number }; searches: { name: string; q: string }[]; rules: Rule[]; resurface: Resurface; decayDays: number; hideFaded: boolean; kanbanArchiveDays: number };
-const parseSettings = (j: Partial<Settings> | undefined): Settings => ({ bookmarks: Array.isArray(j?.bookmarks) ? j!.bookmarks : [], srs: j?.srs ?? {}, deckStats: j?.deckStats ?? {}, study: j?.study ?? {}, goals: j?.goals ?? {}, searches: Array.isArray(j?.searches) ? j!.searches : [], rules: Array.isArray(j?.rules) ? j!.rules : [], resurface: j?.resurface ?? {}, decayDays: typeof j?.decayDays === "number" ? j.decayDays : 180, hideFaded: !!j?.hideFaded, kanbanArchiveDays: typeof j?.kanbanArchiveDays === "number" ? j.kanbanArchiveDays : 14 });
+type Tab = "notes" | "chat" | "graph" | "manage" | "study" | "work" | "organize" | "trips" | "research" | "writing" | "care" | "software";
+type Settings = { bookmarks: string[]; srs: Record<string, Record<string, Sched>>; deckStats: Record<string, { reviews: number; good: number }>; study: Record<string, number>; goals: { notesPerWeek?: number; cardsPerDay?: number }; searches: { name: string; q: string }[]; rules: Rule[]; resurface: Resurface; decayDays: number; hideFaded: boolean; kanbanArchiveDays: number; features: Partial<Record<Tab, boolean>>; onboarded?: boolean; writingGoal: number; citeStyle: Style };
+const parseSettings = (j: Partial<Settings> | undefined): Settings => ({ bookmarks: Array.isArray(j?.bookmarks) ? j!.bookmarks : [], srs: j?.srs ?? {}, deckStats: j?.deckStats ?? {}, study: j?.study ?? {}, goals: j?.goals ?? {}, searches: Array.isArray(j?.searches) ? j!.searches : [], rules: Array.isArray(j?.rules) ? j!.rules : [], resurface: j?.resurface ?? {}, decayDays: typeof j?.decayDays === "number" ? j.decayDays : 180, hideFaded: !!j?.hideFaded, kanbanArchiveDays: typeof j?.kanbanArchiveDays === "number" ? j.kanbanArchiveDays : 14, features: j?.features ?? {}, onboarded: j?.onboarded, writingGoal: typeof j?.writingGoal === "number" ? j.writingGoal : 500, citeStyle: j?.citeStyle === "chicago" ? "chicago" : "apa" });
 type ManageTab = "finance" | "notebook" | "sharing" | "agents" | "market";
 const MANAGE_TABS: [ManageTab, string, string][] = [["finance", "Cycles & money", "bolt"], ["notebook", "Notebook", "book"], ["sharing", "Sharing", "share"], ["agents", "Agents", "bot"], ["market", "Market", "tag"]];
 type View = "edit" | "split" | "preview";
@@ -238,6 +239,7 @@ const S = {
   mentions: 0, // @mentions of me in the community since I last looked
   org: { q: "", selected: new Set<string>(), triage: false, triageIdx: 0 } as { q: string; sort?: { key: string; dir: number }; selected: Set<string>; triage: boolean; triageIdx: number },
   trips: { mine: [] as Watch[], watching: [] as Watch[] },
+  kit: {} as { claimsFor?: string },
   conflicts: [] as { canister: string; path: string; mine: string; theirs: string }[],
   board: undefined as { topic?: string; sort: "hot" | "new" | "top"; posts: Post[]; open?: Post; comments: PostComment[]; channels: Channel[]; member?: Member; fee: bigint; loading: boolean; replyTo?: bigint; github?: string; showSide: boolean; showAside: boolean } | undefined,
   /** projects per notebook for the list page footer */
@@ -450,7 +452,13 @@ function alignmentHtml(c: string): string {
 
 /** Markdown to safe HTML with everything Obsidian adds; see markdown.ts. */
 function renderMd(content: string, self?: string): string {
-  return renderMarkdown(content, { self, resolve: resolveLink, note: (p) => (S.drafts.get(p)?.text ?? note(p)?.content), attachment, claimBadge: (lean, name) => claimBadge(self, lean, name) });
+  let smap: Map<string, { s: Source; path: string }> | undefined;
+  const cite = (key: string, loc?: string) => {
+    smap ??= new Map(orgNotes().map((n) => { const s = sourceFromNote(n.content); return s ? [s.key, { s, path: n.path }] as const : undefined; }).filter((x): x is readonly [string, { s: Source; path: string }] => !!x));
+    const hit = smap.get(key);
+    return hit ? `<a class="cite-ref" href="#" data-action="open" data-path="${esc(hit.path)}" title="${esc(hit.s.title)}">${esc(citeIn(hit.s, S.settings.citeStyle, loc))}</a>` : `<span class="cite-ref missing" title="No source with this key yet">[@${esc(key)}]</span>`;
+  };
+  return renderMarkdown(content, { self, resolve: resolveLink, note: (p) => (S.drafts.get(p)?.text ?? note(p)?.content), attachment, claimBadge: (lean, name) => claimBadge(self, lean, name), cite: content.includes("[@") ? cite : undefined });
 }
 /** What stands behind a theorem embed: the Lean checked (on the Lean note) and the English compared (on this note), both unchanged since. */
 function claimStatus(prose: string | undefined, lean: string): { cls: string; label: string; title: string } {
@@ -527,6 +535,7 @@ function decorateTables(root: ParentNode) {
 }
 function afterRender(root: ParentNode = document) {
   const dark = S.theme.mode === "dark";
+  decorateCode(root);
   void renderDiagrams(root, dark);
   decorateGlossary(root);
   decorateTables(root);
@@ -834,11 +843,11 @@ const moreBtn = () => `<button type="button" class="btn btn-ghost icon-btn" data
 function routeSheet(el: HTMLElement) {
   const nbId = S.notebook?.canister.toText();
   const inNb = !!S.notebook && !S.community && !S.board && !S.market && !S.admin;
-  type R = { label: string; icon: string; on: boolean; go: () => void; sub?: boolean };
-  const tab = (t: Tab, label: string, ic: string): R => ({ label, icon: ic, sub: true, on: inNb && S.tab === t, go: () => { const i = document.createElement("i"); i.dataset.tab = t; if (!inNb) { S.community = undefined; S.board = undefined; S.market = undefined; S.admin = undefined; location.hash = `#/notebook/${nbId}`; } void onAction("tab", i, new MouseEvent("click")); } });
+  type R = { label: string; icon: string; on: boolean; go: () => void; sub?: boolean; hidden?: boolean };
+  const tab = (t: Tab, label: string, ic: string): R => ({ label, icon: ic, sub: true, hidden: !featureOn(t), on: inNb && S.tab === t, go: () => { const i = document.createElement("i"); i.dataset.tab = t; if (!inNb) { S.community = undefined; S.board = undefined; S.market = undefined; S.admin = undefined; location.hash = `#/notebook/${nbId}`; } void onAction("tab", i, new MouseEvent("click")); } });
   const routes: R[] = [
     { label: "Your notebooks", icon: "list", on: !S.notebook && !S.community && !S.board && !S.market && !S.admin, go: () => { location.hash = "#/"; } },
-    ...(S.notebook ? [{ label: S.notebook.name, icon: "book", on: inNb && S.tab === "notes", go: () => { if (!inNb) location.hash = `#/notebook/${nbId}`; else { const i = document.createElement("i"); i.dataset.tab = "notes"; void onAction("tab", i, new MouseEvent("click")); } } } as R, tab("chat", "Chat with your notes", "chat"), tab("graph", "Graph", "graph"), tab("study", "Study", "check"), tab("work", "Work", "briefcase"), tab("organize", "Organize", "sliders"), tab("trips", "Trips", "mountain"), tab("manage", "Manage", "bolt")] : []),
+    ...(S.notebook ? [{ label: S.notebook.name, icon: "book", on: inNb && S.tab === "notes", go: () => { if (!inNb) location.hash = `#/notebook/${nbId}`; else { const i = document.createElement("i"); i.dataset.tab = "notes"; void onAction("tab", i, new MouseEvent("click")); } } } as R, tab("chat", "Chat with your notes", "chat"), tab("graph", "Graph", "graph"), tab("study", "Study", "check"), tab("work", "Work", "briefcase"), tab("organize", "Organize", "sliders"), tab("research", "Research", "book"), tab("writing", "Writing", "edit"), tab("care", "Care", "person"), tab("software", "Software", "command"), tab("trips", "Trips", "mountain"), tab("manage", "Manage", "bolt")].filter((r) => !r.hidden) : []),
     { label: "Community", icon: "person", on: !!S.community, go: () => { location.hash = "#/community"; } },
     ...(flag("board") ? [{ label: "Board", icon: "list", on: !!S.board, go: () => { location.hash = "#/board"; } } as R] : []),
     ...(flag("market") ? [{ label: "Market", icon: "tag", on: !!S.market, go: () => { location.hash = "#/market"; } } as R] : []),
@@ -959,7 +968,7 @@ function notebooksPage(): string {
 function shell(body: string): string {
   const i = S.info;
   const low = lowCycles(i);
-  const seg = `<nav class="segmented" role="tablist" aria-label="View">
+  const segAll = `<nav class="segmented" role="tablist" aria-label="View">
       <button type="button" role="tab" class="tab" aria-selected="${S.tab === "notes"}" data-action="tab" data-tab="notes">${icon("notes")}<span class="lbl">Notes</span></button>
       <button type="button" role="tab" class="tab" aria-selected="${S.tab === "chat"}" data-action="tab" data-tab="chat">${icon("chat")}<span class="lbl">Chat</span></button>
       <button type="button" role="tab" class="tab" aria-selected="${S.tab === "graph"}" data-action="tab" data-tab="graph">${icon("graph")}<span class="lbl">Graph</span></button>
@@ -967,6 +976,7 @@ function shell(body: string): string {
       <button type="button" role="tab" class="tab" aria-selected="${S.tab === "work"}" data-action="tab" data-tab="work">${icon("briefcase")}<span class="lbl">Work</span></button>
       <button type="button" role="tab" class="tab" aria-selected="${S.tab === "manage"}" data-action="tab" data-tab="manage">${icon("bolt")}<span class="lbl">Manage</span>${i ? `<span class="pill ${low ? "low" : ""}">${tc(i.cycles)}</span>` : ""}</button>
     </nav>`;
+  const seg = segAll.replace(/<button type="button" role="tab" class="tab" aria-selected="[^"]*" data-action="tab" data-tab="(\w+)">[\s\S]*?<\/button>/g, (m, t: string) => (featureOn(t as Tab) ? m : ""));
   const mobileNav = S.mobile && (S.tab === "notes" || S.tab === "chat")
     ? `<nav class="mobilebar" aria-label="Panes">
         <button type="button" class="mtab" aria-selected="${S.mobilePane === "files"}" data-action="mpane" data-pane="files">${icon("folder")}Files</button>
@@ -990,9 +1000,9 @@ function shell(body: string): string {
 function ribbonHtml(i?: Info, low = false): string {
   if (S.mobile) return "";
   const inNb = !!S.notebook && !S.community && !S.market && !S.admin;
-  const rb = (tab: Tab, label: string, ic: string, extra = "") => `<button type="button" class="rb ${inNb && S.tab === tab ? "on" : ""}" data-action="ribbon-tab" data-tab="${tab}" title="${label}" aria-label="${label}" aria-pressed="${inNb && S.tab === tab}">${icon(ic)}${extra}</button>`;
+  const rb = (tab: Tab, label: string, ic: string, extra = "") => !featureOn(tab) ? "" : `<button type="button" class="rb ${inNb && S.tab === tab ? "on" : ""}" data-action="ribbon-tab" data-tab="${tab}" title="${label}" aria-label="${label}" aria-pressed="${inNb && S.tab === tab}">${icon(ic)}${extra}</button>`;
   return `<nav class="ribbon" aria-label="Sections">
-      <div class="rb-group">${rb("notes", "Notes", "notes")}${rb("chat", "Chat with your notes", "chat")}${rb("graph", "Knowledge graph", "graph")}${rb("study", `Study${dueTotal() ? ` · ${dueTotal()} cards due` : ""}`, "check", dueTotal() ? `<i class="rb-count">${dueTotal()}</i>` : "")}${rb("work", `Work${overdueCount() ? ` · ${overdueCount()} overdue` : ""}`, "briefcase", overdueCount() ? `<i class="rb-count danger">${overdueCount()}</i>` : "")}${rb("organize", "Organize: saved searches, triage, rules, tidy-up", "sliders")}${rb("trips", S.trips.watching.some((w) => w.overdue && !w.closed) ? "Trips · someone is overdue" : "Trips", "mountain", S.trips.watching.some((w) => w.overdue && !w.closed) ? `<i class="rb-dot"></i>` : "")}</div>
+      <div class="rb-group">${rb("notes", "Notes", "notes")}${rb("chat", "Chat with your notes", "chat")}${rb("graph", "Knowledge graph", "graph")}${rb("study", `Study${dueTotal() ? ` · ${dueTotal()} cards due` : ""}`, "check", dueTotal() ? `<i class="rb-count">${dueTotal()}</i>` : "")}${rb("work", `Work${overdueCount() ? ` · ${overdueCount()} overdue` : ""}`, "briefcase", overdueCount() ? `<i class="rb-count danger">${overdueCount()}</i>` : "")}${rb("organize", "Organize: saved searches, triage, rules, tidy-up", "sliders")}${rb("research", "Research: sources, citations, claims, thesis", "book")}${rb("writing", "Writing: manuscript, story bible, timeline", "edit")}${rb("care", "Care: log, appointments, care team", "person")}${rb("software", "Software: decisions, runbooks, changelog", "command")}${rb("trips", S.trips.watching.some((w) => w.overdue && !w.closed) ? "Trips · someone is overdue" : "Trips", "mountain", S.trips.watching.some((w) => w.overdue && !w.closed) ? `<i class="rb-dot"></i>` : "")}</div>
       <div class="rb-group bottom">${rb("manage", `Manage${i ? ` · ${tc(i.cycles)}` : ""}`, "bolt", low ? `<i class="rb-dot"></i>` : "")}<a class="rb ${S.community ? "on" : ""}" href="#/community" data-action="nav" title="Community${S.mentions ? ` · ${S.mentions} new mention${S.mentions === 1 ? "" : "s"}` : ""}" aria-label="Community">${icon("person")}${S.mentions ? `<i class="rb-badge">${S.mentions > 9 ? "9+" : S.mentions}</i>` : ""}</a>${flag("board") ? `<a class="rb ${S.board ? "on" : ""}" href="#/board" data-action="nav" title="Board: posts and discussion" aria-label="Board">${icon("list")}</a>` : ""}${flag("market") ? `<a class="rb ${S.market ? "on" : ""}" href="#/market" data-action="nav" title="Notebook market" aria-label="Notebook market">${icon("tag")}</a>` : ""}${S.isAdmin ? `<a class="rb ${S.admin ? "on" : ""}" href="#/admin" data-action="nav" title="Reports and ideas" aria-label="Reports and ideas">${icon("bug")}</a>` : ""}<button type="button" class="rb" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="rb" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button><button type="button" class="rb" data-action="sign-out" title="Sign out" aria-label="Sign out">${icon("out")}</button></div>
     </nav>`;
 }
@@ -1000,10 +1010,10 @@ function shellBody(body: string, i: Info | undefined, low: boolean, alert: strin
   const ribbon = ribbonHtml(i, low);
   return `<div class="shell ${S.mobile ? "is-mobile" : ""}">${ribbon}<div class="shell-main">
     ${alert}
-    <header class="wsbar">${brand()}${S.mobile ? seg : `<span class="crumb"><b>${esc(S.notebook!.name)}</b><span class="faint">/</span><span>${S.tab === "notes" ? (cur() ? esc(title(cur()!)) : "Notes") : S.tab === "chat" ? "Chat" : S.tab === "graph" ? "Graph" : S.tab === "study" ? "Study" : S.tab === "work" ? "Work" : S.tab === "organize" ? "Organize" : S.tab === "trips" ? "Trips" : "Manage"}</span></span>`}
+    <header class="wsbar">${brand()}${S.mobile ? seg : `<span class="crumb"><b>${esc(S.notebook!.name)}</b><span class="faint">/</span><span>${S.tab === "notes" ? (cur() ? esc(title(cur()!)) : "Notes") : S.tab === "chat" ? "Chat" : S.tab === "graph" ? "Graph" : S.tab === "study" ? "Study" : S.tab === "work" ? "Work" : S.tab === "organize" ? "Organize" : S.tab === "trips" ? "Trips" : S.tab === "research" ? "Research" : S.tab === "writing" ? "Writing" : S.tab === "care" ? "Care" : S.tab === "software" ? "Software" : "Manage"}</span></span>`}
       <span class="right">${S.mobile ? "" : `<button type="button" class="btn btn-ghost" data-action="palette" title="Open or create a note (${MOD}K)">${icon("search")}<span class="kbd">${MOD}K</span></button>`}${S.mobile ? moreBtn() : ""}</span>
     </header>
-    ${panebar({ on: S.sideOpen, what: "the file pane", action: "side-toggle", off: S.tab === "graph" || S.tab === "manage" || S.tab === "study" || S.tab === "work" || S.tab === "organize" || S.tab === "trips" }, { on: S.asideOpen, what: "the right pane", action: "aside-toggle", off: S.tab === "graph" || S.tab === "manage" || S.tab === "study" || S.tab === "work" || S.tab === "organize" || S.tab === "trips" })}
+    ${panebar({ on: S.sideOpen, what: "the file pane", action: "side-toggle", off: S.tab === "graph" || S.tab === "manage" || S.tab === "study" || S.tab === "work" || S.tab === "organize" || S.tab === "trips" || S.tab === "research" || S.tab === "writing" || S.tab === "care" || S.tab === "software" }, { on: S.asideOpen, what: "the right pane", action: "aside-toggle", off: S.tab === "graph" || S.tab === "manage" || S.tab === "study" || S.tab === "work" || S.tab === "organize" || S.tab === "trips" || S.tab === "research" || S.tab === "writing" || S.tab === "care" || S.tab === "software" })}
     ${body}
     ${mobileNav}
   </div></div>`;
@@ -1970,11 +1980,330 @@ const BUILTIN_TEMPLATES: Record<string, string> = {
   "1:1": "---\ntype: meeting\ndate: {{date}}\nattendees: [@name]\n---\n# 1:1 with @name\n\n## How are things\n\n- \n\n## Their topics\n\n- \n\n## My topics\n\n- \n\n## Decisions\n\n- \n\n## Actions\n\n- [ ] @name  📅 {{date}}\n- [ ] @me  📅 {{date}}\n",
   "Decision record": "---\ndate: {{date}}\nstatus: proposed\n---\n# {{title}}\n\n## Context\n\nWhat is forcing a decision now.\n\n## Options\n\n1. \n2. \n\nDecision:: \n\n## Consequences\n\n- \n",
   "One-pager": "---\ndate: {{date}}\n---\n# {{title}}\n\n**Problem.** \n\n**Proposal.** \n\n**Why now.** \n\n**What it costs.** \n\n**What we will measure.** \n\n## Open questions\n\n- [ ] \n",
-  "Post-mortem": "---\ndate: {{date}}\n---\n# {{title}}\n\n## What happened\n\n| Time | Event |\n| --- | --- |\n| | |\n\n## Impact\n\n\n\n## Root cause\n\n\n\n## What went well\n\n- \n\n## What we will change\n\n- [ ] @owner  📅 {{date}}\n",
+  "Post-mortem": "---\ntype: post-mortem\ndate: {{date}}\n---\n# {{title}}\n\n## What happened\n\n| Time | Event |\n| --- | --- |\n| | |\n\n## Impact\n\n\n\n## Root cause\n\n\n\n## What went well\n\n- \n\n## What we will change\n\n- [ ] @owner  📅 {{date}}\n",
   "Proposal": "---\ndate: {{date}}\nstatus: draft\n---\n# {{title}}\n\n## Summary\n\n\n\n## Goals\n\n- \n\n## Plan\n\n| Phase | Owner | When |\n| --- | --- | --- |\n| | @ | |\n\n## Risks\n\n- \n\nDecision:: pending\n",
   "Person": "---\ntype: person\nrole: \nteam: \n---\n# {{title}}\n\n## Context\n\n\n\n## Last 1:1\n\n\n\n## Open with them\n\n- [ ] \n",
   "Project": "---\ntype: project\nstatus: active\ngoal: \n---\n# {{title}}\n\n## Milestones\n\n- [ ] \n\n## Notes\n\n",
 };
+// --- features: which tabs a notebook shows, chosen at onboarding and in Manage → Notebook
+
+const FEATURES: { id: Tab; label: string; icon: string; desc: string }[] = [
+  { id: "chat", label: "Chat with your notes", icon: "chat", desc: "Ask in plain language; answers cite your notes." },
+  { id: "graph", label: "Graph", icon: "graph", desc: "How your notes link, as a map." },
+  { id: "study", label: "Study", icon: "check", desc: "Flashcards, quizzes, spaced repetition, study mode." },
+  { id: "work", label: "Work", icon: "briefcase", desc: "Tasks, projects, meetings, decisions, weekly review." },
+  { id: "organize", label: "Organize", icon: "sliders", desc: "Saved searches, property tables, triage, periodic notes, rules, tidy-up." },
+  { id: "research", label: "Research", icon: "book", desc: "Sources from BibTeX or a DOI, [@citations], literature matrix, claims, a thesis compiler." },
+  { id: "writing", label: "Writing", icon: "edit", desc: "Manuscript of scenes, word goals, story bible, continuity, timeline, beta readers." },
+  { id: "care", label: "Care", icon: "person", desc: "Symptom and medication log, care-team sharing and check-ins, appointment prep." },
+  { id: "software", label: "Software", icon: "command", desc: "Decision records, runbooks, a changelog, runnable snippets." },
+  { id: "trips", label: "Trips", icon: "mountain", desc: "Trip plans, gear, food, water, GPX routes, field journal, check-ins." },
+];
+/** Notebooks made before features existed keep every tab they had; the new kits start off. */
+const FEATURE_DEFAULT = new Set<Tab>(["chat", "graph", "study", "work", "organize", "trips"]);
+const featureOn = (t: Tab) => t === "notes" || t === "manage" || (S.settings.features[t] ?? FEATURE_DEFAULT.has(t));
+const PRESETS: Record<string, Tab[]> = {
+  Student: ["chat", "graph", "study", "organize"],
+  Researcher: ["chat", "graph", "organize", "research", "study"],
+  Writer: ["chat", "graph", "writing", "organize"],
+  Caregiver: ["chat", "care", "work"],
+  Developer: ["chat", "graph", "work", "software", "organize"],
+  Hiker: ["chat", "trips", "study"],
+  Everything: FEATURES.map((f) => f.id),
+};
+function featuresCard(): string {
+  return `<div class="card band"><h2>${icon("sliders")} Features</h2><p class="muted small">Pick the tabs this notebook shows. Turning one off only hides it; your notes stay.</p>
+    <div class="feature-grid">${FEATURES.map((f) => `<label class="feature-opt"><input type="checkbox" name="feature" value="${f.id}" ${featureOn(f.id) ? "checked" : ""}><span>${icon(f.icon)}<b>${esc(f.label)}</b><span class="small muted">${esc(f.desc)}</span></span></label>`).join("")}</div>
+    <div class="row tight nudge"><button type="button" class="btn btn-ghost" data-action="tour">${icon("help")}Show the tour again</button></div></div>`;
+}
+async function refreshShares() { const sh = await nb().shares().catch(() => undefined); if (sh?.__kind__ === "Ok") S.shares = sh.Ok; }
+/** Five steps the first time a notebook opens: the main functions, then which features to show. */
+function onboarding(step = 0, picked?: Set<Tab>) {
+  document.querySelector(".onboard")?.remove();
+  const chosen = picked ?? new Set(FEATURES.filter((f) => featureOn(f.id)).map((f) => f.id));
+  const steps: { title: string; body: string }[] = [
+    { title: "Your notebook", body: `<p>Notes are markdown files in folders, stored in a canister only you control.</p><ul><li><b>${MOD}K</b> opens or creates a note by name; <b>${MOD}N</b> makes a new one.</li><li>Type <code>[[</code> to link notes. Backlinks and the graph follow on their own.</li><li>Right-click a file or folder for moving, templates, sharing and more.</li></ul>` },
+    { title: "Find and connect", body: `<ul><li>Search by words, <code>tag:</code>, <code>folder:</code> or any property such as <code>status:open</code>.</li><li>Tags like <code>#idea</code> collect notes; the tag list sits under the files.</li><li>Organize turns a search into a live view you can save, sort and edit as a table.</li></ul>` },
+    { title: "Ask your notes", body: `<ul><li>Chat picks the notes that fit your question and answers from them, citing each claim with a number you can click.</li><li>When your notes do not cover it, the model says so and answers from its own knowledge under a clear label.</li><li>Save any answer as a note in the folder you choose.</li></ul>` },
+    { title: "Choose your tools", body: `<p class="muted small">Start from a preset or tick what you need. You can change this any time in Manage → Notebook.</p><div class="row tight wrap">${Object.keys(PRESETS).map((p) => `<button type="button" class="btn btn-ghost" data-preset="${p}">${p}</button>`).join("")}</div><div class="feature-grid nudge">${FEATURES.map((f) => `<label class="feature-opt"><input type="checkbox" data-pick="${f.id}" ${chosen.has(f.id) ? "checked" : ""}><span>${icon(f.icon)}<b>${esc(f.label)}</b><span class="small muted">${esc(f.desc)}</span></span></label>`).join("")}</div>` },
+    { title: "You are set", body: `<p>The ribbon on the left now shows ${[...chosen].map((t) => `<b>${esc(FEATURES.find((f) => f.id === t)?.label ?? t)}</b>`).join(", ") || "just your notes"}.</p><label class="switch"><input type="checkbox" data-starters checked> Add a starter note for each tool I picked</label><p class="small muted nudge">Change the tools in Manage → Notebook → Features, where you can also replay this tour.</p>` },
+  ];
+  const s = steps[step];
+  const el = document.createElement("div");
+  el.className = "scrim onboard";
+  el.innerHTML = `<div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="ob-t"><div class="ob-dots">${steps.map((_, i) => `<i class="${i === step ? "on" : i < step ? "done" : ""}"></i>`).join("")}</div><h2 id="ob-t">${esc(s.title)}</h2><div class="ob-body">${s.body}</div>
+    <div class="actions">${step ? `<button type="button" class="btn" data-ob="back">Back</button>` : `<button type="button" class="btn btn-ghost" data-ob="skip">Skip</button>`}<button type="button" class="btn btn-primary" data-ob="next">${step === steps.length - 1 ? "Finish" : "Next"}</button></div></div>`;
+  const read = () => { el.querySelectorAll<HTMLInputElement>("[data-pick]").forEach((c) => { if (c.checked) chosen.add(c.dataset.pick as Tab); else chosen.delete(c.dataset.pick as Tab); }); };
+  el.addEventListener("click", async (e) => {
+    const t = e.target as HTMLElement;
+    const preset = t.closest<HTMLElement>("[data-preset]")?.dataset.preset;
+    if (preset) { el.querySelectorAll<HTMLInputElement>("[data-pick]").forEach((c) => (c.checked = PRESETS[preset].includes(c.dataset.pick as Tab))); return; }
+    const b = t.closest<HTMLElement>("[data-ob]")?.dataset.ob;
+    if (!b) return;
+    read();
+    if (b === "back") return onboarding(step - 1, chosen);
+    if (b === "next" && step < steps.length - 1) return onboarding(step + 1, chosen);
+    const starters = el.querySelector<HTMLInputElement>("[data-starters]")?.checked ?? false;
+    el.remove();
+    if (b === "next") { for (const f of FEATURES) S.settings.features[f.id] = chosen.has(f.id); }
+    S.settings.onboarded = true;
+    await saveSettings();
+    if (b === "next" && starters) await addStarters(chosen);
+    if (!featureOn(S.tab)) S.tab = "notes";
+    render();
+  });
+  document.body.append(el);
+}
+/** One example note per kit, so each tab has something to show. */
+async function addStarters(chosen: Set<Tab>) {
+  const today = new Date().toISOString().slice(0, 10);
+  if (chosen.has("research")) { const [s] = parseBibtex("@article{doe2024example, author = {Doe, Jane}, title = {An example source}, journal = {Journal of Examples}, year = {2024}}"); await createQuiet(`Sources/${s.key}.md`, sourceNote(s)); await createQuiet("Research/Draft.md", `# Draft\n\nClaim:: Examples help people learn [@doe2024example]\n\nClaim:: This one has no evidence yet\n`); }
+  if (chosen.has("writing")) { await createQuiet("Manuscript/Opening.md", `---\ntype: scene\nchapter: Chapter 1\norder: 1\npov: \ndate: Day 1\n---\n# Opening\n\nWrite the first scene here.\n`); await createQuiet("Bible/Main character.md", `---\ntype: character\neyes: \nhair: \nage: \n---\n# Main character\n\n`); }
+  if (chosen.has("care")) { await createQuiet("Care/Log.sheet", careWorkbook()); await createQuiet("Care/Diary.md", `# Diary\n\nQ:: A question for the next appointment\n`); }
+  if (chosen.has("software")) { await createQuiet(`Decisions/${nextAdr(paths())} Record decisions.md`, adrTemplate(nextAdr(paths()), "Record decisions")); }
+  if (chosen.has("trips") && !paths().some((p) => p.startsWith("Trips/"))) await createQuiet("Trips/First trip/Plan.md", fillTemplate(TRIP_TEMPLATE, { title: "First trip" }));
+  if (chosen.has("organize") && !note("Inbox/Welcome.md")) await createQuiet("Inbox/Welcome.md", `# Welcome\n\nThis note is in your inbox. Triage it from Organize: file it, tag it or archive it.\n\ncreated: ${today}\n`);
+}
+
+// --- the Research kit
+
+const libSources = (): Source[] => orgNotes().map((n) => sourceFromNote(n.content)).filter((s): s is Source => !!s);
+const sourcePath = (key: string) => orgNotes().find((n) => sourceFromNote(n.content)?.key === key)?.path;
+const citeStyle = (): Style => S.settings.citeStyle;
+async function addSources(list: Source[]) {
+  let n = 0;
+  for (const s of list) { if (sourcePath(s.key)) continue; await createQuiet(`Sources/${s.key}.md`, sourceNote(s)); n++; }
+  toast(n ? `Added ${n} source${n === 1 ? "" : "s"}${list.length - n ? `; ${list.length - n} already here` : ""}.` : "Those sources are already here.", n ? "ok" : "info");
+  render();
+}
+async function doiLookup() {
+  const doi = (await ask({ title: "Add a source by DOI", label: "DOI", placeholder: "10.1038/s41586-020-2649-2", ok: "Look up" }))?.trim().replace(/^https?:\/\/(dx\.)?doi\.org\//, "");
+  if (!doi) return;
+  try {
+    const r = await fetch(`https://api.crossref.org/works/${encodeURIComponent(doi)}`);
+    if (!r.ok) throw new Error(r.status === 404 ? "Crossref does not know that DOI" : `Crossref answered ${r.status}`);
+    const j = (await r.json()) as { message: Record<string, unknown> };
+    await addSources([fromCrossref(j.message)]);
+  } catch (e) { toast(`${errMsg(e)}. Offline? Paste its BibTeX instead.`, "error"); }
+}
+function researchTab(): string {
+  const notes = orgNotes();
+  const src = libSources();
+  const srcNotes = notes.filter((n) => sourceFromNote(n.content));
+  const cols: PropColumn[] = ["method", "sample", "finding", "limitation", "strength"].map((key) => ({ key, type: key === "strength" ? "choice" : "text", choices: key === "strength" ? ["strong", "moderate", "weak"] : [] }));
+  const drafts = notes.filter((n) => n.path.endsWith(".md") && /Claim::/i.test(n.content));
+  const draft = drafts.find((d) => d.path === S.kit.claimsFor) ?? drafts[0];
+  const cl = draft ? claims(draft.content, src, (k) => frontmatter(note(sourcePath(k) ?? "")?.content ?? "").data.strength) : [];
+  const theses = notes.filter((n) => (frontmatter(n.content).data.type ?? "") === "thesis");
+  const missingCites = [...new Set(notes.flatMap((n) => citedKeys(n.content)))].filter((k) => !src.some((s) => s.key === k));
+  return `<section class="main" style="overflow:auto"><div class="page wide kit">
+    <div class="card band"><div class="row"><h2>${icon("book")} Sources</h2><span class="right-actions"><label class="btn">${icon("upload")}BibTeX file<input type="file" name="bib" accept=".bib,.bibtex,text/plain" hidden></label><button type="button" class="btn" data-action="bib-paste">Paste BibTeX</button><button type="button" class="btn btn-primary" data-action="doi-add">${icon("plus")}By DOI</button></span></div>
+      <p class="small muted">Each source is a note in <code>Sources/</code>. Cite it anywhere as <code>[@key]</code> or <code>[@key, p. 4]</code>; it renders as <span class="cite-ref">${src[0] ? esc(citeIn(src[0], citeStyle())) : "(Author, Year)"}</span> and links to the source.</p>
+      <div class="row tight"><label class="field"><span class="label">Citation style</span><select class="input" name="citestyle"><option value="apa" ${citeStyle() === "apa" ? "selected" : ""}>APA 7</option><option value="chicago" ${citeStyle() === "chicago" ? "selected" : ""}>Chicago author-date</option></select></label>${missingCites.length ? `<p class="small" style="color:var(--danger)">Cited but not in Sources: ${missingCites.map((k) => `<code>@${esc(k)}</code>`).join(", ")}</p>` : ""}</div>
+    </div>
+    <div class="card band"><div class="row"><h2>${icon("columns")} Literature matrix</h2><span class="small muted">${srcNotes.length} source${srcNotes.length === 1 ? "" : "s"}</span></div>
+      ${srcNotes.length ? `<div class="ptable-wrap"><table class="ptable"><thead><tr><th>Source</th>${cols.map((c) => `<th>${c.key}</th>`).join("")}</tr></thead><tbody>${srcNotes.map((n) => { const s = sourceFromNote(n.content)!; const d = frontmatter(n.content).data; return `<tr><td><a href="#" data-action="open" data-path="${esc(n.path)}">${esc(citeIn(s, citeStyle()))}</a><div class="small faint" title="${esc(s.title)}">${esc(s.title.slice(0, 60))}</div></td>${cols.map((c) => `<td>${choiceInput(c, n.path, d[c.key] ?? "")}</td>`).join("")}</tr>`; }).join("")}</tbody></table><datalist id="dl-strength"><option value="strong"><option value="moderate"><option value="weak"></datalist></div>` : `<p class="muted small">Add sources to compare their methods, samples, findings and limitations side by side.</p>`}
+    </div>
+    <div class="grid2">
+      <div class="card band"><div class="row"><h2>${icon("check")} Claims</h2>${drafts.length > 1 ? `<select class="input" name="claimsfor" style="max-width:220px">${drafts.map((d) => `<option value="${esc(d.path)}" ${d === draft ? "selected" : ""}>${esc(stem(d.path))}</option>`).join("")}</select>` : ""}</div>
+        <p class="small muted">Mark claims in a draft with <code>Claim::</code>. Each is backed by a citation or a linked note; claims backed only by sources marked weak are flagged.</p>
+        ${cl.length ? `<div class="runs">${cl.map((c) => `<div class="run"><span>${esc(c.text.replace(CITE_KEY, "").slice(0, 120))}<div class="small faint">${c.evidence.map(esc).join(", ") || "no evidence"}</div></span><span class="pill ${c.status === "supported" ? "ok" : c.status === "weak" ? "low" : "bad"}">${c.status}</span></div>`).join("")}</div>` : `<p class="muted small">No <code>Claim::</code> lines yet.</p>`}</div>
+      <div class="card band"><div class="row"><h2>${icon("template")} Thesis</h2><span class="right-actions"><button type="button" class="btn" data-action="thesis-new">${icon("plus")}New thesis</button></span></div>
+        <p class="small muted">A thesis note lists chapters as <code>1. [[Chapter]]</code>. Compiling joins them in order, numbers the figures, formats citations and adds the reference list.</p>
+        ${theses.map((t) => `<div class="run"><a href="#" data-action="open" data-path="${esc(t.path)}">${esc(stem(t.path))}</a><span class="row-actions"><button type="button" class="btn btn-ghost" data-action="thesis-compile" data-path="${esc(t.path)}">Compile</button></span></div>`).join("") || ""}</div>
+    </div>
+  </div></section>`;
+}
+async function compileThesisNote(path: string) {
+  const r = compileThesis(S.drafts.get(path)?.text ?? note(path)!.content, (t) => { const p = resolveLink(t); return p ? S.drafts.get(p)?.text ?? note(p)?.content : undefined; }, libSources(), citeStyle());
+  const out = `${stem(path)} (compiled).md`;
+  if (note(out)) await writeNote(out, r.md); else await createQuiet(out, r.md);
+  const choice = await ask({ title: "Thesis compiled", body: `${r.figures} figure${r.figures === 1 ? "" : "s"} numbered.${r.missing.length ? ` Missing: ${r.missing.join(", ")}.` : ""} Saved as ${out}.`, label: "Then", choices: [{ value: "open", label: "Open it" }, { value: "docx", label: "Download as Word (.docx)" }, { value: "md", label: "Download as Markdown" }, { value: "print", label: "Print or save as PDF" }], value: "open", ok: "Go" });
+  if (choice === "docx") return downloadBytes(`${stem(out)}.docx`, markdownToDocx(r.md, stem(path)), "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+  if (choice === "md") return downloadBytes(`${stem(out)}.md`, r.md, "text/markdown");
+  S.tab = "notes";
+  await open(out);
+  if (choice === "print") { const p = pane(); if (p.view === "edit") { p.view = "preview"; render(); } setTimeout(() => window.print(), 400); }
+}
+
+// --- the Writing kit
+
+function writingTab(): string {
+  const notes = orgNotes();
+  const ms = manuscript(notes);
+  const total = ms.reduce((t, c) => t + c.words, 0);
+  const id = S.notebook!.canister.toText();
+  const day = new Date().toISOString().slice(0, 10);
+  const startKey = `nb-words-${id}-${day}`;
+  if (store(startKey) === null) store(startKey, String(total));
+  const today = Math.max(0, total - Number(store(startKey)));
+  const goal = S.settings.writingGoal;
+  const bible = notes.filter((n) => /^(character|place|object)$/.test(frontmatter(n.content).data.type ?? ""));
+  const scenes = notes.filter((n) => (frontmatter(n.content).data.type ?? "") === "scene");
+  const issues = continuity(bible, scenes);
+  const events = timeline(notes);
+  const scenePaths = new Set(scenes.map((s) => s.path));
+  const beta = S.comments.filter((c) => scenePaths.has(c.path));
+  return `<section class="main" style="overflow:auto"><div class="page wide kit">
+    <div class="card band"><div class="row"><h2>${icon("edit")} Manuscript</h2><span class="small muted">${total.toLocaleString()} words · ${scenes.length} scene${scenes.length === 1 ? "" : "s"}</span><span class="right-actions"><button type="button" class="btn btn-primary" data-action="scene-new">${icon("plus")}New scene</button></span></div>
+      <div class="goal"><span>Today <b>${today.toLocaleString()}</b> of <input class="input" type="number" min="0" step="50" name="writinggoal" value="${goal}" aria-label="Daily word goal"> words</span><span class="meter"><i style="width:${goal ? Math.min(100, (today / goal) * 100) : 0}%"></i></span></div>
+      ${ms.length ? ms.map((c) => `<div class="chapter" data-chapter="${esc(c.chapter)}"><div class="band-title">${esc(c.chapter)} <span class="small faint">${c.words.toLocaleString()} words</span></div>${c.scenes.map((s) => `<div class="scene-row" draggable="true" data-scene="${esc(s.path)}" data-chapter="${esc(c.chapter)}"><span class="grip" aria-hidden="true">⋮⋮</span><a href="#" data-action="open" data-path="${esc(s.path)}">${esc(s.title)}</a><span class="small faint">${s.pov ? `${esc(s.pov)} · ` : ""}${s.date ? `${esc(s.date)} · ` : ""}${s.words.toLocaleString()} words</span></div>`).join("")}</div>`).join("") : `<p class="muted small">Scenes are notes with <code>type: scene</code>, a <code>chapter:</code> and an <code>order:</code>. Drag them to reorder.</p>`}
+    </div>
+    <div class="grid2">
+      <div class="card band"><div class="row"><h2>${icon("person")} Story bible</h2><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="bible-new" data-kind="character">+ Character</button><button type="button" class="btn btn-ghost" data-action="bible-new" data-kind="place">+ Place</button><button type="button" class="btn btn-ghost" data-action="bible-new" data-kind="object">+ Object</button></span></div>
+        ${bible.length ? `<div class="runs">${bible.map((b) => { const d = frontmatter(b.content).data; return `<div class="run"><span><a href="#" data-action="open" data-path="${esc(b.path)}">${esc(base(b.path))}</a> <span class="small faint">${esc(d.type ?? "")}</span></span><span class="small muted">${Object.entries(d).filter(([k, v]) => k !== "type" && v).slice(0, 4).map(([k, v]) => `${esc(k)}: ${esc(v)}`).join(" · ")}</span></div>`; }).join("")}</div>` : `<p class="muted small">Characters, places and objects with their facts (eyes, hair, age, born, …).</p>`}
+        <div class="band-title">Continuity <span class="count">${issues.length}</span></div>
+        ${issues.length ? `<div class="runs">${issues.map((i) => `<div class="run"><span><b>${esc(i.entity)}</b>: ${esc(i.property)} is <b>${esc(i.expected)}</b> in the bible, <b>${esc(i.found)}</b> in <a href="#" data-action="open" data-path="${esc(i.scene)}">${esc(base(i.scene))}</a><div class="small faint">“${esc(i.excerpt)}”</div></span></div>`).join("")}</div>` : `<p class="small muted">No contradictions found between the bible and the scenes.</p>`}</div>
+      <div class="card band"><div class="row"><h2>${icon("calendar")} Timeline</h2></div><p class="small muted">From scene <code>date:</code> and lines with <code>date::</code>. Any calendar works; dates sort by the numbers in them.</p>
+        ${events.length ? `<div class="timeline">${events.map((e) => `<div class="tl-row" data-action="open" data-path="${esc(e.path)}"><span class="tl-time">${esc(e.date)}</span><span class="tl-text">${esc(e.text)}</span><span class="small faint">${esc(base(e.path))}</span></div>`).join("")}</div>` : `<p class="muted small">No dated events yet.</p>`}
+        <div class="band-title">Beta readers <span class="count">${beta.length}</span></div>
+        <div class="row tight"><button type="button" class="btn" data-action="beta-share">${icon("share")}Share the manuscript for comments</button></div>
+        ${beta.length ? [...new Set(beta.map((c) => c.path))].map((p) => `<div class="band-title small"><a href="#" data-action="open" data-path="${esc(p)}">${esc(base(p))}</a></div>${beta.filter((c) => c.path === p).map((c) => `<div class="beta-note"><span class="small faint">${esc(shortPrincipal(c.author.toText()))} · ${ago(c.at)}</span> ${esc(c.text)}</div>`).join("")}`).join("") : `<p class="small muted">Comments readers leave on scenes collect here.</p>`}</div>
+    </div>
+  </div></section>`;
+}
+/** Drop a scene before another: renumber every scene in reading order and move it into that chapter. */
+async function reorderScene(from: string, before: string | undefined, chapter: string) {
+  const all = manuscript(orgNotes()).flatMap((c) => c.scenes.map((s) => s.path)).filter((p) => p !== from);
+  const at = before ? all.indexOf(before) : all.length;
+  all.splice(at < 0 ? all.length : at, 0, from);
+  for (const [i, p] of all.entries()) {
+    const text = S.drafts.get(p)?.text ?? note(p)!.content;
+    let next = setProperty(text, "order", String(i + 1));
+    if (p === from) next = setProperty(next, "chapter", chapter);
+    if (next !== text) await writeNote(p, next);
+  }
+  render();
+}
+
+// --- the Care kit (personal notes; not medical records or advice)
+
+const careLog = () => orgNotes().find((n) => n.path === "Care/Log.sheet");
+async function careAdd(kind: "dose" | "symptom") {
+  if (!careLog()) await createQuiet("Care/Log.sheet", careWorkbook());
+  const name = await ask({ title: kind === "dose" ? "Log a dose" : "Log a symptom", label: kind === "dose" ? "Medicine" : "Symptom", value: store(`nb-care-last-${kind}`) ?? "", ok: "Next" });
+  if (!name?.trim()) return;
+  store(`nb-care-last-${kind}`, name.trim());
+  const extra = await ask({ title: name.trim(), label: kind === "dose" ? "Dose" : "Severity (0-10)", value: kind === "dose" ? "" : "3", ok: "Next" });
+  if (extra === null) return;
+  const notesTxt = await ask({ title: name.trim(), label: "Notes (optional)", value: "", ok: "Log it" });
+  if (notesTxt === null) return;
+  const now = new Date();
+  const wb = parseWorkbook(S.drafts.get("Care/Log.sheet")?.text ?? note("Care/Log.sheet")!.content);
+  const log = wb.sheets.find((s) => s.name === "Log")!;
+  log.rows.push([localStamp(now).slice(0, 10), localStamp(now).slice(11), kind, name.trim(), kind === "dose" ? extra.trim() : "", kind === "symptom" ? String(Math.max(0, Math.min(10, Number(extra) || 0))) : "", notesTxt.trim()]);
+  await writeNote("Care/Log.sheet", serializeWorkbook(wb));
+  toast(`Logged ${name.trim()} at ${localStamp(now).slice(11)}.`, "ok");
+  render();
+}
+function careTab(): string {
+  const notes = orgNotes();
+  const log = careLog();
+  const rows = log ? evaluate(parseWorkbook(log.content)).get("Log") ?? [] : [];
+  const appts = notes.filter((n) => (frontmatter(n.content).data.type ?? "") === "appointment").sort((a, b) => (frontmatter(a.content).data.date ?? "").localeCompare(frontmatter(b.content).data.date ?? ""));
+  const day = new Date().toISOString().slice(0, 10);
+  const next = appts.find((a) => (frontmatter(a.content).data.date ?? "") >= day);
+  const last = [...appts].reverse().find((a) => (frontmatter(a.content).data.date ?? "") < day);
+  const qs = careQuestions(notes, last ? new Date(frontmatter(last.content).data.date!).getTime() : 0);
+  const checks = S.trips.mine.filter((w) => !w.closed && /check-in/i.test(w.title));
+  return `<section class="main" style="overflow:auto"><div class="page wide kit">
+    <div class="callout" data-callout="info" data-color="blue"><div class="callout-title">${icon("help")}<span>Personal notes</span></div><div class="callout-content">For keeping track and preparing conversations with clinicians. This is not a medical record and gives no medical advice.</div></div>
+    <div class="card band"><div class="row"><h2>${icon("columns")} Log</h2><span class="right-actions"><button type="button" class="btn btn-primary" data-action="care-dose">${icon("plus")}Dose</button><button type="button" class="btn" data-action="care-symptom">${icon("plus")}Symptom</button>${log ? `<button type="button" class="btn btn-ghost" data-action="open" data-path="Care/Log.sheet">Open log</button>` : ""}</span></div>
+      ${rows.length > 1 ? `<div class="runs">${rows.slice(-6).reverse().filter((r) => r[0]).map((r) => `<div class="run"><span><b>${esc(String(r[3] ?? ""))}</b> <span class="small muted">${esc(String(r[2] ?? ""))}${r[4] ? ` · ${esc(String(r[4]))}` : ""}${r[5] !== null && r[5] !== "" ? ` · severity ${esc(String(r[5]))}/10` : ""}${r[6] ? ` · ${esc(String(r[6]))}` : ""}</span></span><span class="small faint">${esc(String(r[0]))} ${esc(String(r[1] ?? ""))}</span></div>`).join("")}</div>` : `<p class="muted small">Log doses and symptoms with two taps; the log sheet charts severity by day.</p>`}
+    </div>
+    <div class="grid2">
+      <div class="card band"><div class="row"><h2>${icon("calendar")} Appointments</h2><span class="right-actions"><button type="button" class="btn" data-action="appt-new">${icon("plus")}Appointment</button></span></div>
+        ${next ? `<p><b>Next:</b> <a href="#" data-action="open" data-path="${esc(next.path)}">${esc(base(next.path))}</a></p>` : `<p class="small muted">No upcoming appointment.</p>`}
+        <div class="band-title">Questions to ask <span class="count">${qs.length}</span></div>
+        <p class="small muted">Write <code>Q::</code> in any note as questions come up; they collect here.</p>
+        ${qs.length ? `<div class="runs">${qs.map((q) => `<div class="run"><span>${esc(q.q)}</span><a class="small" href="#" data-action="open" data-path="${esc(q.path)}">${esc(base(q.path))}</a></div>`).join("")}</div>` : ""}
+        <div class="row tight nudge"><button type="button" class="btn btn-primary" data-action="care-summary" ${log || qs.length ? "" : "disabled"}>${icon("download")}Prepare the summary</button></div></div>
+      <div class="card band"><div class="row"><h2>${icon("shield")} Care team</h2></div>
+        <p class="small muted">Share the Care folder read-only with family or carers, and set a daily check-in: if it is missed, the person you choose gets an alert anywhere in Lab.</p>
+        <div class="row tight wrap"><button type="button" class="btn" data-action="care-share">${icon("share")}Share the Care folder</button><button type="button" class="btn" data-action="care-checkin-new">${icon("check")}Set a daily check-in</button></div>
+        ${checks.length ? `<div class="runs nudge">${checks.map((w) => `<div class="run"><span><b>${esc(w.title)}</b> <span class="small muted">· @${esc(w.contact_handle)} · ${w.last_check_in ? `last ${ago(w.last_check_in)}` : "not yet"}</span></span><span class="row-actions">${w.overdue ? `<span class="pill bad">missed</span>` : ""}<button type="button" class="btn btn-primary" data-action="trip-checkin" data-id="${w.id}">Check in</button><button type="button" class="btn btn-ghost" data-action="trip-home" data-id="${w.id}">Stop</button></span></div>`).join("")}</div>` : ""}
+        ${S.trips.watching.filter((w) => /check-in/i.test(w.title)).map((w) => `<div class="run ${w.overdue && !w.closed ? "overdue" : ""}"><span>You watch <b>@${esc(w.owner_handle)}</b>: ${esc(w.title)}</span><span class="pill ${w.overdue && !w.closed ? "bad" : "ok"}">${w.overdue && !w.closed ? "missed" : "on track"}</span></div>`).join("")}</div>
+    </div>
+  </div></section>`;
+}
+async function careCheckin() {
+  const what = await ask({ title: "Daily check-in", label: "What to check in about", value: "Evening medicine", ok: "Next" });
+  if (!what?.trim()) return;
+  const handle = await ask({ title: "Who should be alerted if it is missed?", body: "They need to be in the community.", label: "Their handle", placeholder: "ada", ok: "Next" });
+  if (!handle?.trim()) return;
+  const every = await ask({ title: "How often", label: "Check in at least every (hours)", value: "24", ok: "Start" });
+  if (every === null) return;
+  const r = await registry().set_watch(handle.trim(), `${what.trim()} check-in`, S.notebook ? `${location.origin}${location.pathname}#/shared/${S.notebook.canister.toText()}/${encodeURIComponent("Care")}` : "", BigInt(Date.now() + 119 * 86_400_000) * 1_000_000n, Number(every) || 24);
+  if (r.__kind__ === "Err") return toast(r.Err, "error");
+  await loadWatches();
+  toast(`@${r.Ok.contact_handle} is alerted if you miss a check-in.`, "ok");
+  render();
+}
+async function careSummaryNote() {
+  const notes = orgNotes();
+  const log = careLog();
+  const rows = log ? evaluate(parseWorkbook(log.content)).get("Log") ?? [] : [];
+  const appts = notes.filter((n) => (frontmatter(n.content).data.type ?? "") === "appointment").map((n) => frontmatter(n.content).data.date ?? "").filter((d) => d < new Date().toISOString().slice(0, 10)).sort();
+  const since = appts.length ? new Date(appts[appts.length - 1]).getTime() : 0;
+  const path = `Care/Summary ${new Date().toISOString().slice(0, 10)}.md`;
+  const md = careSummary(rows, careQuestions(notes, since));
+  if (note(path)) await writeNote(path, md); else await createQuiet(path, md);
+  S.tab = "notes";
+  await open(path);
+}
+
+// --- the Software kit
+
+function softwareTab(): string {
+  const notes = orgNotes();
+  const adrs = notes.filter((n) => (frontmatter(n.content).data.type ?? "") === "adr").sort((a, b) => base(a.path).localeCompare(base(b.path)));
+  const supersededBy = new Map<string, string>();
+  for (const a of adrs) { const s = /\[\[([^\]|#]+)/.exec(frontmatter(a.content).data.supersedes ?? "")?.[1]; const t = s ? resolveLink(s) : undefined; if (t) supersededBy.set(t, a.path); }
+  const runbooks = notes.filter((n) => (frontmatter(n.content).data.type ?? "") === "runbook");
+  const pms = (p: string) => [...(S.idx.backlinks.get(p) ?? [])].filter((b) => /post-mortem/i.test(frontmatter(note(b)?.content ?? "").data.type ?? "") || /post-?mortem/i.test(b));
+  const cl = changelog(notes);
+  const pill = (st: string) => `<span class="pill ${st === "accepted" ? "ok" : st === "superseded" || st === "deprecated" || st === "rejected" ? "low" : ""}">${esc(st)}</span>`;
+  const H = Math.max(60, adrs.length * 34 + 20);
+  const y = (i: number) => 20 + i * 34;
+  const graph = adrs.length ? `<svg viewBox="0 0 520 ${H}" class="adr-graph" role="img" aria-label="Decision records and what supersedes what">${adrs.map((a, i) => { const by = supersededBy.get(a.path); const j = by ? adrs.findIndex((x) => x.path === by) : -1; return j >= 0 ? `<path d="M 30 ${y(i)} C 6 ${y(i)}, 6 ${y(j)}, 30 ${y(j)}" fill="none" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#arr)"/>` : ""; }).join("")}<defs><marker id="arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--accent)"/></marker></defs>${adrs.map((a, i) => { const st = (frontmatter(a.content).data.status ?? "proposed").toLowerCase(); return `<g><circle cx="38" cy="${y(i)}" r="6" fill="${st === "accepted" ? "#4fc27a" : st === "proposed" ? "#4f8cff" : "#888"}"/><text x="52" y="${y(i) + 4}" font-size="12" fill="currentColor">${esc(base(a.path).slice(0, 60))}</text></g>`; }).join("")}</svg>` : "";
+  return `<section class="main" style="overflow:auto"><div class="page wide kit">
+    <div class="card band"><div class="row"><h2>${icon("template")} Decision records</h2><span class="right-actions"><button type="button" class="btn btn-primary" data-action="adr-new">${icon("plus")}New ADR</button></span></div>
+      ${adrs.length ? `<div class="runs">${adrs.map((a) => { const d = frontmatter(a.content).data; const by = supersededBy.get(a.path); return `<div class="run"><span><a href="#" data-action="open" data-path="${esc(a.path)}">${esc(base(a.path))}</a>${by ? ` <span class="small faint">→ superseded by ${esc(base(by))}</span>` : ""}</span><span class="row-actions">${pill((d.status ?? "proposed").toLowerCase())}<select class="input" name="adrstatus" data-path="${esc(a.path)}" aria-label="Status of ${esc(base(a.path))}" style="max-width:130px">${ADR_STATUSES.map((s) => `<option ${s === (d.status ?? "proposed").toLowerCase() ? "selected" : ""}>${s}</option>`).join("")}</select></span></div>`; }).join("")}</div>${graph}` : `<p class="muted small">Architecture decisions with a status and what they supersede, numbered ADR-0001 onwards.</p>`}
+    </div>
+    <div class="grid2">
+      <div class="card band"><div class="row"><h2>${icon("command")} Runbooks</h2><span class="right-actions"><button type="button" class="btn" data-action="runbook-new">${icon("plus")}Runbook</button></span></div>
+        <p class="small muted">Every code block in a note gets a Copy button; Python blocks also get Run. Post-mortems that link a runbook show up under it.</p>
+        ${runbooks.length ? `<div class="runs">${runbooks.map((r) => { const d = frontmatter(r.content).data; const linked = pms(r.path); return `<div class="run"><span><a href="#" data-action="open" data-path="${esc(r.path)}">${esc(base(r.path))}</a> <span class="small faint">${esc(d.service ?? "")}${d.last_reviewed ? ` · reviewed ${esc(d.last_reviewed)}` : ""}</span>${linked.length ? `<div class="small">${linked.map((p) => `<a href="#" data-action="open" data-path="${esc(p)}">${esc(base(p))}</a>`).join(", ")}</div>` : ""}</span></div>`; }).join("")}</div>` : ""}</div>
+      <div class="card band"><div class="row"><h2>${icon("history")} Changelog</h2><span class="right-actions"><button type="button" class="btn" data-action="change-new">${icon("plus")}Change</button><button type="button" class="btn btn-primary" data-action="changelog-build" ${cl.changes.length ? "" : "disabled"}>Build &amp; publish</button></span></div>
+        <p class="small muted">Notes tagged <code>#changelog</code> or <code>type: change</code>, with <code>version:</code>, <code>date:</code> and <code>kind:</code> (added, changed, fixed, removed, security), become a Changelog page you can share publicly.</p>
+        ${cl.changes.length ? `<div class="runs">${cl.changes.slice(0, 12).map((c) => `<div class="run"><span><span class="pill">${esc(c.kind)}</span> <a href="#" data-action="open" data-path="${esc(c.path)}">${esc(c.text)}</a></span><span class="small faint">${esc(c.version)}</span></div>`).join("")}</div>` : ""}</div>
+    </div>
+  </div></section>`;
+}
+/** Code blocks get Copy; Python blocks also Run (Pyodide, the same engine as Jupyter notes). */
+function decorateCode(root: ParentNode) {
+  root.querySelectorAll<HTMLElement>(".preview pre > code, .md pre > code").forEach((code) => {
+    const pre = code.parentElement!;
+    if (pre.dataset.tools || pre.closest(".nbk, .chat-log")) return;
+    pre.dataset.tools = "1";
+    const py = /language-(python|py)\b/.test(code.className);
+    const bar = document.createElement("div");
+    bar.className = "code-tools";
+    bar.innerHTML = `${py ? `<button type="button" class="btn btn-ghost" data-run>Run</button>` : ""}<button type="button" class="btn btn-ghost" data-copy-code>Copy</button>`;
+    pre.prepend(bar);
+    bar.querySelector("[data-copy-code]")!.addEventListener("click", (e) => { e.stopPropagation(); void copy(code.innerText).then(() => toast("Copied.", "ok")); });
+    bar.querySelector("[data-run]")?.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      let out = pre.nextElementSibling as HTMLElement | null;
+      if (!out?.classList.contains("run-out")) { out = document.createElement("div"); out.className = "nb-outputs run-out"; pre.after(out); }
+      out.innerHTML = `<pre class="nb-out">${pythonLoaded() ? "Running…" : "Loading Python (first run)…"}</pre>`;
+      const live: NbOutput[] = [];
+      const r = await runPython(code.innerText, (o) => { live.push(o); out!.innerHTML = live.map(outputHtml).join(""); }, sheetsForPython());
+      out.innerHTML = r.outputs.map(outputHtml).join("") || `<pre class="nb-out">(no output)</pre>`;
+    });
+  });
+}
+
 // --- the Organize tab: saved searches with property tables, triage, periodic notes, rules, tidy-up, refactors, resurfacing, decay
 
 const orgNotes = () => (S.notes ?? []).map((n) => ({ ...n, content: S.drafts.get(n.path)?.text ?? n.content }));
@@ -2272,6 +2601,7 @@ async function tripLeave(path: string) {
   if (every === null) return;
   try {
     unwrap(await nb().set_share({ path, public: true, public_role: Role.View, viewers: [], commenters: [], editors: [] }));
+    await refreshShares();
     const r = await registry().set_watch(handle.trim(), title(path) === "Plan" ? dir(path).split("/").pop()! : title(path), shareLink(path), BigInt(at.getTime()) * 1_000_000n, every.trim() ? Number(every) : null);
     if (r.__kind__ === "Err") throw new Error(r.Err);
     let text = S.drafts.get(path)?.text ?? note(path)!.content;
@@ -2999,6 +3329,7 @@ function manageTab(): string {
     </div>
     <p class="small muted nudge">Canister <code>${v.canister.toText()}</code> · created ${when(v.created_at)} · controllers: you and the registry.</p>
     <nav class="segmented sub" role="tablist" aria-label="Manage sections">${MANAGE_TABS.map(([k, label, ic]) => `<button type="button" role="tab" class="tab" aria-selected="${S.manageTab === k}" data-action="manage-tab" data-tab="${k}">${icon(ic)}<span class="lbl">${label}</span></button>`).join("")}</nav>
+    ${S.manageTab === "notebook" ? featuresCard() : ""}
     ${S.manageTab === "notebook" ? `<form class="card band" data-form="nb-meta"><h2>${esc(notebookEmoji(v))} Icon and description</h2><p class="muted small">What the notebook's card shows on the list. Leave the icon empty to let the app pick one from the name.</p><div class="row tight"><label class="field"><span class="label">Icon (one emoji)</span><input class="input" name="emoji" value="${esc(v.emoji ?? "")}" placeholder="${esc(notebookEmoji(v))}" maxlength="4" style="max-width:90px;font-size:1.3rem;text-align:center"></label><label class="field" style="flex:1;min-width:220px"><span class="label">Description</span><input class="input" name="desc" value="${esc(v.description ?? "")}" maxlength="280" placeholder="What it is for, who it is for"></label><button type="submit" class="btn btn-primary" style="align-self:flex-end" ${S.busy ? "disabled" : ""}>Save</button></div></form>` : ""}
     ${S.manageTab === "finance" ? `
     <div class="card band">
@@ -3028,7 +3359,12 @@ function workspace(): string {
   if (S.tab === "graph") return shell(graphTab());
   if (S.tab === "study") return shell(studyTab());
   if (S.tab === "work") return shell(workTab());
+  if (!featureOn(S.tab)) S.tab = "notes";
   if (S.tab === "organize") return shell(organizeTab());
+  if (S.tab === "research") return shell(researchTab());
+  if (S.tab === "writing") return shell(writingTab());
+  if (S.tab === "care") return shell(careTab());
+  if (S.tab === "software") return shell(softwareTab());
   if (S.tab === "trips") return shell(tripsTab());
   if (S.tab === "chat") return shell(`<div class="workspace m-${S.mobilePane} ${S.sideOpen ? "" : "no-side"} ${S.asideOpen ? "" : "no-aside"}"><nav id="side" class="side" aria-label="Files">${side()}</nav>${chatHtml()}<aside id="aside" class="aside" aria-label="Sources">${chatAside()}</aside></div>`);
   return shell(`<div class="workspace m-${S.mobilePane} ${S.sideOpen ? "" : "no-side"} ${S.asideOpen ? "" : "no-aside"}"><nav id="side" class="side" aria-label="Files">${side()}</nav>${panesHtml()}<aside id="aside" class="aside" aria-label="Links">${aside()}</aside></div>`);
@@ -3349,6 +3685,7 @@ async function openNotebook(id: string, path?: string) {
     await loadNotebook();
     restoreTabs();
     void sweepBoards();
+    if (!S.settings.onboarded && !S.fromCache) setTimeout(() => onboarding(), 400);
     void loadHealth(id).then((h) => { if (urgent(h) && S.notebook?.canister.toText() === id) { render(); freezeModal(id, h!); } });
   } catch (e) {
     const h = await loadHealth(id);
@@ -4947,6 +5284,61 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
       store(`nb-chat-off-${S.notebook!.canister.toText()}`, JSON.stringify([...S.chat.excluded]));
       return render();
     case "chat-save": return saveAnswer(Number(el.dataset.i));
+    // --- features and kits
+    case "tour": return onboarding();
+    case "bib-paste": { const t = await ask({ title: "Paste BibTeX", multiline: true, placeholder: "@article{key, author = {…}, title = {…}, year = {…}}", ok: "Add" }); if (t?.trim()) { const list = parseBibtex(t); if (!list.length) return toast("No BibTeX entries found.", "error"); await addSources(list); } return; }
+    case "doi-add": return doiLookup();
+    case "thesis-new": { const t = (await ask({ title: "New thesis", label: "Title", ok: "Create" }))?.trim(); if (!t) return; const p = `Research/${t.replace(/[\\/:*?"<>|#^[\]]/g, " ")}.md`; await createQuiet(p, `---\ntype: thesis\ntitle: ${t}\nauthor: \n---\n# ${t}\n\n## Chapters\n\n1. [[Introduction]]\n2. [[Literature review]]\n3. [[Method]]\n4. [[Results]]\n5. [[Discussion]]\n`); S.tab = "notes"; return open(p); }
+    case "thesis-compile": return compileThesisNote(el.dataset.path!);
+    case "scene-new": {
+      const t = (await ask({ title: "New scene", label: "Title", ok: "Next" }))?.trim(); if (!t) return;
+      const ms = manuscript(orgNotes());
+      const ch = await ask({ title: t, label: "Chapter", choices: [...ms.map((c) => ({ value: c.chapter, label: c.chapter })), { value: `Chapter ${ms.length + 1}`, label: `A new chapter (Chapter ${ms.length + 1})` }], value: ms[ms.length - 1]?.chapter ?? "Chapter 1", ok: "Create" }); if (!ch) return;
+      const order = Math.max(0, ...ms.flatMap((c) => c.scenes.map((x) => (x.order === 9999 ? 0 : x.order)))) + 1;
+      const p = `Manuscript/${t.replace(/[\\/:*?"<>|#^[\]]/g, " ")}.md`;
+      await createQuiet(p, `---\ntype: scene\nchapter: ${ch}\norder: ${order}\npov: \ndate: \n---\n# ${t}\n\n`); S.tab = "notes"; await open(p); pane().view = "edit"; return render();
+    }
+    case "bible-new": {
+      const k = el.dataset.kind!; const n = (await ask({ title: `New ${k}`, label: "Name", ok: "Create" }))?.trim(); if (!n) return;
+      const props = k === "character" ? "eyes: \nhair: \nage: \nborn: \nrole: " : k === "place" ? "region: \nclimate: \nfirst_seen: " : "owner: \nmade: \npowers: ";
+      const p = `Bible/${n.replace(/[\\/:*?"<>|#^[\]]/g, " ")}.md`; await createQuiet(p, `---\ntype: ${k}\n${props}\n---\n# ${n}\n\n`); S.tab = "notes"; return open(p);
+    }
+    case "beta-share": { const f = S.folders.includes("Manuscript") ? "Manuscript" : S.folders[0] ?? ""; return shareDialog(f, "folder"); }
+    case "care-dose": return careAdd("dose");
+    case "care-symptom": return careAdd("symptom");
+    case "appt-new": {
+      const d = (await ask({ title: "New appointment", label: "Date (YYYY-MM-DD)", value: new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10), ok: "Next" }))?.trim(); if (!d) return;
+      const w = (await ask({ title: `Appointment on ${d}`, label: "With", placeholder: "Dr Patel", ok: "Create" }))?.trim() ?? "";
+      const p = `Care/Appointments/${d}${w ? ` ${w.replace(/[\\/:*?"<>|#^[\]]/g, " ")}` : ""}.md`; await createQuiet(p, `---\ntype: appointment\ndate: ${d}\nwith: ${w}\n---\n# ${d}${w ? ` with ${w}` : ""}\n\n## Notes\n\n- \n`); return render();
+    }
+    case "care-summary": return careSummaryNote();
+    case "care-share": return shareDialog("Care", "folder");
+    case "care-checkin-new": return careCheckin();
+    case "adr-new": {
+      const t = (await ask({ title: "New decision record", label: "Title", placeholder: "Use Postgres for search", ok: "Next" }))?.trim(); if (!t) return;
+      const adrs = orgNotes().filter((n) => (frontmatter(n.content).data.type ?? "") === "adr");
+      const sup = adrs.length ? await ask({ title: t, label: "Supersedes", choices: [{ value: "", label: "Nothing" }, ...adrs.map((a) => ({ value: a.path, label: base(a.path) }))], value: "", ok: "Create" }) : "";
+      if (sup === null) return;
+      const id = nextAdr(paths());
+      const p = `Decisions/${id} ${t.replace(/[\\/:*?"<>|#^[\]]/g, " ")}.md`;
+      await createQuiet(p, adrTemplate(id, t, sup ? stem(sup) : undefined));
+      if (sup) await writeNote(sup, setProperty(S.drafts.get(sup)?.text ?? note(sup)!.content, "status", "superseded"));
+      S.tab = "notes"; return open(p);
+    }
+    case "runbook-new": { const t = (await ask({ title: "New runbook", label: "Title", placeholder: "Restore the database", ok: "Create" }))?.trim(); if (!t) return; const p = `Runbooks/${t.replace(/[\\/:*?"<>|#^[\]]/g, " ")}.md`; await createQuiet(p, fillTemplate(RUNBOOK_TEMPLATE, { title: t })); S.tab = "notes"; return open(p); }
+    case "change-new": {
+      const t = (await ask({ title: "New change", label: "What changed", placeholder: "Dark mode", ok: "Next" }))?.trim(); if (!t) return;
+      const last = changelog(orgNotes()).changes.map((c) => c.version).find((v) => v !== "Unreleased") ?? "Unreleased";
+      const v = await ask({ title: t, label: "Version", value: last, ok: "Next" }); if (v === null) return;
+      const k = await ask({ title: t, label: "Kind", choices: ["Added", "Changed", "Fixed", "Removed", "Deprecated", "Security"].map((x) => ({ value: x.toLowerCase(), label: x })), value: "added", ok: "Create" }); if (!k) return;
+      await createQuiet(`Changes/${t.replace(/[\\/:*?"<>|#^[\]]/g, " ")}.md`, `---\ntype: change\nversion: ${v.trim() || "Unreleased"}\ndate: ${new Date().toISOString().slice(0, 10)}\nkind: ${k}\n---\n# ${t}\n\n`); return render();
+    }
+    case "changelog-build": {
+      const { md } = changelog(orgNotes());
+      if (note("Changelog.md")) await writeNote("Changelog.md", md); else await createQuiet("Changelog.md", md);
+      try { unwrap(await nb().set_share({ path: "Changelog.md", public: true, public_role: Role.View, viewers: [], commenters: [], editors: [] })); await refreshShares(); const link = shareLink("Changelog.md"); await copy(link); toast("Changelog published; its public link is copied.", "ok"); } catch (e) { toast(`Built, but not published: ${errMsg(e)}`, "error"); }
+      return render();
+    }
     // --- Organize
     case "org-open-q": { S.org.q = el.dataset.q ?? ""; S.org.selected.clear(); S.tab = "organize"; return render(); }
     case "org-open": { const x = S.settings.searches[Number(el.dataset.i)]; if (!x) return; S.org.q = x.q; S.org.selected.clear(); S.tab = "organize"; return render(); }
@@ -5814,6 +6206,12 @@ document.addEventListener("input", (ev) => {
   const v = el.value;
   switch (el.name) {
     case "newNotebook": S.newNotebook = v; break;
+    case "feature": { const c = el as HTMLInputElement; S.settings.features[c.value as Tab] = c.checked; void saveSettings(); render(); break; }
+    case "citestyle": { S.settings.citeStyle = v === "chicago" ? "chicago" : "apa"; void saveSettings(); render(); break; }
+    case "claimsfor": { S.kit.claimsFor = v; render(); break; }
+    case "writinggoal": { S.settings.writingGoal = Math.max(0, Number(v) || 0); void saveSettings(); break; }
+    case "adrstatus": { const p = el.dataset.path!; void writeNote(p, setProperty(S.drafts.get(p)?.text ?? note(p)?.content ?? "", "status", v)).then(render); break; }
+    case "bib": { const inp = el as HTMLInputElement; if (inp.files?.[0]) void inp.files[0].text().then((t) => { const list = parseBibtex(t); if (!list.length) toast("No BibTeX entries in that file.", "error"); else void addSources(list); }); inp.value = ""; break; }
     case "propcell": { const p = el.dataset.path!; void writeNote(p, setProperty(S.drafts.get(p)?.text ?? note(p)?.content ?? "", el.dataset.key!, v)); break; }
     case "orgpick": { const c = el as HTMLInputElement; if (c.checked) S.org.selected.add(c.value); else S.org.selected.delete(c.value); render(); break; }
     case "orgall": { const c = el as HTMLInputElement; S.org.selected = c.checked ? new Set(runQuery(orgNotes(), S.org.q).map((n) => n.path)) : new Set(); render(); break; }
@@ -6417,4 +6815,21 @@ currentIdentity().then(async (id) => {
   if (location.hash === "#/capture") return captureRoute();
   const m = location.hash.match(/^#\/notebook\/([a-z0-9-]+)(?:\/(.+))?/);
   if (m) void openNotebook(m[1], m[2] ? decodeURIComponent(m[2]) : undefined);
+});
+
+// scenes in the Writing tab reorder by dragging
+let sceneDrag: string | undefined;
+document.addEventListener("dragstart", (e) => { const row = (e.target as HTMLElement).closest?.<HTMLElement>(".scene-row"); if (!row) return; sceneDrag = row.dataset.scene; e.dataTransfer?.setData("text/plain", sceneDrag ?? ""); row.classList.add("dragging"); });
+document.addEventListener("dragover", (e) => { if (!sceneDrag) return; const t = (e.target as HTMLElement).closest?.(".scene-row, .chapter"); if (t) { e.preventDefault(); document.querySelectorAll(".scene-row.over").forEach((x) => x.classList.remove("over")); t.classList.add("over"); } });
+document.addEventListener("dragend", () => { sceneDrag = undefined; document.querySelectorAll(".scene-row.dragging, .scene-row.over, .chapter.over").forEach((x) => x.classList.remove("dragging", "over")); });
+document.addEventListener("drop", (e) => {
+  if (!sceneDrag) return;
+  const row = (e.target as HTMLElement).closest?.<HTMLElement>(".scene-row");
+  const chap = (e.target as HTMLElement).closest?.<HTMLElement>(".chapter");
+  if (!row && !chap) return;
+  e.preventDefault();
+  const from = sceneDrag;
+  sceneDrag = undefined;
+  if (row?.dataset.scene === from) return;
+  void reorderScene(from, row?.dataset.scene, row?.dataset.chapter ?? chap!.dataset.chapter!);
 });

@@ -25,6 +25,8 @@ export type RenderCtx = {
   chain?: string[];
   /** a badge for a `![[Lean#thm:name]]` embed: what stands behind the claim */
   claimBadge?: (leanPath: string, name: string) => string;
+  /** `[@key]` / `[@key, p. 4]` citations, rendered by the Research kit */
+  cite?: (key: string, loc?: string) => string;
 };
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -217,6 +219,7 @@ export function renderMarkdown(content: string, ctx: RenderCtx): string {
         const label = l.alias || `${l.target}${l.heading ? `#${l.heading}` : ""}`;
         return `<a class="wikilink${dest ? "" : " unresolved"}" data-action="wiki" data-target="${esc(l.target)}${l.heading ? `#${esc(l.heading)}` : ""}" href="#">${esc(label)}</a>`;
       })
+      .replace(/\[@([\w:.-]+)(?:,\s*([^\]]+))?\]/g, (raw: string, key: string, loc?: string) => (ctx.cite ? ctx.cite(key, loc?.trim()) : raw))
       .replace(TAG_RE, (raw: string, p: string, tag: string) => (/[^0-9]/.test(tag) ? `${p}<a class="tag" data-action="tag" data-tag="${esc(tag)}" href="#">#${esc(tag)}</a>` : raw))
       .replace(/(^|[\s(])@([A-Za-z][\w.-]*[\w])/g, (raw: string, p: string, name: string) => (/^(owner|me)$/i.test(name) && false ? raw : `${p}<a class="mention" data-action="mention" data-name="${esc(name)}" href="#" title="Open ${esc(name)}'s page">@${esc(name)}</a>`))
       .replace(/ \^([A-Za-z0-9-]+)$/gm, ' <span class="blockid" data-block="$1"></span>'),

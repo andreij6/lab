@@ -150,6 +150,42 @@ A `.dash` note is a grid of tiles from other notes: a chart from a spreadsheet n
 
 A reddit-style board beside the chat (ribbon and top bar). Topics are the community channels, so #developers stays contributors-only. A post has a title, text and optionally a note snapshot (gist) from one of your notebooks; posting costs double the ledger fee in ICP (0.0002 ICP, roughly what storing it for 60 days would cost in cycles, rounded up to the transfer minimum), paid from the in-app wallet and swept into the registry's cycles. Members upvote or downvote posts and comments (one changeable vote each), comment with nested replies, sort by hot, new or top, and delete their own posts and comments; admins can delete anything. The same rules as the chat apply: no links, no images, no foul language. A post is deleted for good one week after its last comment. "Discuss in chat" drops a card into a channel that opens the post. Anything can be pinned to the board: a chat message (the list icon on hover; the message becomes the post with its author and channel named, and a shared note comes along), or any note from its menu or share dialog (sheets arrive as CSV, Python notebooks as markdown and code, kanban boards as task lists). The topics and rules panes collapse with the pane buttons or ⌘⇧[ and ⌘⇧].
 
+## Features and onboarding
+
+- **Pick your tools.** Manage → Notebook → Features turns tabs on or off per notebook: Chat, Graph, Study, Work, Organize, Research, Writing, Care, Software and Trips. Notes and Manage are always there. Turning a tab off only hides it.
+- **A five-step tour** the first time a notebook opens: notes and links, finding and connecting, asking your notes, choosing tools (with presets: Student, Researcher, Writer, Caregiver, Developer, Hiker, Everything), and a finish step that can add a starter note for each tool picked. Replay it from the Features card.
+
+## Research
+
+- **Sources** from a BibTeX file, pasted BibTeX, or a DOI looked up on Crossref, each a note in `Sources/` with its citation data and literature-matrix fields (method, sample, finding, limitation, strength).
+- **Citations.** `[@key]` or `[@key, p. 4]` anywhere renders as (Smith & Lee, 2020) in APA 7 or (Smith and Lee 2020) in Chicago author-date, linked to the source. Keys with no source are flagged.
+- **Literature matrix.** Every source in a table, editable in place.
+- **Claim tracker.** Lines marked `Claim::` in a draft show as supported, weak (backed only by sources marked weak) or missing evidence.
+- **Thesis compiler.** A `type: thesis` note lists chapters as `1. [[Chapter]]`. Compiling joins them in order, numbers figures, formats citations and appends the reference list, then opens, prints, or downloads it as Word or Markdown.
+
+## Writing
+
+- **Manuscript.** Scenes (`type: scene` with `chapter:` and `order:`) grouped by chapter with word counts. Drag a scene to reorder or move it between chapters, and track today's words against a daily goal.
+- **Story bible.** Characters, places and objects with their facts.
+- **Continuity checker.** Flags scenes that describe a character's eyes, hair or age differently from the bible.
+- **Timeline.** Events from scene `date:` and `date::` lines; any calendar sorts by the numbers in it ("Year 1203, day 4").
+- **Beta readers.** Share the manuscript folder with comment rights; their comments on scenes collect in one place.
+
+## Care
+
+Personal notes for keeping track and preparing conversations with clinicians, not medical records or advice.
+
+- **Log.** Log a dose or a symptom in a few taps; the log sheet charts average severity by day.
+- **Appointments and questions.** Write `Q::` in any note as questions come up. Prepare the summary builds one page with medicines taken, symptoms with average and worst severity, and the open questions since the last appointment.
+- **Care team.** Share the Care folder read-only, and set a daily check-in: if it is missed, the person chosen gets an alert anywhere in Lab (the same mechanism as trip check-ins).
+
+## Software
+
+- **Decision records.** ADR-0001 onwards with status (proposed, accepted, superseded, deprecated, rejected), supersedes links that mark the old one superseded, and a small graph of what replaced what.
+- **Runbooks** with Check, Fix, Verify and Escalate sections; post-mortems that link a runbook appear under it.
+- **Changelog.** Notes tagged `#changelog` or `type: change` with version, date and kind build a Keep a Changelog page, published with a public link.
+- **Code blocks.** Every code block in a note gets Copy; Python blocks also get Run, using the same in-browser Python as Jupyter notes.
+
 ## Organize
 
 The Organize tab is for people with a system.
