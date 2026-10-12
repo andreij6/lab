@@ -203,8 +203,6 @@ const S = {
   asideOpen: store("nb-aside") !== "0",
   newNotebook: "",
   newDesc: "",
-  /** ICP to turn into the new notebook's cycles when it is created */
-  newDeposit: "3",
   createStep: "",
   notebook: undefined as NotebookRec | undefined,
   notes: undefined as Note[] | undefined,
@@ -973,8 +971,7 @@ function notebooksPage(): string {
         <span class="name">${icon("plus")}New notebook</span>
         <span class="small muted">Spawns a canister with you as owner and controller.${S.price > 0n ? ` Spawning costs ${icp(S.price)} ICP.` : ""}</span>
         <div class="row tight"><input class="input" name="newNotebook" value="${esc(S.newNotebook)}" placeholder="Name" required aria-label="Notebook name"><input class="input" name="newDesc" value="${esc(S.newDesc)}" placeholder="What it is for (optional)" aria-label="Description" style="flex:1 1 100%"></div>
-        <label class="field deposit"><span class="label">ICP to keep it running</span><span class="row tight"><input class="input" name="newDeposit" value="${esc(S.newDeposit)}" inputmode="decimal" aria-label="ICP to deposit for cycles" style="max-width:120px"><span class="small muted">becomes the notebook's cycles${useOisy ? "; OISY asks you to approve it" : ""}. 0 to skip; top up any time in Manage.</span></span></label>
-        <div class="row tight"><button type="submit" class="btn btn-primary" ${S.busy ? "disabled" : ""}>${S.busy === "create" ? esc(S.createStep || "Spawning…") : depositLabel()}</button></div>
+        <div class="row tight"><button type="submit" class="btn btn-primary" ${S.busy ? "disabled" : ""}>${S.busy === "create" ? esc(S.createStep || "Spawning…") : "Create notebook"}</button></div>
         ${S.error ? `<span class="small error" role="alert">${esc(S.error)}.</span>` : ""}
       </form></div>`;
   return `<div class="page ${S.mobile ? "" : "has-activity"}">
@@ -3811,17 +3808,55 @@ async function loadNotebooks() {
   render();
 }
 
-/** The deposit typed in the new-notebook card, in e8s; 0 skips it. */
-const depositE8s = () => { const n = Number(S.newDeposit.trim() || "0"); return Number.isFinite(n) && n > 0 ? BigInt(Math.round(n * 1e8)) : 0n; };
-const depositLabel = () => (depositE8s() > 0n ? `Create and deposit ${icp(depositE8s())} ICP` : "Create");
+const DEPOSIT_CHOICES = [1, 3, 5, 10];
+const DEPOSIT_DEFAULT = 3;
+/** How much ICP to turn into the new notebook's cycles: quick amounts (3 by default), any other
+ *  amount, or none. Resolves the e8s (0n for none) or null when cancelled. */
+function depositDialog(name: string): Promise<bigint | null> {
+  return new Promise((res) => {
+    const scrim = document.createElement("div");
+    scrim.className = "scrim";
+    scrim.innerHTML = `<form class="modal" role="dialog" aria-modal="true" aria-labelledby="dep-t">
+      <h2 id="dep-t">Keep “${esc(name)}” running</h2>
+      <p class="muted">A notebook is its own canister and runs on cycles. Deposit ICP and it becomes this notebook's cycles; top up again any time from Manage.${S.price > 0n ? ` Spawning also costs ${icp(S.price)} ICP.` : ""}</p>
+      <div class="dep-choices" role="radiogroup" aria-label="Deposit">${DEPOSIT_CHOICES.map((n) => `<label class="dep-choice"><input type="radio" name="amt" value="${n}" ${n === DEPOSIT_DEFAULT ? "checked" : ""}><span>${n} ICP</span></label>`).join("")}<label class="dep-choice"><input type="radio" name="amt" value="other"><span>Other</span></label></div>
+      <label class="field dep-other" hidden><span class="label">Amount (ICP)</span><input class="input" name="other" inputmode="decimal" placeholder="2.5"></label>
+      <div class="actions"><button type="button" class="btn btn-ghost" data-x="skip">Create without a deposit</button><button type="button" class="btn" data-x="cancel">Cancel</button><button type="submit" class="btn btn-primary" data-x="ok">${useOisy ? `Pay ${DEPOSIT_DEFAULT} ICP in OISY` : `Deposit ${DEPOSIT_DEFAULT} ICP`}</button></div>
+    </form>`;
+    const f = scrim.querySelector("form")!;
+    const other = f.querySelector<HTMLInputElement>("[name=other]")!;
+    const amount = (): number => { const v = f.querySelector<HTMLInputElement>("[name=amt]:checked")!.value; return v === "other" ? Number(other.value) : Number(v); };
+    const sync = () => {
+      const isOther = f.querySelector<HTMLInputElement>("[name=amt]:checked")!.value === "other";
+      f.querySelector<HTMLElement>(".dep-other")!.hidden = !isOther;
+      const n = amount();
+      f.querySelector<HTMLElement>("[data-x=ok]")!.textContent = n > 0 ? `${useOisy ? "Pay" : "Deposit"} ${n} ICP${useOisy ? " in OISY" : ""}` : "Enter an amount";
+    };
+    f.addEventListener("change", () => { sync(); if (f.querySelector<HTMLInputElement>("[name=amt]:checked")!.value === "other") other.focus(); });
+    other.addEventListener("input", sync);
+    const done = (v: bigint | null) => { scrim.remove(); document.removeEventListener("keydown", onKey); res(v); };
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && done(null);
+    scrim.addEventListener("click", (e) => e.target === scrim && done(null));
+    f.querySelector("[data-x=cancel]")!.addEventListener("click", () => done(null));
+    f.querySelector("[data-x=skip]")!.addEventListener("click", () => done(0n));
+    f.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const n = amount();
+      if (!(n >= 0.01)) return void toast("The smallest deposit is 0.01 ICP.", "error");
+      done(BigInt(Math.round(n * 1e8)));
+    });
+    document.addEventListener("keydown", onKey);
+    document.body.append(scrim);
+    f.querySelector<HTMLElement>("[data-x=ok]")!.focus();
+  });
+}
 /** Spawn a notebook and fund it: one approval (OISY's popup, opened straight from the click) covers
  *  the spawn price and the deposit, then the registry spawns the canister and mints the deposit
  *  into its cycles. A failed deposit leaves the notebook created; Manage can top it up later. */
 async function createNotebook() {
-  const deposit = depositE8s();
-  const raw = Number(S.newDeposit.trim() || "0");
-  if (!Number.isFinite(raw) || raw < 0) { S.error = "Enter how much ICP to deposit, or 0 to skip"; return render(); }
-  if (deposit > 0n && deposit < 1_000_000n) { S.error = "The smallest deposit is 0.01 ICP (or 0 to skip)"; return render(); }
+  if (!S.newNotebook.trim()) return;
+  const deposit = await depositDialog(S.newNotebook.trim());
+  if (deposit === null) return;
   S.busy = "create";
   S.error = "";
   const step = (t: string) => { S.createStep = t; render(); };
@@ -6611,7 +6646,6 @@ document.addEventListener("input", (ev) => {
     case "kbarchive": { S.settings.kanbanArchiveDays = Math.max(0, Number(v) || 0); void saveSettings(); break; }
     case "gpx": { const inp = el as HTMLInputElement; if (inp.files?.[0]) void importGpx(inp.dataset.folder!, inp.files[0]); inp.value = ""; break; }
     case "newDesc": S.newDesc = v; break;
-    case "newDeposit": { S.newDeposit = v; const b = document.querySelector<HTMLButtonElement>('[data-form="create-notebook"] button[type=submit]'); if (b && !S.busy) b.textContent = depositLabel(); break; }
     case "newAgent": S.newAgent = v; break;
     case "topupAmount": S.topupAmount = v; break;
     case "nbsrc": { const ta = el as HTMLTextAreaElement; const p = ta.dataset.path!; const i = Number(ta.dataset.i); ta.rows = Math.max(2, v.split("\n").length); updateNotebook(p, (nb) => { nb.cells[i].source = v; }, false); break; }
