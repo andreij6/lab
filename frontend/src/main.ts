@@ -843,7 +843,7 @@ const COMMANDS: { label: string; kbd?: string; run: () => void }[] = [
   { label: "Show notes", run: () => { S.tab = "notes"; render(); } },
   { label: "Manage notebook", run: () => { S.tab = "manage"; render(); } },
   { label: "Download notebook (.zip)", run: () => void downloadNotebook() },
-  { label: "Import Obsidian vault", run: importDialog },
+  { label: "Import from Obsidian", run: importDialog },
   { label: "Toggle dark / light", run: () => { S.theme = { ...S.theme, mode: S.theme.mode === "dark" ? "light" : "dark" }; saveThemeState(S.theme); applyTheme(S.theme); render(); } },
   { label: "Help and support", run: () => void helpDialog() },
   { label: "All notebooks", run: () => { location.hash = "#/"; } },
@@ -4191,7 +4191,7 @@ function manageTab(): string {
     <div class="card band">
       <h2>${icon("download")} Your data</h2>
       <p class="muted small">Everything in this notebook as a zip of markdown files, folders included. Nothing leaves the canister except to you. Restore puts a zip back: existing notes are overwritten and notes missing from the zip are deleted (agent notes are kept).</p>
-      <div class="row tight"><button type="button" class="btn btn-primary" data-action="download" ${S.notes ? "" : "disabled"}>${icon("download")}Download notebook (.zip)</button><button type="button" class="btn" data-action="import" ${S.notes ? "" : "disabled"}>${icon("upload")}Import Obsidian vault…</button><button type="button" class="btn" data-action="restore" ${S.notes ? "" : "disabled"}>${icon("history")}Restore from zip…</button><span class="small muted">${S.notes ? `${S.notes.length} files · ${kb(S.notes.reduce((n, x) => n + x.content.length, 0))}` : ""}</span></div>
+      <div class="row tight"><button type="button" class="btn btn-primary" data-action="download" ${S.notes ? "" : "disabled"}>${icon("download")}Download notebook (.zip)</button><button type="button" class="btn" data-action="import" ${S.notes ? "" : "disabled"}>${icon("upload")}Import from Obsidian…</button><button type="button" class="btn" data-action="restore" ${S.notes ? "" : "disabled"}>${icon("history")}Restore from zip…</button><span class="small muted">${S.notes ? `${S.notes.length} files · ${kb(S.notes.reduce((n, x) => n + x.content.length, 0))}` : ""}</span></div>
     </div>
     ${snapshotsCard()}
     ${deleteCard()}
@@ -5290,7 +5290,7 @@ async function openAttachment(path: string) {
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
-// ---------- import: a folder (Obsidian vault) or a zip of one ----------
+// ---------- import: an Obsidian folder or a zip of one ----------
 
 const TEXT_EXT = /\.(md|markdown|txt|canvas|excalidraw|json|csv|yaml|yml|base|css|js|html|ipynb)$/i;
 const MAX_ATTACHMENT = 700_000;
@@ -5417,7 +5417,7 @@ function b64(bytes: Uint8Array): string {
 }
 const MIME: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", svg: "image/svg+xml", bmp: "image/bmp", avif: "image/avif", ico: "image/x-icon", pdf: "application/pdf", mp3: "audio/mpeg", wav: "audio/wav", ogg: "audio/ogg", m4a: "audio/mp4", flac: "audio/flac", mp4: "video/mp4", webm: "video/webm", mov: "video/quicktime", m4v: "video/mp4" };
 
-/** Files from a dropped or picked folder; the top-level folder name (the vault) is stripped. */
+/** Files from a dropped or picked folder; the top-level folder name is stripped. */
 async function filesFromList(list: FileList | File[]): Promise<Incoming[]> {
   const files = [...list].filter((f) => f.size > 0 || f.name);
   const roots = new Set(files.map((f) => ((f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name).split("/")[0]));
@@ -5446,7 +5446,7 @@ async function filesFromDrop(dt: DataTransfer): Promise<Incoming[]> {
   const entries = items.map((i) => i.webkitGetAsEntry?.()).filter((e): e is FileSystemEntry => !!e);
   if (!entries.length) return filesFromList(dt.files);
   for (const e of entries) await walk(e, "");
-  // a single dropped folder is the vault itself: strip its name
+  // a single dropped folder is the Obsidian folder itself: strip its name
   if (entries.length === 1 && entries[0].isDirectory) return out.map((f) => ({ ...f, path: f.path.split("/").slice(1).join("/") }));
   return out;
 }
@@ -5555,8 +5555,8 @@ function importDialog() {
   const scrim = document.createElement("div");
   scrim.className = "scrim";
   scrim.innerHTML = `<form class="modal" role="dialog" aria-modal="true" aria-labelledby="imp-t">
-    <h2 id="imp-t">${icon("upload")} Import an Obsidian vault</h2>
-    <p class="muted small">Pick the vault folder, or a zip of it. Markdown and text files are imported as notes, a PDF becomes one note per page plus the file; images, audio and PDFs under ${Math.round(MAX_ATTACHMENT / 1000)} KB come along as attachments. The .obsidian settings folder is skipped. You can also drop a folder onto the file list any time.</p>
+    <h2 id="imp-t">${icon("upload")} Import from Obsidian</h2>
+    <p class="muted small">Pick your Obsidian folder, or a zip of it. Markdown and text files are imported as notes, a PDF becomes one note per page plus the file; images, audio and PDFs under ${Math.round(MAX_ATTACHMENT / 1000)} KB come along as attachments. The .obsidian settings folder is skipped. You can also drop a folder onto the file list any time.</p>
     <div class="row tight nudge">
       <label class="btn btn-primary">${icon("folder")}Choose folder<input type="file" name="dir" webkitdirectory multiple hidden></label>
       <label class="btn">${icon("file")}Choose zip or files<input type="file" name="zip" multiple accept=".zip,.md,.txt,.canvas,image/*,audio/*,video/*,application/pdf" hidden></label>
@@ -5700,7 +5700,7 @@ function menuFor(kind: "file" | "folder" | "root", path: string, x: number, y: n
       { label: "New folder", icon: "folder", action: () => void newFolder("") },
       { label: "Agents and keys", icon: "bot", action: () => { S.tab = "manage"; render(); } },
       "-",
-      { label: "Import Obsidian vault…", icon: "upload", action: importDialog },
+      { label: "Import from Obsidian…", icon: "upload", action: importDialog },
       { label: "Download notebook (.zip)", icon: "download", action: () => void downloadNotebook() },
       { label: S.collapsed.size ? "Expand all folders" : "Collapse all folders", icon: "chevron", action: () => { if (S.collapsed.size) S.collapsed.clear(); else for (const f of S.folders) S.collapsed.add(f); store("nb-collapsed", JSON.stringify([...S.collapsed])); renderSide(); } },
     ]);
