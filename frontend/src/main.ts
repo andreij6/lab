@@ -1515,10 +1515,43 @@ async function refreshUnread() {
 }
 /** Members chat as long as they own a notebook; no ICP has to sit anywhere. */
 const verifiedNow = (m?: Member) => !!m && (S.notebooks?.length ?? 1) > 0;
+/** Admins put a channel in a section: an existing one, a new one, or none. */
+async function moveChannel(name: string) {
+  const c = S.community;
+  if (!c) return;
+  const secs = [...new Set(c.channels.map((ch) => ch.section).filter((x): x is string => !!x))];
+  const cur = c.channels.find((ch) => ch.name === name)?.section ?? "";
+  const pick = await ask({ title: `Section for #${name}`, label: "Section", choices: [...secs.map((x) => ({ value: x, label: x })), { value: "__new__", label: "New section…" }, { value: "", label: "None (Channels)" }], value: cur, ok: "Move" });
+  if (pick === null) return;
+  const sec = pick === "__new__" ? (await ask({ title: "New section", label: "Name", placeholder: "Study groups", ok: "Create" }))?.trim() : pick;
+  if (sec === undefined) return;
+  const r = await registry().set_channel_section(name, sec || null);
+  if (r.__kind__ === "Err") return void toast(r.Err, "error");
+  c.channels = c.channels.map((ch) => (ch.name === name ? r.Ok : ch));
+  renderChannels();
+}
+/** Chat channels grouped by section: the built-in sections first, then the rest A-Z, unsectioned last. */
+const SECTION_ORDER = ["Lab", "Notebooks", "Build"];
+function chatSections(chs: Channel[]): [string, Channel[]][] {
+  const by = new Map<string, Channel[]>();
+  for (const ch of chs) {
+    const sec = ch.section ?? "Channels";
+    by.set(sec, [...(by.get(sec) ?? []), ch]);
+  }
+  const rank = (k: string) => (k === "Channels" ? 1e9 : SECTION_ORDER.includes(k) ? SECTION_ORDER.indexOf(k) : 100);
+  return [...by.entries()].sort(([a], [b]) => rank(a) - rank(b) || a.localeCompare(b));
+}
+const chatCollapsed = () => { try { return new Set<string>(JSON.parse(store("nb-chat-collapsed") ?? "[]")); } catch { return new Set<string>(); } };
 function channelsHtml(): string {
   const c = S.community!;
   return `<div class="pane-head"><span class="pane-title" style="padding:0">Channels</span>${c.member ? `<button type="button" class="btn btn-ghost icon-btn" data-action="chat-join" title="Your handle: @${esc(c.member.handle)}" aria-label="Change your handle">${icon("edit")}</button>` : ""}${S.isAdmin ? `<button type="button" class="btn btn-ghost icon-btn" data-action="chat-new-channel" title="New channel" aria-label="New channel">${icon("plus")}</button>` : ""}</div>
-    <div class="chans">${c.channels.map((ch) => `<button type="button" class="chan ${ch.name === c.channel ? "on" : ""}" data-action="chat-channel" data-channel="${esc(ch.name)}" title="${esc(ch.topic)}"><span class="hash">#</span>${esc(ch.name)}${ch.gate ? `<span class="gate-ico" title="Contributors only">${icon("lock")}</span>` : ""}${c.unread[ch.name] ? `<span class="unread">${c.unread[ch.name]}</span>` : ""}${S.isAdmin && ch.name !== "general" ? `<span class="chan-del" data-action="chat-del-channel" data-channel="${esc(ch.name)}" title="Delete channel">${icon("x")}</span>` : ""}</button>`).join("")}</div>`;
+    <div class="chans">${chatSections(c.channels).map(([sec, list]) => {
+      const shut = chatCollapsed().has(sec);
+      // a folded section still lists the open channel and any with unread messages
+      const shown = shut ? list.filter((ch) => ch.name === c.channel || c.unread[ch.name]) : list;
+      const unread = list.reduce((n, ch) => n + (c.unread[ch.name] ?? 0), 0);
+      return `<button type="button" class="chan-sec" data-action="chat-section" data-section="${esc(sec)}" aria-expanded="${!shut}">${icon(shut ? "chevron" : "down")}<span>${esc(sec)}</span>${shut && unread ? `<span class="unread">${unread}</span>` : ""}</button>${shown.map((ch) => `<button type="button" class="chan ${ch.name === c.channel ? "on" : ""}" data-action="chat-channel" data-channel="${esc(ch.name)}" title="${esc(ch.topic)}"><span class="hash">#</span>${esc(ch.name)}${ch.gate ? `<span class="gate-ico" title="Contributors only">${icon("lock")}</span>` : ""}${c.unread[ch.name] ? `<span class="unread">${c.unread[ch.name]}</span>` : ""}${S.isAdmin ? `<span class="chan-del" data-action="chat-move-channel" data-channel="${esc(ch.name)}" title="Move to a section">${icon("folder")}</span>` : ""}${S.isAdmin && ch.name !== "general" ? `<span class="chan-del" data-action="chat-del-channel" data-channel="${esc(ch.name)}" title="Delete channel">${icon("x")}</span>` : ""}</button>`).join("")}`;
+    }).join("")}</div>`;
 }
 /** New chat messages are paid for by one of the member's notebooks, in cycles, inside the call. */
 const paidPost = <T,>(call: () => Promise<T>): Promise<T> => call();
@@ -1605,7 +1638,6 @@ function chatHtmlC(): string {
     ${ch?.gate === "github" && !c.github && verifiedNow(c.member) ? `<div class="gate"><b>#${esc(c.channel)} is for contributors${c.repo ? ` to ${esc(c.repo)}` : ""}.</b> ${c.repo ? `Put your principal <code>${esc(S.principal)}</code><button type="button" class="btn btn-ghost icon-btn" data-action="copy-principal" aria-label="Copy principal">${icon("copy")}</button> in your GitHub bio, then link your login.` : "An admin has not set the repository yet."}${c.repo ? `<button type="button" class="btn btn-primary" data-action="link-github">${icon("link")}Link GitHub</button>` : ""}</div>` : ""}
     <form class="composer" data-form="chat-post">${c.editing !== undefined ? `<div class="replying">${icon("edit")}Editing your message<button type="button" class="btn btn-ghost icon-btn" data-action="chat-edit-cancel" aria-label="Cancel edit">${icon("x")}</button></div>` : ""}${c.replyTo ? `<div class="replying">${icon("links")}Replying to <b>@${esc(c.replyTo.handle)}</b>: ${esc(c.replyTo.text.slice(0, 80))}<button type="button" class="btn btn-ghost icon-btn" data-action="chat-reply-cancel" aria-label="Cancel reply">${icon("x")}</button></div>` : ""}
       ${!c.member ? `<div class="compose-box"><button type="button" class="btn btn-ghost join-chat" data-action="chat-join">${icon("check")}Pick a handle to chat</button></div>` : `<div class="compose-box ${can ? "" : "off"}"><button type="button" class="btn btn-ghost icon-btn" data-action="chat-plus" title="Poll, gist or fundraiser" aria-label="More" ${can ? "" : "disabled"}>${icon("plus")}</button><textarea name="chattext" rows="1" placeholder="${can ? `Message #${esc(c.channel)}` : ch?.gate === "github" && verifiedNow(c.member) ? `Link your GitHub to post in #${esc(c.channel)}` : "Create a notebook to chat"}" ${can ? "" : "disabled"} aria-label="Message" title="↵ to send, ⇧↵ for a new line">${esc(c.draft)}</textarea><button type="button" class="btn btn-ghost icon-btn emoji-btn" data-action="chat-emoji" title="Emoji" aria-label="Emoji" ${can ? "" : "disabled"}>☺</button></div>`}
-      ${can ? `<div class="compose-hint small muted">${icon("bolt")}Your notebook pays what each new message costs Lab: about <b>${cyc(c.fee ?? 16_000_000n)}</b> · edits, reactions and votes are free</div>` : ""}
       ${c.picker ? `<div class="pop-scrim" data-action="chat-pick-close"></div><div class="emoji-pop" role="dialog" aria-label="Emoji">${c.picker.mid !== undefined ? `<div class="small muted" style="padding:4px 6px">React to <b>@${esc(c.messages.find((m) => m.id === c.picker!.mid)?.handle ?? "")}</b></div>` : ""}<div class="emoji-grid">${CHAT_EMOJI.map((e) => `<button type="button" class="emoji" data-action="chat-pick" data-emoji="${e}" aria-label="${e}">${e}</button>`).join("")}</div></div>` : ""}
     </form>`;
 }
@@ -5592,6 +5624,17 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
       const m = c.messages.find((x) => x.id === BigInt(el.dataset.mid!)); if (m) { m.deleted = true; m.text = ""; }
       return renderChat();
     }
+    case "chat-section": {
+      const sec = el.dataset.section!;
+      const shut = chatCollapsed();
+      if (shut.has(sec)) shut.delete(sec); else shut.add(sec);
+      store("nb-chat-collapsed", JSON.stringify([...shut]));
+      return renderChannels();
+    }
+    case "chat-move-channel": {
+      ev?.stopPropagation();
+      return moveChannel(el.dataset.channel!);
+    }
     case "chat-new-channel": {
       const name = await ask({ title: "New channel", label: "Name (letters, digits, dashes)", placeholder: "lean", ok: "Next" });
       if (!name?.trim()) return;
@@ -5599,6 +5642,7 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
       if (topic === null) return;
       const r = await registry().create_channel(name.trim(), topic);
       if (r.__kind__ === "Err") return toast(r.Err, "error");
+      await moveChannel(r.Ok.name);
       return loadCommunity(r.Ok.name);
     }
     case "chat-del-channel": {

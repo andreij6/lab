@@ -258,6 +258,7 @@ fn init() {
     seed_tokens();
     seed_channels();
     seed_developers();
+    seed_sections();
     start_timers();
 }
 #[post_upgrade]
@@ -265,6 +266,7 @@ fn post_upgrade() {
     seed_tokens();
     seed_channels();
     seed_developers();
+    seed_sections();
     start_timers();
 }
 fn start_timers() {
@@ -1069,6 +1071,10 @@ pub struct Channel {
     pub created_at: u64,
     /// `"github"`: only linked contributors to the configured repository may post.
     pub gate: Option<String>,
+    /// The collapsible group it is listed under ("Lab", "Notebooks", "Build", ...); None lists it
+    /// under "Channels".
+    #[serde(default)]
+    pub section: Option<String>,
 }
 /// The plans a contributor may raise for in the developers channel.
 const PLANS: &[&str] = &["Claude Max", "ChatGPT Pro", "Gemini Ultra"];
@@ -1190,14 +1196,49 @@ fn seed_channels() {
     }
     let me = canister_self();
     for (n, t) in [("general", "Anything goes"), ("notebooks", "Tips, templates, plugins"), ("market", "Buying and selling notebooks and decks"), ("agents", "Keys, skills, what your agents built"), ("study", "Decks, quizzes, study groups"), ("help", "Something broken? Ask here")] {
-        CHANNELS.with_borrow_mut(|c| c.insert(n.into(), C(Channel { name: n.into(), topic: t.into(), created_by: me, created_at: time(), gate: None })));
+        CHANNELS.with_borrow_mut(|c| c.insert(n.into(), C(Channel { name: n.into(), topic: t.into(), created_by: me, created_at: time(), gate: None, section: None })));
     }
 }
 fn seed_developers() {
     if CHANNELS.with_borrow(|c| c.contains_key(&"developers".to_string())) {
         return;
     }
-    CHANNELS.with_borrow_mut(|c| c.insert("developers".into(), C(Channel { name: "developers".into(), topic: "Contributors only: the code, and raising for AI plans".into(), created_by: canister_self(), created_at: time(), gate: Some("github".into()) })));
+    CHANNELS.with_borrow_mut(|c| c.insert("developers".into(), C(Channel { name: "developers".into(), topic: "Contributors only: the code, and raising for AI plans".into(), created_by: canister_self(), created_at: time(), gate: Some("github".into()), section: None })));
+}
+/// The built-in channels' sections, filled in once for channels that have none yet.
+const DEFAULT_SECTIONS: &[(&str, &str)] = &[("general", "Lab"), ("help", "Lab"), ("notebooks", "Notebooks"), ("study", "Notebooks"), ("agents", "Notebooks"), ("market", "Notebooks"), ("developers", "Build")];
+fn seed_sections() {
+    CHANNELS.with_borrow_mut(|c| {
+        for (n, sec) in DEFAULT_SECTIONS {
+            if let Some(mut ch) = c.get(&n.to_string()).map(|x| x.0).filter(|ch| ch.section.is_none()) {
+                ch.section = Some(sec.to_string());
+                c.insert(n.to_string(), C(ch));
+            }
+        }
+    });
+}
+fn check_section(s: &str) -> Result<String, String> {
+    let s = s.trim();
+    if s.is_empty() || s.chars().count() > 24 || has_link_or_image(s) {
+        return Err("section names are 1-24 characters".into());
+    }
+    clean(s)?;
+    Ok(s.to_string())
+}
+/// Put a channel in a section, or with None back under "Channels" (admins).
+#[update]
+fn set_channel_section(name: String, section: Option<String>) -> Result<Channel, String> {
+    if !admin(&msg_caller()) {
+        return Err("admin only".into());
+    }
+    let n = check_channel(&name)?;
+    let section = section.as_deref().map(check_section).transpose()?;
+    CHANNELS.with_borrow_mut(|c| {
+        let mut ch = c.get(&n).map(|x| x.0).ok_or("unknown channel")?;
+        ch.section = section;
+        c.insert(n, C(ch.clone()));
+        Ok(ch)
+    })
 }
 fn gate_of(channel: &str) -> Option<String> {
     CHANNELS.with_borrow(|c| c.get(&channel.to_string()).and_then(|x| x.0.gate))
@@ -1760,7 +1801,7 @@ fn create_channel(name: String, topic: String) -> Result<Channel, String> {
     }
     let topic: String = topic.trim().chars().take(120).collect();
     clean(&topic)?;
-    let ch = Channel { name: n.clone(), topic, created_by: msg_caller(), created_at: time(), gate: None };
+    let ch = Channel { name: n.clone(), topic, created_by: msg_caller(), created_at: time(), gate: None, section: None };
     CHANNELS.with_borrow_mut(|c| c.insert(n, C(ch.clone())));
     Ok(ch)
 }

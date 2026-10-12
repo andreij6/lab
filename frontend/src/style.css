@@ -628,3 +628,4 @@ body .wsbar, body .topbar { padding-right: 50px; } /* keep the corner clear for 
 @media print { .alpha-ribbon { display: none; } }
 .danger-zone { border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); } .danger-zone h2 { color: var(--danger); }
 .compose-box .join-chat { flex: 1; justify-content: center; padding: 10px; color: var(--accent-2); }
+.chan-sec { display: flex; align-items: center; gap: 4px; border: 0; background: transparent; color: var(--fg-3); font-size: .72rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; padding: 12px 4px 4px; cursor: pointer; text-align: left; } .chan-sec:first-child { padding-top: 4px; } .chan-sec:hover { color: var(--fg-2); } .chan-sec .ico { width: 12px; height: 12px; } .chan-sec .unread { margin-left: auto; background: var(--danger); color: #fff; border-radius: 999px; padding: 0 6px; font-size: .7rem; letter-spacing: 0; }

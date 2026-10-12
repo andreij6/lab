@@ -389,6 +389,11 @@ expect "a short message costs a few million cycles" "_" icp canister call regist
 icp token transfer 1 "$OTHERP" -q >/dev/null; icp token approve 0.5 "$(icp canister status registry -i)" --identity "$OTHER" -q >/dev/null; icp token approve 0.5 "$(icp canister status registry -i)" -q >/dev/null
 SUF=$(date +%s | tail -c 5)
 expect "six channels exist" "general" icp canister call registry channels '()' --query
+expect "the built-in channels sit in sections" 'section = opt "Lab"' icp canister call registry channels '()' --query
+expect "only admins move channels between sections" "admin only" reg set_channel_section '("help", opt "Support")'
+expect "an admin moves one" 'section = opt "Support"' icp canister call registry set_channel_section '("help", opt "Support")'
+expect "section names are short and clean" "1-24" icp canister call registry set_channel_section '("help", opt "")'
+expect "and it goes back" 'section = opt "Lab"' icp canister call registry set_channel_section '("help", opt "Lab")'
 expect "anonymous cannot join" "sign in" icp canister call registry join_community '("anon")' --identity anonymous
 expect "someone without a notebook cannot join" "need a notebook" icp canister call registry join_community '("thirdy")' --identity "$OWNER2"
 ON=$(icp canister call registry create_notebook '("Other notes")' --identity "$OTHER" | grep -o 'canister = principal "[^"]*"' | head -1 | sed 's/.*"\(.*\)"/\1/')

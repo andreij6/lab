@@ -34,6 +34,9 @@ type Channel = record {
   // `"github"`: only linked contributors to the configured repository may post.
   gate : opt text;
   name : text;
+  // The collapsible group it is listed under ("Lab", "Notebooks", "Build", ...); None lists it
+  // under "Channels".
+  section : opt text;
   created_at : nat64;
   created_by : principal;
 };
@@ -483,6 +486,8 @@ service : () -> {
   report_idea : (text, text, text) -> (Result_21);
   // Roll a notebook back to a snapshot: stop, load, start.
   restore_snapshot : (principal, blob) -> (Result);
+  // Put a channel in a section, or with None back under "Channels" (admins).
+  set_channel_section : (text, opt text) -> (Result_10);
   // Admin: switch a feature on or off for everyone.
   set_flag : (text, bool) -> (Result_22);
   // Change one notebook's freezing threshold (controller only): the admin's knob for testing a freeze or granting more time.
