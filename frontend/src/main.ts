@@ -421,6 +421,7 @@ const ICONS: Record<string, string> = {
   "panel-right": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/>',
   mountain: '<path d="M3 20l6-10 4 6 3-4 5 8z"/><path d="M8.2 11.4l1.8 1.6 1.4-1.2"/>',
   sliders: '<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
+  'pin-top': '<path d="M5 4h14M12 20V9M7.5 13.5 12 9l4.5 4.5"/>',
   coin: '<circle cx="12" cy="12" r="9"/><path d="M14.8 9.4c-.5-.9-1.5-1.4-2.8-1.4-1.6 0-2.7.8-2.7 2s1.1 1.6 2.7 2 2.7.8 2.7 2-1.1 2-2.7 2c-1.3 0-2.4-.5-2.9-1.4M12 6.5v11"/>',
   wallet: '<path d="M19 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a1 1 0 0 0 1-1v-3"/><path d="M3 5a2 2 0 0 0 2 2h15a1 1 0 0 1 1 1v3h-4a2 2 0 0 0 0 4h4"/>',
   megaphone: '<path d="M3 11l16-6v14L3 13z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>',
@@ -826,7 +827,7 @@ const COMMANDS: { label: string; kbd?: string; run: () => void }[] = [
   { label: "Split right", kbd: `${MOD}\\`, run: () => splitRight(S.focused) },
   { label: "Close tab", kbd: `${MOD}W`, run: () => { const c = cur(); if (c) closeTab(S.focused, c); } },
   { label: "Toggle properties editor", run: () => { S.propsOpen = !S.propsOpen; store("nb-props", S.propsOpen ? "1" : "0"); render(); } },
-  { label: "Bookmark this note", run: () => { const c = cur(); if (c) void toggleBookmark(c); } },
+  { label: "Pin or unpin this note", run: () => { const c = cur(); if (c) void togglePin(c); } },
   { label: "Version history", run: () => { const c = cur(); if (c) void historyDialog(c); } },
   { label: "Share this note", run: () => { const c = cur(); if (c) void shareDialog(c); } },
   { label: "Search notes", kbd: `${MOD}K`, run: () => openPalette() },
@@ -890,7 +891,7 @@ function routeSheet(el: HTMLElement) {
   const tab = (t: Tab, label: string, ic: string): R => ({ label, icon: ic, sub: true, hidden: !featureOn(t), on: inNb && S.tab === t, go: () => { const i = document.createElement("i"); i.dataset.tab = t; if (!inNb) { S.community = undefined; S.board = undefined; S.market = undefined; S.admin = undefined; location.hash = `#/notebook/${nbId}`; } void onAction("tab", i, new MouseEvent("click")); } });
   const routes: R[] = [
     { label: "Your notebooks", icon: "list", on: !S.notebook && !S.community && !S.board && !S.market && !S.admin, go: () => { location.hash = "#/"; } },
-    ...(S.notebook ? [{ label: S.notebook.name, icon: "notebook", on: inNb && S.tab === "notes", go: () => { if (!inNb) location.hash = `#/notebook/${nbId}`; else { const i = document.createElement("i"); i.dataset.tab = "notes"; void onAction("tab", i, new MouseEvent("click")); } } } as R, tab("chat", "Chat with your notes", "chat"), tab("graph", "Graph", "graph"), tab("study", "Study", "check"), tab("work", "Work", "briefcase"), tab("organize", "Organize", "sliders"), tab("research", "Research", "cap"), tab("writing", "Writing", "edit"), tab("care", "Care", "heart"), tab("software", "Software", "terminal"), tab("career", "Career", "compass"), tab("crypto", "Crypto", "coin"), tab("money", "Money", "wallet"), tab("creator", "Creator", "megaphone"), tab("fitness", "Fitness", "dumbbell"), tab("home", "Home", "house"), tab("trips", "Trips", "mountain"), tab("manage", "Manage", "cog")].filter((r) => !r.hidden) : []),
+    ...(S.notebook ? [{ label: S.notebook.name, icon: "notebook", on: inNb && S.tab === "notes", go: () => { if (!inNb) location.hash = `#/notebook/${nbId}`; else { const i = document.createElement("i"); i.dataset.tab = "notes"; void onAction("tab", i, new MouseEvent("click")); } } } as R, ...FEATURES.map((f) => tab(f.id, f.label, f.icon)), tab("manage", "Manage", "cog")].filter((r) => !r.hidden) : []),
     { label: "Community", icon: "users", on: !!S.community, go: () => { location.hash = "#/community"; } },
     ...(flag("board") ? [{ label: "Board", icon: "pin", on: !!S.board, go: () => { location.hash = "#/board"; } } as R] : []),
     ...(flag("market") ? [{ label: "Market", icon: "tag", on: !!S.market, go: () => { location.hash = "#/market"; } } as R] : []),
@@ -1014,9 +1015,6 @@ function notebooksPage(): string {
 function shell(body: string): string {
   const i = S.info;
   const low = lowCycles(i);
-  const segTab = (t: Tab, label: string, ic: string, extra = "") => featureOn(t) ? `<button type="button" role="tab" class="tab" aria-selected="${S.tab === t}" data-action="tab" data-tab="${t}" aria-label="${label}">${icon(ic)}<span class="lbl">${label}</span>${extra}</button>` : "";
-  // every enabled tab, not a fixed six: the kits were only reachable through the ⋯ sheet on phones
-  const seg = `<nav class="segmented" role="tablist" aria-label="View">${segTab("notes", "Notes", "file")}${FEATURES.map((f) => segTab(f.id, f.label.replace(" with your notes", ""), f.icon)).join("")}${segTab("manage", "Manage", "bolt", i ? `<span class="pill ${low ? "low" : ""}">${tc(i.cycles)}</span>` : "")}</nav>`;
   const mobileNav = S.mobile && (S.tab === "notes" || S.tab === "chat")
     ? `<nav class="mobilebar" aria-label="Panes">
         <button type="button" class="mtab" aria-selected="${S.mobilePane === "files"}" data-action="mpane" data-pane="files">${icon("folder")}Files</button>
@@ -1034,26 +1032,35 @@ function shell(body: string): string {
     : low && S.tab !== "manage"
       ? `<div class="alert-bar">${icon("bolt")}Low on cycles: ${tc(i!.cycles)} left. <button type="button" class="btn btn-ghost" data-action="tab" data-tab="manage">Top up</button></div>`
       : S.pendingWrites ? `<div class="alert-bar">${icon("refresh")}${S.pendingWrites} offline change${S.pendingWrites === 1 ? "" : "s"} waiting. <button type="button" class="btn btn-ghost" data-action="sync">Sync now</button></div>` : "";
-  return shellBody(body, i, low, alert, mobileNav, seg);
+  return shellBody(body, i, low, alert, mobileNav);
 }
 /** The vertical icon bar: sections of the open notebook on top, the app-wide places at the bottom. From a page without a notebook, a section opens the last notebook. */
 function ribbonHtml(i?: Info, low = false): string {
   if (S.mobile) return "";
   const inNb = !!S.notebook && !S.community && !S.board && !S.market && !S.admin;
   const rb = (tab: Tab, label: string, ic: string, extra = "") => !featureOn(tab) ? "" : `<button type="button" class="rb ${inNb && S.tab === tab ? "on" : ""}" data-action="ribbon-tab" data-tab="${tab}" title="${label}" aria-label="${label}" aria-pressed="${inNb && S.tab === tab}">${icon(ic)}${extra}</button>`;
+  const tripLate = S.trips.watching.some((w) => w.overdue && !w.closed);
+  const tip: Partial<Record<Tab, string>> = {
+    graph: "Knowledge graph", study: `Study${dueTotal() ? ` · ${dueTotal()} cards due` : ""}`, work: `Work${overdueCount() ? ` · ${overdueCount()} overdue` : ""}`,
+    organize: "Organize: saved searches, triage, rules, tidy-up", research: "Research: sources, citations, claims, thesis", writing: "Writing: manuscript, story bible, timeline",
+    care: "Care: log, appointments, care team", software: "Software: decisions, runbooks, changelog", career: "Career: applications, résumés, interviews, networking",
+    crypto: "Crypto: prices, trade journal, theses", money: "Money: budget, subscriptions, net worth", creator: "Creator: calendar, threads, results",
+    fitness: "Fitness: workouts, records, runs", home: "Home: upkeep, inventory, warranties, manuals", trips: tripLate ? "Trips · someone is overdue" : "Trips",
+  };
+  const badge: Partial<Record<Tab, string>> = { study: dueTotal() ? `<i class="rb-count">${dueTotal()}</i>` : "", work: overdueCount() ? `<i class="rb-count danger">${overdueCount()}</i>` : "", trips: tripLate ? `<i class="rb-dot"></i>` : "" };
   return `<nav class="ribbon" aria-label="Sections">
-      <div class="rb-group">${rb("notes", "Notes", "file")}${rb("chat", "Chat with your notes", "chat")}${rb("graph", "Knowledge graph", "graph")}${rb("study", `Study${dueTotal() ? ` · ${dueTotal()} cards due` : ""}`, "check", dueTotal() ? `<i class="rb-count">${dueTotal()}</i>` : "")}${rb("work", `Work${overdueCount() ? ` · ${overdueCount()} overdue` : ""}`, "briefcase", overdueCount() ? `<i class="rb-count danger">${overdueCount()}</i>` : "")}${rb("organize", "Organize: saved searches, triage, rules, tidy-up", "sliders")}${rb("research", "Research: sources, citations, claims, thesis", "cap")}${rb("writing", "Writing: manuscript, story bible, timeline", "edit")}${rb("care", "Care: log, appointments, care team", "heart")}${rb("software", "Software: decisions, runbooks, changelog", "terminal")}${rb("career", "Career: applications, résumés, interviews, networking", "compass")}${rb("crypto", "Crypto: prices, trade journal, theses", "coin")}${rb("money", "Money: budget, subscriptions, net worth", "wallet")}${rb("creator", "Creator: calendar, threads, results", "megaphone")}${rb("fitness", "Fitness: workouts, records, runs", "dumbbell")}${rb("home", "Home: upkeep, inventory, warranties, manuals", "house")}${rb("trips", S.trips.watching.some((w) => w.overdue && !w.closed) ? "Trips · someone is overdue" : "Trips", "mountain", S.trips.watching.some((w) => w.overdue && !w.closed) ? `<i class="rb-dot"></i>` : "")}</div>
+      <div class="rb-group">${rb("notes", "Notes", "file")}${S.notebook ? FEATURES.map((f) => rb(f.id, tip[f.id] ?? f.label, f.icon, badge[f.id] ?? "")).join("") : ""}</div>
       <div class="rb-group bottom">${rb("manage", `Manage${i ? ` · ${tc(i.cycles)}` : ""}`, "cog", low ? `<i class="rb-dot"></i>` : "")}<a class="rb ${S.community ? "on" : ""}" href="#/community" data-action="nav" title="Community${S.mentions ? ` · ${S.mentions} new mention${S.mentions === 1 ? "" : "s"}` : ""}" aria-label="Community">${icon("users")}${S.mentions ? `<i class="rb-badge">${S.mentions > 9 ? "9+" : S.mentions}</i>` : ""}</a>${flag("board") ? `<a class="rb ${S.board ? "on" : ""}" href="#/board" data-action="nav" title="Board: posts and discussion" aria-label="Board">${icon("pin")}</a>` : ""}${flag("market") ? `<a class="rb ${S.market ? "on" : ""}" href="#/market" data-action="nav" title="Notebook market" aria-label="Notebook market">${icon("tag")}</a>` : ""}${S.isAdmin ? `<a class="rb ${S.admin ? "on" : ""}" href="#/admin" data-action="nav" title="Reports and ideas" aria-label="Reports and ideas">${icon("bug")}</a>` : ""}<button type="button" class="rb" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="rb" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button><button type="button" class="rb" data-action="sign-out" title="Sign out" aria-label="Sign out">${icon("out")}</button></div>
     </nav>`;
 }
-function shellBody(body: string, i: Info | undefined, low: boolean, alert: string, mobileNav: string, seg: string): string {
+function shellBody(body: string, i: Info | undefined, low: boolean, alert: string, mobileNav: string): string {
   const ribbon = ribbonHtml(i, low);
   return `<div class="shell ${S.mobile ? "is-mobile" : ""}">${ribbon}<div class="shell-main">
     ${alert}
-    <header class="wsbar">${brand()}${S.mobile ? seg : `<span class="crumb"><b>${esc(S.notebook!.name)}</b><span class="faint">/</span><span>${S.tab === "notes" ? (cur() ? esc(title(cur()!)) : "Notes") : S.tab === "chat" ? "Chat" : S.tab === "graph" ? "Graph" : S.tab === "study" ? "Study" : S.tab === "work" ? "Work" : S.tab === "organize" ? "Organize" : S.tab === "trips" ? "Trips" : S.tab === "research" ? "Research" : S.tab === "writing" ? "Writing" : S.tab === "care" ? "Care" : S.tab === "career" ? "Career" : S.tab === "crypto" ? "Crypto" : S.tab === "money" ? "Money" : S.tab === "creator" ? "Creator" : S.tab === "fitness" ? "Fitness" : S.tab === "home" ? "Home" : S.tab === "software" ? "Software" : "Manage"}</span></span>`}
+    <header class="wsbar">${brand()}<span class="crumb"><b>${esc(S.notebook!.name)}</b><span class="faint">/</span><span>${S.tab === "notes" ? (cur() ? esc(title(cur()!)) : "Notes") : S.tab === "manage" ? "Manage" : esc((FEATURES.find((f) => f.id === S.tab)?.label ?? S.tab).replace(" with your notes", ""))}</span></span>
       <span class="right">${S.mobile ? "" : `<button type="button" class="btn btn-ghost" data-action="palette" title="Open or create a note (${MOD}K)">${icon("search")}<span class="kbd">${MOD}K</span></button>`}${S.mobile ? moreBtn() : ""}</span>
     </header>
-    ${panebar({ on: S.sideOpen, what: "the file pane", action: "side-toggle", off: S.tab === "graph" || S.tab === "manage" || S.tab === "study" || S.tab === "work" || S.tab === "organize" || S.tab === "trips" || S.tab === "research" || S.tab === "writing" || S.tab === "care" || S.tab === "software" || S.tab === "career" || S.tab === "crypto" || S.tab === "money" || S.tab === "creator" || S.tab === "fitness" || S.tab === "home" }, { on: S.asideOpen, what: "the right pane", action: "aside-toggle", off: S.tab === "graph" || S.tab === "manage" || S.tab === "study" || S.tab === "work" || S.tab === "organize" || S.tab === "trips" || S.tab === "research" || S.tab === "writing" || S.tab === "care" || S.tab === "software" || S.tab === "career" || S.tab === "crypto" || S.tab === "money" || S.tab === "creator" || S.tab === "fitness" || S.tab === "home" })}
+    ${panebar({ on: S.sideOpen, what: "the file pane", action: "side-toggle", off: S.tab !== "notes" && S.tab !== "chat" }, { on: S.asideOpen, what: "the right pane", action: "aside-toggle", off: S.tab !== "notes" && S.tab !== "chat" })}
     ${body}
     ${mobileNav}
   </div></div>`;
@@ -1098,8 +1105,11 @@ const countFiles = (f: Folder): number => f.files.length + f.folders.reduce((n, 
 function side(): string {
   if (!S.notes) return `<div class="empty-side">Loading the notebook…</div>`;
   let body: string;
-  const bm = S.settings.bookmarks.filter((p) => note(p));
-  const bookmarks = bm.length && !S.query.trim() && !S.tag ? `<div class="pane-title">Bookmarks</div>${bm.map((p) => `<div class="bm-row" data-action="open" data-path="${esc(p)}">${icon("star")}<span class="name">${esc(title(p))}</span></div>`).join("")}<div class="pane-title">Files</div>` : "";
+  const pins = S.query.trim() || S.tag ? [] : pinsNow();
+  const unpin = (p: string) => `<button type="button" class="row-more" data-action="pin" data-path="${esc(p)}" title="Unpin" aria-label="Unpin">${icon("x")}</button>`;
+  const bookmarks = pins.length ? `<div class="pane-title">Pinned</div>${pins.map((p) => isFolderPin(p)
+    ? `<div class="bm-row" data-action="pin-reveal" data-path="${esc(p.slice(0, -1))}" title="/${esc(p.slice(0, -1))}">${icon("folder")}<span class="name">${esc(p.slice(0, -1).split("/").pop()!)}</span>${unpin(p)}</div>`
+    : `<div class="bm-row ${p === cur() ? "active" : ""}" data-action="open" data-path="${esc(p)}">${icon("file")}<span class="name">${esc(title(p))}</span>${unpin(p)}</div>`).join("")}<div class="pane-title">Files</div>` : "";
   if (S.query.trim()) {
     const hits = S.serverHits ?? search(S.notes, S.query);
     body = hits.length
@@ -1115,7 +1125,7 @@ function side(): string {
   return `<div class="pane-head"><button type="button" class="btn btn-ghost icon-btn" data-action="today" title="Today's note (${MOD}⇧D)" aria-label="Today's note">${icon("calendar")}</button><button type="button" class="btn btn-ghost icon-btn" data-action="root-menu" title="Notebook actions" aria-label="Notebook actions">${icon("more")}</button></div>
     ${bookmarks}${S.settings.searches.length && !S.query.trim() && !S.tag ? `<div class="pane-title">Saved searches</div>${S.settings.searches.map((x, i) => `<div class="bm-row" data-action="org-open" data-i="${i}" title="${esc(x.q)}">${icon("search")}<span class="name">${esc(x.name)}</span><span class="cnt small faint">${runQuery(orgNotes(), x.q).length}</span></div>`).join("")}` : ""}<div class="tree" data-tree>${body}</div>
     ${tags.length ? `<div class="pane-title">Tags</div><div class="tags">${tags.map(([t, ps]) => `<button type="button" class="tag-chip ${S.tag === t ? "active" : ""}" data-action="tag" data-tag="${esc(t)}">#${esc(t)}<span class="cnt">${ps.size}</span></button>`).join("")}</div>` : ""}
-    <div class="side-foot"><button type="button" class="nb-switch" data-action="nb-menu" title="Switch notebook"><span class="updown">${icon("updown")}</span><b>${esc(S.notebook!.name)}</b>${shareBadge("")}</button><span class="right-actions"><button type="button" class="btn btn-ghost icon-btn" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="btn btn-ghost icon-btn" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button></span></div>`;
+    <div class="side-foot"><button type="button" class="nb-switch" data-action="nb-menu" title="Switch notebook"><span class="updown">${icon("updown")}</span><b>${esc(S.notebook!.name)}</b>${shareBadge("")}</button></div>`;
 }
 
 // --- workspace: links pane
@@ -1261,7 +1271,7 @@ function editorBody(p: Pane): string {
       <input class="title" name="title" data-pane="${p.id}" value="${esc(title(c))}" aria-label="Note name" spellcheck="false" autocomplete="off" ${locked ? "readonly" : ""}>
       <span class="right-actions">${badges}
         ${S.mobile && !locked ? `<label class="btn btn-ghost icon-btn" title="Take or add a photo">${icon("camera")}<input type="file" name="photo" accept="image/*" capture="environment" hidden data-path="${esc(c)}"></label>` : ""}
-        <button type="button" class="btn btn-ghost icon-btn ${S.settings.bookmarks.includes(c) ? "accent" : ""}" data-action="bookmark" data-path="${esc(c)}" title="${S.settings.bookmarks.includes(c) ? "Remove bookmark" : "Bookmark"}" aria-label="Bookmark">${icon("star")}</button>
+        <button type="button" class="btn btn-ghost icon-btn ${isPinned(c) ? "accent" : ""}" data-action="pin" data-path="${esc(c)}" title="${isPinned(c) ? "Unpin" : "Pin to the top of your files"}" aria-label="${isPinned(c) ? "Unpin" : "Pin to top"}" aria-pressed="${isPinned(c)}">${icon("pin-top")}</button>
         ${c.endsWith(".md") && isMeeting(d.text) ? `<button type="button" class="btn btn-ghost" data-action="follow-up" data-path="${esc(c)}" title="Decisions and actions for mail or chat">${icon("mail")}<span class="small lbl">Follow-up</span></button>` : ""}
         ${c.endsWith(".md") && isSlides(d.text) ? `<button type="button" class="btn btn-ghost" data-action="present" data-path="${esc(c)}" title="Present full screen (→ next, ← back, Esc leaves)">${icon("columns")}<span class="small lbl">Present</span></button>` : ""}
         ${c.endsWith(".md") ? `<button type="button" class="btn btn-ghost icon-btn ${p.study ? "accent" : ""}" data-action="study-mode" data-pane="${p.id}" title="Study mode: one section at a time" aria-label="Study mode" aria-pressed="${!!p.study}">${icon("target")}</button>` : ""}
@@ -1739,7 +1749,7 @@ function boardPage(): string {
       <div class="plist">${b.loading && !b.posts.length ? `<p class="muted small" style="padding:12px">Loading…</p>` : sorted.length ? sorted.map((p) => postRow(p, can)).join("") : `<div class="chat-empty">${icon("list")}<h3>Nothing posted${b.topic ? ` in #${esc(b.topic)}` : ""} yet</h3><p class="muted small">Posts live a week past their last comment, then they are gone for good.</p></div>`}</div>`;
   const aside = `<div class="pane-title">House rules</div><div class="empty-side">Members only. No links, no images, no foul language; the registry refuses them. One vote per person on each post and comment, changeable. A post is deleted permanently one week after its last comment. Attach a note from your notebooks to get opinions on it.</div>`;
   return `<div class="shell ${S.mobile ? "is-mobile" : ""}">${ribbonHtml()}<div class="shell-main">
-    <header class="wsbar">${brand()}<span class="crumb"><b>Board</b>${b.topic ? `<span class="faint">/</span><span>#${esc(b.topic)}</span>` : ""}</span><span class="right">${S.mobile ? moreBtn() : `${pageNav()}${themeBtn()}`}</span></header>
+    <header class="wsbar">${brand()}<span class="crumb"><b>Board</b>${b.topic ? `<span class="faint">/</span><span>#${esc(b.topic)}</span>` : ""}</span><span class="right">${S.mobile ? moreBtn() : ""}</span></header>
     ${panebar({ on: b.showSide, what: "topics", action: "side-toggle" }, { on: b.showAside, what: "the rules pane", action: "aside-toggle" })}
     <div class="workspace community ${b.showSide ? "" : "no-side"} ${b.showAside ? "" : "no-aside"} ${S.mobile ? "m-note" : ""}">
       <nav class="side" aria-label="Topics">${side}</nav>
@@ -1785,7 +1795,7 @@ const title2 = (p: string) => p.split("/").pop()!.replace(/\.(md|sheet|dash|ipyn
 function communityPage(): string {
   const c = S.community!;
   return `<div class="shell ${S.mobile ? "is-mobile" : ""}">${ribbonHtml()}<div class="shell-main">
-    <header class="wsbar">${brand()}<span class="crumb"><b>Community</b><span class="faint">/</span><span>#${esc(c.channel)}</span></span><span class="right">${S.mobile ? moreBtn() : `${pageNav()}${themeBtn()}`}</span></header>
+    <header class="wsbar">${brand()}<span class="crumb"><b>Community</b><span class="faint">/</span><span>#${esc(c.channel)}</span></span><span class="right">${S.mobile ? moreBtn() : ""}</span></header>
     ${panebar({ on: c.showChannels, what: "channels", action: "chat-side-toggle" }, { on: c.showOnline, what: "who is online", action: "chat-online-toggle" })}
     <div class="workspace community ${c.showOnline ? "" : "no-aside"} ${c.showChannels ? "" : "no-side"} ${S.mobile ? "m-note" : ""}">
       <nav class="side" id="chanpane" aria-label="Channels">${channelsHtml()}</nav>
@@ -3188,7 +3198,7 @@ function organizeTab(): string {
       </div>
       <div class="card band">
         <div class="row"><h2>${icon("history")} Decay</h2></div>
-        <p class="small muted">Notes nobody touched for a while fade in the file tree, and can be hidden, unless bookmarked or marked <code>pinned: true</code>. Everything in <code>Archive/</code> is faded.</p>
+        <p class="small muted">Notes nobody touched for a while fade in the file tree, and can be hidden, unless pinned to the top or marked <code>pinned: true</code>. Everything in <code>Archive/</code> is faded.</p>
         <div class="row tight"><label class="field"><span class="label">Fade after (days, 0 = off)</span><input class="input" type="number" min="0" name="decaydays" value="${S.settings.decayDays}" style="max-width:110px"></label><label class="switch"><input type="checkbox" name="hidefaded" ${S.settings.hideFaded ? "checked" : ""}> Hide faded notes in the tree</label></div>
         <p class="small faint">${fadedCount} note${fadedCount === 1 ? "" : "s"} faded right now.</p>
       </div>
@@ -4987,12 +4997,24 @@ async function saveSettings() {
     toast(errMsg(e), "error");
   }
 }
-async function toggleBookmark(path: string) {
-  const has = S.settings.bookmarks.includes(path);
-  S.settings.bookmarks = has ? S.settings.bookmarks.filter((p) => p !== path) : [...S.settings.bookmarks, path];
+/** Notes and folders pinned to the top of the file pane, kept in `settings.bookmarks`; a folder
+ *  is stored with a trailing slash. */
+const MAX_PINS = 7;
+const isFolderPin = (p: string) => p.endsWith("/");
+const pinsNow = () => S.settings.bookmarks.filter((p) => (isFolderPin(p) ? S.folders.includes(p.slice(0, -1)) || paths().some((x) => x.startsWith(p)) : !!note(p))).slice(0, MAX_PINS);
+const isPinned = (p: string) => S.settings.bookmarks.includes(p);
+async function togglePin(path: string) {
+  const has = isPinned(path);
+  if (!has && pinsNow().length >= MAX_PINS) return toast(`Up to ${MAX_PINS} can be pinned. Unpin one first.`, "info");
+  S.settings.bookmarks = has ? S.settings.bookmarks.filter((p) => p !== path) : [...S.settings.bookmarks.filter((p) => pinsNow().includes(p)), path];
   render();
   await saveSettings();
-  toast(has ? "Bookmark removed." : "Bookmarked.", "ok");
+  toast(has ? "Unpinned." : "Pinned to the top of your files.", "ok");
+}
+/** After a rename or move: the pin (or pins inside a moved folder) follow. */
+function repin(from: string, to: string) {
+  const next = S.settings.bookmarks.map((p) => (p === from ? to : p.startsWith(`${from}/`) ? `${to}/${p.slice(from.length + 1)}` : p));
+  if (next.some((p, i) => p !== S.settings.bookmarks[i])) { S.settings.bookmarks = next; void saveSettings(); }
 }
 /** Earlier versions of a note with a line diff against what is open now, and a restore button. */
 async function historyDialog(path: string) {
@@ -5055,6 +5077,7 @@ async function renamePath(from: string, to: string) {
   try {
     const r = unwrap(await nb().rename(from, path));
     retarget(from, path);
+    repin(from, path);
     await loadNotebook();
     const n = r.relinked.filter((p) => p !== path).length;
     toast(n ? `Renamed. Links updated in ${n} note${n === 1 ? "" : "s"}.` : "Renamed.", "ok");
@@ -5120,6 +5143,7 @@ async function renameFolder(path: string, target?: string) {
   try {
     const r = unwrap(await nb().rename_folder(path, to.trim()));
     for (const t of S.panes.flatMap((p) => p.tabs)) if (t.startsWith(`${path}/`)) retarget(t, `${to.trim()}${t.slice(path.length)}`);
+    repin(path, to.trim());
     await loadNotebook();
     toast(`Moved ${r.moved} file${r.moved === 1 ? "" : "s"}${r.relinked.length ? `, links updated in ${r.relinked.length} note${r.relinked.length === 1 ? "" : "s"}` : ""}.`, "ok");
     syncHash();
@@ -5598,7 +5622,7 @@ function menuFor(kind: "file" | "folder" | "root", path: string, x: number, y: n
         { label: "Move to folder…", icon: "move", action: () => void moveTo(path) } as MenuItem,
       ]),
       { label: "Copy [[link]]", icon: "link", action: () => void copy(`[[${base(path)}]]`).then(() => toast(`Copied [[${base(path)}]]`, "ok")) },
-      { label: S.settings.bookmarks.includes(path) ? "Remove bookmark" : "Bookmark", icon: "star", action: () => void toggleBookmark(path) },
+      { label: isPinned(path) ? "Unpin" : "Pin to top", icon: "pin-top", action: () => void togglePin(path) },
       { label: "Version history…", icon: "history", action: () => void historyDialog(path) },
       { label: S.shares.some((x) => x.path === path) ? "Sharing…" : "Share…", icon: "share", action: () => void shareDialog(path) },
       "-",
@@ -5635,6 +5659,7 @@ function menuFor(kind: "file" | "folder" | "root", path: string, x: number, y: n
       { label: "New folder inside", icon: "folder", action: () => void newFolder(path) },
       { label: "Export folder as Word (.docx)", icon: "download", action: () => { const ps = paths().filter((p) => p.startsWith(`${path}/`) && p.endsWith(".md")); downloadBytes(`${path.split("/").pop()}.docx`, markdownToDocx(ps.map((p) => `# ${title(p)}\n\n${frontmatter(draftOf(p).text).body}`).join("\n\n"), path), "application/vnd.openxmlformats-officedocument.wordprocessingml.document"); } },
       { label: "Rename or move…", icon: "edit", action: () => void renameFolder(path) },
+      { label: isPinned(`${path}/`) ? "Unpin" : "Pin to top", icon: "pin-top", action: () => void togglePin(`${path}/`) },
       { label: S.shares.some((x) => x.path === path) ? "Sharing…" : "Share folder…", icon: "share", action: () => void shareDialog(path, "folder") },
       "-",
       { label: "Delete folder", icon: "trash", danger: true, action: () => void deleteFolder(path) },
@@ -6440,7 +6465,7 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
     case "lint-rmdir": return deleteFolder(el.dataset.path!);
     case "lint-pause": { const p = el.dataset.path!; await writeNote(p, setProperty(S.drafts.get(p)?.text ?? note(p)!.content, "status", "paused")); return render(); }
     case "res-keep": { S.settings.resurface = keepLater(S.settings.resurface, el.dataset.path!); await saveSettings(); return render(); }
-    case "res-pin": { await toggleBookmark(el.dataset.path!); S.settings.resurface = keepLater(S.settings.resurface, el.dataset.path!); await saveSettings(); return render(); }
+    case "res-pin": { if (!isPinned(el.dataset.path!)) await togglePin(el.dataset.path!); S.settings.resurface = keepLater(S.settings.resurface, el.dataset.path!); await saveSettings(); return render(); }
     // --- Trips
     case "trip-new": return tripNew();
     case "trip-gear": return tripSheet("gear", el.dataset.folder!);
@@ -6936,8 +6961,18 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
     }
     case "today":
       return openDaily();
-    case "bookmark":
-      return toggleBookmark(el.dataset.path!);
+    case "pin":
+      return togglePin(el.dataset.path!);
+    case "pin-reveal": {
+      // open the pinned folder and its parents in the tree, then bring it into view
+      const f = el.dataset.path!;
+      f.split("/").forEach((_, i, a) => S.collapsed.delete(a.slice(0, i + 1).join("/")));
+      store("nb-collapsed", JSON.stringify([...S.collapsed]));
+      if (S.mobile) S.mobilePane = "files";
+      render();
+      document.querySelector<HTMLElement>(`.tree [data-kind=folder][data-path="${CSS.escape(f)}"]`)?.scrollIntoView({ block: "center" });
+      return;
+    }
     case "props-toggle":
       S.propsOpen = !S.propsOpen;
       store("nb-props", S.propsOpen ? "1" : "0");

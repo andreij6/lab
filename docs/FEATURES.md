@@ -107,7 +107,7 @@ sentence or three. Keyboard shortcuts use ⌘ on a Mac and Ctrl elsewhere.
 - **Quick switcher.** ⌘K, ⌘O or ⌘P: fuzzy open by name, create by typing a new name, recent notes when empty, ⌘↵ for a new tab.
 - **Command palette.** ⌘⇧P, or `>` in the switcher: every action with its shortcut.
 - **Tags.** A tag pane with counts; click to filter the file list; nested tags like `#a/b`.
-- **Bookmarks and recent.** Star a note to pin it above the file tree (kept in the canister); recent notes lead the switcher.
+- **Pinned and recent.** Pin up to 7 notes or folders to the top of the file pane (the editor bar, or right-click → Pin to top; kept in the canister and following renames). A pinned folder opens in the tree when clicked. Recent notes lead the switcher.
 - **Backlinks with context.** The line that contains each backlink, outgoing links, unresolved links and an outline of the open note's headings in the links pane.
 - **Chat with your notes.** A Chat tab where you ask in plain language. Step 1, in your browser: a fast "System 1" pass scores every note in the ticked folders on title, tags and word overlap and keeps the best six. Step 2, on chain: their excerpts (cut to fit the LLM canister's 10 KiB limit) go to the notebook's `ask` method, which calls the Internet Computer's LLM canister (`w36hm-eqaaa-aaaal-qr76a-cai`) and asks it to answer from them first, citing each claim as [1], [2]; what the notes do not cover it answers from its own knowledge under a "Beyond your notes" label, and when no note matches it answers from its own knowledge alone. "Save as note" under any answer writes it to a folder you pick, citations turned into wiki links, a Sources list and front matter recording the question, model and date. Citations render as numbered chips that open the note. The chat uses Qwen3 32B, the strongest free model on the LLM canister, so questions cost no cycles; if the LLM canister is unreachable the chat lists what the notes say instead. (The canister method still accepts a paid model such as GLM 5.2, which would reserve 0.1T cycles per question from the notebook, but the app does not offer one.) Owner only. Locally a stand-in canister (`canisters/llm-dev`, deployed as `llm`) speaks the same interface and answers with your Ollama (`ollama serve`; `icp canister call llm set_model '("gemma4:12b")'` picks the model).
 - **Knowledge graph.** Force-directed graph of every note and link: hover lights up a neighbourhood, drag pins, wheel zooms, click opens; colour by folder or first tag, hide attachments, show only orphans, search within the graph, show unresolved links as ghost nodes. A local graph of the open note (depth 1 to 3) sits in the links pane.
@@ -115,7 +115,7 @@ sentence or three. Keyboard shortcuts use ⌘ on a Mac and Ctrl elsewhere.
 ## Organising
 
 - **Folders.** Real folders, empty ones included, with counts, icons and indent guides.
-- **Right-click menus.** On files, folders and empty space: new note, new drawing, new folder, new from template, rename, move, copy link, bookmark, history, share, delete. Touch screens get a ⋯ button per row.
+- **Right-click menus.** On files, folders and empty space: new note, new drawing, new folder, new from template, rename, move, copy link, pin to top, history, share, delete. Touch screens get a ⋯ button per row.
 - **Drag and drop.** Drag notes or folders onto folders or onto the root; links are rewritten on the way.
 - **Tabs and panes.** Several notes open as tabs; drag to reorder, drop on another pane's bar to move, drop on a pane's right edge to split; ⌘\ splits, ⌘W closes, ⌘-click opens in a new tab. Layout is remembered per notebook.
 - **Mobile.** Under 760px the workspace shows one pane at a time with a bottom bar (Files, Note, Links, Find).
@@ -262,7 +262,7 @@ The Organize tab is for people with a system.
 - **Tidy up.** Broken links (create the note), orphans (link from the index or archive), duplicate titles (rename), empty folders (delete) and active projects untouched for 30 days (mark paused), each with a one-click fix.
 - **Refactor.** Rename a tag or a property everywhere, split a note at its `##` headings into linked notes, or merge one note into another with its links pointed at the one you keep.
 - **Resurface.** Old notes come back one at a time to be kept (shown again later, twice as late each time), edited, pinned or archived.
-- **Decay.** Notes untouched for a set number of days (180 by default, 0 turns it off) fade in the file tree and can be hidden, unless bookmarked or marked `pinned: true`. Everything in `Archive/` is faded.
+- **Decay.** Notes untouched for a set number of days (180 by default, 0 turns it off) fade in the file tree and can be hidden, unless pinned to the top or marked `pinned: true`. Everything in `Archive/` is faded.
 
 ## Trips
 

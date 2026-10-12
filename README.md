@@ -131,7 +131,7 @@ The notes chat calls the ICP LLM canister. Locally, `icp deploy` also deploys `l
 - **Keeping it safe.** Canister snapshots from Manage, restore from zip, automatic top-up from an
   approved allowance, low-cycles alerts, and an optional spawn price the site owner sets.
 - **Offline and mobile.** Installable PWA; the last notebook is cached and offline edits sync
-  later. Canvas boards open read-only. Bookmarks, recent notes, a command palette (⌘⇧P) and graph
+  later. Canvas boards open read-only. Pinned notes and folders, recent notes, a command palette (⌘⇧P) and graph
   filters round it out.
 - **Your data.** Manage → Download notebook gives a zip of every file with its folders and
   attachments, built in the browser with no library.
