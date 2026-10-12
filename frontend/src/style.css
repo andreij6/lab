@@ -637,3 +637,5 @@ body .wsbar, body .topbar { padding-right: 50px; } /* keep the corner clear for 
 @media print { .pdf-meta { display: none; } }
 .career-stats { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 22px; margin: 6px 0 4px; } .career-stats > div { display: flex; flex-direction: column; } .career-stats b { font-size: 1.6rem; line-height: 1.1; } .career-stats span { font-size: .78rem; color: var(--fg-3); }
 .career-bars { width: 280px; max-width: 100%; height: 70px; margin-left: auto; } .career-bars rect { fill: var(--accent); } .career-bars text { fill: var(--fg-3); font-size: 8px; text-anchor: middle; }
+.nb-card .deposit { margin: 4px 0 0; } .nb-card .deposit .row { align-items: center; flex-wrap: wrap; } .nb-card .deposit .small { flex: 1 1 160px; }
+.nb-card .deposit input { flex: 0 0 90px; min-width: 90px; }

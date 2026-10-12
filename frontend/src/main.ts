@@ -203,6 +203,9 @@ const S = {
   asideOpen: store("nb-aside") !== "0",
   newNotebook: "",
   newDesc: "",
+  /** ICP to turn into the new notebook's cycles when it is created */
+  newDeposit: "3",
+  createStep: "",
   notebook: undefined as NotebookRec | undefined,
   notes: undefined as Note[] | undefined,
   folders: [] as string[],
@@ -968,8 +971,10 @@ function notebooksPage(): string {
       }).join("")}
       <form class="nb-card new" data-form="create-notebook">
         <span class="name">${icon("plus")}New notebook</span>
-        <span class="small muted">Spawns a canister with you as owner and controller.${S.price > 0n ? ` Costs ${icp(S.price)} ICP, paid ${useOisy ? "from your OISY wallet (a popup asks you to approve it)" : "from your local account"}.` : ""}</span>
-        <div class="row tight"><input class="input" name="newNotebook" value="${esc(S.newNotebook)}" placeholder="Name" required aria-label="Notebook name"><input class="input" name="newDesc" value="${esc(S.newDesc)}" placeholder="What it is for (optional)" aria-label="Description" style="flex:1 1 100%"><button type="submit" class="btn btn-primary" ${S.busy ? "disabled" : ""}>${S.busy === "create" ? "Spawning…" : "Create"}</button></div>
+        <span class="small muted">Spawns a canister with you as owner and controller.${S.price > 0n ? ` Spawning costs ${icp(S.price)} ICP.` : ""}</span>
+        <div class="row tight"><input class="input" name="newNotebook" value="${esc(S.newNotebook)}" placeholder="Name" required aria-label="Notebook name"><input class="input" name="newDesc" value="${esc(S.newDesc)}" placeholder="What it is for (optional)" aria-label="Description" style="flex:1 1 100%"></div>
+        <label class="field deposit"><span class="label">ICP to keep it running</span><span class="row tight"><input class="input" name="newDeposit" value="${esc(S.newDeposit)}" inputmode="decimal" aria-label="ICP to deposit for cycles" style="max-width:120px"><span class="small muted">becomes the notebook's cycles${useOisy ? "; OISY asks you to approve it" : ""}. 0 to skip; top up any time in Manage.</span></span></label>
+        <div class="row tight"><button type="submit" class="btn btn-primary" ${S.busy ? "disabled" : ""}>${S.busy === "create" ? esc(S.createStep || "Spawning…") : depositLabel()}</button></div>
         ${S.error ? `<span class="small error" role="alert">${esc(S.error)}.</span>` : ""}
       </form></div>`;
   return `<div class="page ${S.mobile ? "" : "has-activity"}">
@@ -3806,27 +3811,47 @@ async function loadNotebooks() {
   render();
 }
 
+/** The deposit typed in the new-notebook card, in e8s; 0 skips it. */
+const depositE8s = () => { const n = Number(S.newDeposit.trim() || "0"); return Number.isFinite(n) && n > 0 ? BigInt(Math.round(n * 1e8)) : 0n; };
+const depositLabel = () => (depositE8s() > 0n ? `Create and deposit ${icp(depositE8s())} ICP` : "Create");
+/** Spawn a notebook and fund it: one approval (OISY's popup, opened straight from the click) covers
+ *  the spawn price and the deposit, then the registry spawns the canister and mints the deposit
+ *  into its cycles. A failed deposit leaves the notebook created; Manage can top it up later. */
 async function createNotebook() {
+  const deposit = depositE8s();
+  const raw = Number(S.newDeposit.trim() || "0");
+  if (!Number.isFinite(raw) || raw < 0) { S.error = "Enter how much ICP to deposit, or 0 to skip"; return render(); }
+  if (deposit > 0n && deposit < 1_000_000n) { S.error = "The smallest deposit is 0.01 ICP (or 0 to skip)"; return render(); }
   S.busy = "create";
   S.error = "";
-  render();
+  const step = (t: string) => { S.createStep = t; render(); };
   try {
-    let r;
-    if (S.price > 0n) {
-      const payer = await approvePayment(Principal.fromText(REGISTRY), S.price + ICP_FEE);
-      r = await registry().create_notebook_paid_by(S.newNotebook.trim(), payer);
-    } else r = await registry().create_notebook(S.newNotebook.trim());
+    let payer: Principal | undefined;
+    const need = (S.price > 0n ? S.price + ICP_FEE : 0n) + (deposit > 0n ? deposit + ICP_FEE : 0n);
+    if (need > 0n) { step(useOisy ? "Approve in OISY…" : "Approving…"); payer = await approvePayment(Principal.fromText(REGISTRY), need); }
+    step("Spawning…");
+    const r = S.price > 0n ? await registry().create_notebook_paid_by(S.newNotebook.trim(), payer!) : await registry().create_notebook(S.newNotebook.trim());
     if (r.__kind__ === "Err") throw new Error(r.Err);
     if (S.newDesc.trim()) { try { await registry().set_notebook_meta(r.Ok.canister, null, S.newDesc.trim()); } catch { /* the card can be edited later */ } }
+    let funded = "";
+    if (deposit > 0n) {
+      step("Adding cycles…");
+      try {
+        const t = await registry().top_up_notebook(r.Ok.canister, deposit, payer && payer.toText() !== S.principal ? payer : null);
+        if (t.__kind__ === "Err") throw new Error(t.Err);
+        funded = ` ${icp(deposit)} ICP became ${tc(t.Ok)} of cycles.`;
+      } catch (e) { funded = ` The deposit did not go through (${errMsg(e)}); top it up from Manage.`; }
+    }
     S.newNotebook = "";
     S.newDesc = "";
-    toast(`Notebook “${r.Ok.name}” is live at ${r.Ok.canister.toText()}.`, "ok");
+    toast(`Notebook “${r.Ok.name}” is live.${funded}`, funded.includes("did not") ? "error" : "ok");
     await loadNotebooks();
     void openNotebook(r.Ok.canister.toText());
   } catch (e) {
     S.error = errMsg(e);
   }
   S.busy = "";
+  S.createStep = "";
   render();
 }
 
@@ -6586,6 +6611,7 @@ document.addEventListener("input", (ev) => {
     case "kbarchive": { S.settings.kanbanArchiveDays = Math.max(0, Number(v) || 0); void saveSettings(); break; }
     case "gpx": { const inp = el as HTMLInputElement; if (inp.files?.[0]) void importGpx(inp.dataset.folder!, inp.files[0]); inp.value = ""; break; }
     case "newDesc": S.newDesc = v; break;
+    case "newDeposit": { S.newDeposit = v; const b = document.querySelector<HTMLButtonElement>('[data-form="create-notebook"] button[type=submit]'); if (b && !S.busy) b.textContent = depositLabel(); break; }
     case "newAgent": S.newAgent = v; break;
     case "topupAmount": S.topupAmount = v; break;
     case "nbsrc": { const ta = el as HTMLTextAreaElement; const p = ta.dataset.path!; const i = Number(ta.dataset.i); ta.rows = Math.max(2, v.split("\n").length); updateNotebook(p, (nb) => { nb.cells[i].source = v; }, false); break; }
