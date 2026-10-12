@@ -154,6 +154,7 @@ A reddit-style board beside the chat (ribbon and top bar). Topics are the commun
 
 - **Pick your tools.** Manage → Notebook → Features turns tabs on or off per notebook: Chat, Graph, Study, Work, Organize, Research, Writing, Care, Software and Trips. Notes and Manage are always there. Turning a tab off only hides it.
 - **A five-step tour** the first time a notebook opens: notes and links, finding and connecting, asking your notes, choosing tools (with presets: Student, Researcher, Writer, Caregiver, Developer, Hiker, Everything), and a finish step that can add a starter note for each tool picked. Replay it from the Features card.
+- **Example notes.** The last onboarding step can add examples for the tools picked: `Examples/Start here.md` links one working example of every note type (note, slides, kanban board, spreadsheet with a chart, dashboard, canvas, drawing, Python notebook, and with Study or Work a flashcard deck, quiz and meeting note), each opening with a How to make one box, plus what each tool's tab reads (an applications board, a source and a thesis, a scene, a care log, a decision record and a runbook, a trip with its gear list, …). Replaying the tour adds only the ones that are missing.
 
 ## Research
 

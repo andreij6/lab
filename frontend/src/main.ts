@@ -21,6 +21,7 @@ import { CITE, answer, cited, decide, excerpt, type Pick } from "./chat";
 import { NEW_BOARD, isKanban, moveCard, parseBoard, serializeBoard, type Board } from "./kanban";
 import { NEW_CARDS, NEW_CHOICE, graded, parseCards, parseChoice, quizKind, shuffled } from "./quiz";
 import { countByDay, dayKey, gridWeeks, level, streak } from "./activity";
+import { examples } from "./examples";
 import { APPLICATIONS_BOARD, EXPERIENCE_TEMPLATE, PERSON_TEMPLATE, RESUME_TEMPLATE, STAGES, STORIES_DECK, addApplication, addDays, applicationCard, applications, compileResume, contacts, experience, isExperience, markContacted, parseStar, searchStats, storyCard, updateApplication, waiting } from "./career";
 import { cardKey, isDue, review as srsReview, type Rating, type Sched } from "./srs";
 import { align, isLeanNote, leanCode, parseLean, statementCard, unmentionedHyps } from "./lean";
@@ -2077,7 +2078,7 @@ function onboarding(step = 0, picked?: Set<Tab>) {
     { title: "Find and connect", body: `<ul><li>Search by words, <code>tag:</code>, <code>folder:</code> or any property such as <code>status:open</code>.</li><li>Tags like <code>#idea</code> collect notes; the tag list sits under the files.</li><li>Organize turns a search into a live view you can save, sort and edit as a table.</li></ul>` },
     { title: "Ask your notes", body: `<ul><li>Chat picks the notes that fit your question and answers from them, citing each claim with a number you can click.</li><li>When your notes do not cover it, the model says so and answers from its own knowledge under a clear label.</li><li>Save any answer as a note in the folder you choose.</li></ul>` },
     { title: "Choose your tools", body: `<p class="muted small">Start from a preset or tick what you need. You can change this any time in Manage → Notebook.</p><div class="row tight wrap">${Object.keys(PRESETS).map((p) => `<button type="button" class="btn btn-ghost" data-preset="${p}">${p}</button>`).join("")}</div><div class="feature-grid nudge">${FEATURES.map((f) => `<label class="feature-opt"><input type="checkbox" data-pick="${f.id}" ${chosen.has(f.id) ? "checked" : ""}><span>${icon(f.icon)}<b>${esc(f.label)}</b><span class="small muted">${esc(f.desc)}</span></span></label>`).join("")}</div>` },
-    { title: "You are set", body: `<p>The ribbon on the left now shows ${[...chosen].map((t) => `<b>${esc(FEATURES.find((f) => f.id === t)?.label ?? t)}</b>`).join(", ") || "just your notes"}.</p><label class="switch"><input type="checkbox" data-starters checked> Add a starter note for each tool I picked</label><p class="small muted nudge">Change the tools in Manage → Notebook → Features, where you can also replay this tour.</p>` },
+    { title: "You are set", body: `<p>The ribbon on the left now shows ${[...chosen].map((t) => `<b>${esc(FEATURES.find((f) => f.id === t)?.label ?? t)}</b>`).join(", ") || "just your notes"}.</p><label class="switch"><input type="checkbox" data-starters checked> Add example notes that show how to make each kind of note</label><p class="small muted nudge">Change the tools in Manage → Notebook → Features, where you can also replay this tour.</p>` },
   ];
   const s = steps[step];
   const el = document.createElement("div");
@@ -2105,20 +2106,23 @@ function onboarding(step = 0, picked?: Set<Tab>) {
   });
   document.body.append(el);
 }
-/** One example note per kit, so each tab has something to show. */
+/** Example notes for the chosen tools (examples.ts): one of every note type, each saying how to make
+ *  one, plus what each tool's tab reads. Written in one batch; existing paths are left alone. */
 async function addStarters(chosen: Set<Tab>) {
-  const today = new Date().toISOString().slice(0, 10);
-  if (chosen.has("research")) { const [s] = parseBibtex("@article{doe2024example, author = {Doe, Jane}, title = {An example source}, journal = {Journal of Examples}, year = {2024}}"); await createQuiet(`Sources/${s.key}.md`, sourceNote(s)); await createQuiet("Research/Draft.md", `# Draft\n\nClaim:: Examples help people learn [@doe2024example]\n\nClaim:: This one has no evidence yet\n`); }
-  if (chosen.has("writing")) { await createQuiet("Manuscript/Opening.md", `---\ntype: scene\nchapter: Chapter 1\norder: 1\npov: \ndate: Day 1\n---\n# Opening\n\nWrite the first scene here.\n`); await createQuiet("Bible/Main character.md", `---\ntype: character\neyes: \nhair: \nage: \n---\n# Main character\n\n`); }
-  if (chosen.has("care")) { await createQuiet("Care/Log.sheet", careWorkbook()); await createQuiet("Care/Diary.md", `# Diary\n\nQ:: A question for the next appointment\n`); }
-  if (chosen.has("software")) { await createQuiet(`Decisions/${nextAdr(paths())} Record decisions.md`, adrTemplate(nextAdr(paths()), "Record decisions")); }
-  if (chosen.has("career")) {
-    if (!note(CAREER_BOARD)) await createQuiet(CAREER_BOARD, addApplication(APPLICATIONS_BOARD, "[[Example company]] · The role you want", "Saved"));
-    if (!paths().some((p) => p.startsWith("Career/Experience/"))) await createQuiet("Career/Experience/Your current role.md", EXPERIENCE_TEMPLATE("Your current role", "Company", today.slice(0, 4)));
-    if (!note(CAREER_DECK)) await createQuiet(CAREER_DECK, STORIES_DECK);
-  }
-  if (chosen.has("trips") && !paths().some((p) => p.startsWith("Trips/"))) await createQuiet("Trips/First trip/Plan.md", fillTemplate(TRIP_TEMPLATE, { title: "First trip" }));
-  if (chosen.has("organize") && !note("Inbox/Welcome.md")) await createQuiet("Inbox/Welcome.md", `# Welcome\n\nThis note is in your inbox. Triage it from Organize: file it, tag it or archive it.\n\ncreated: ${today}\n`);
+  const have = new Set(paths());
+  const files = examples(new Set(chosen), dayKey(new Date())).filter(([p]) => !have.has(p));
+  if (!files.length) return;
+  try {
+    if (S.offline) { for (const [p, c] of files) await createQuiet(p, c); }
+    else {
+      const r = await nb().write_many(files, false);
+      if (r.__kind__ === "Err") throw new Error(describe(r.Err));
+      await loadNotebook();
+    }
+    toast(`Added ${files.length} example note${files.length === 1 ? "" : "s"}. Start with “Start here” in Examples/.`, "ok");
+    S.tab = "notes";
+    await open("Examples/Start here.md");
+  } catch (e) { toast(`Could not add the examples: ${errMsg(e)}`, "error"); }
 }
 
 // --- the Research kit
