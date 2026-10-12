@@ -724,9 +724,9 @@ function contextMenu(x: number, y: number, head: string, items: MenuItem[]) {
     if (it !== "-") it.action();
   });
   document.body.append(m);
-  const r = m.getBoundingClientRect();
-  m.style.left = `${Math.max(4, Math.min(x, innerWidth - r.width - 8))}px`;
-  m.style.top = `${Math.max(4, Math.min(y, innerHeight - r.height - 8))}px`;
+  // offset sizes, not getBoundingClientRect: the opening animation scales the menu down, which made it measure short and open off-screen
+  m.style.left = `${Math.max(4, Math.min(x, innerWidth - m.offsetWidth - 8))}px`;
+  m.style.top = `${Math.max(4, Math.min(y, innerHeight - m.offsetHeight - 8))}px`;
   m.querySelector<HTMLElement>("button")?.focus();
 }
 function closeMenu() {
@@ -886,7 +886,7 @@ function routeSheet(el: HTMLElement) {
   const extras: R[] = [
     ...(inNb ? [{ label: "Search or open a note", icon: "search", on: false, go: () => openPalette() } as R] : []),
     { label: "Help and support", icon: "help", on: false, go: () => void onAction("help", el, new MouseEvent("click")) },
-    { label: "Appearance", icon: "palette", on: false, go: () => void onAction("theme-menu", el, new MouseEvent("click")) },
+    ...(themeAllowed() ? [{ label: "Appearance", icon: "palette", on: false, go: () => void onAction("theme-menu", el, new MouseEvent("click")) } as R] : []),
     { label: "Sign out", icon: "out", on: false, go: () => void onAction("sign-out", el, new MouseEvent("click")) },
   ];
   const sheet = document.createElement("div");
@@ -918,12 +918,14 @@ function moreMenu(el: HTMLElement) {
   if (!S.market && flag("market")) items.push({ label: "Notebook market", icon: "tag", action: go("#/market") });
   if (!S.board) items.push({ label: "Board", icon: "pin", action: go("#/board") });
   if (S.isAdmin && !S.admin) items.push({ label: "Admin · reports and ideas", icon: "bug", action: go("#/admin") });
-  items.push("-", { label: "Help and support", icon: "help", action: () => void onAction("help", el, new MouseEvent("click")) }, { label: "Appearance", icon: "palette", action: () => void onAction("theme-menu", el, new MouseEvent("click")) }, "-", { label: "Sign out", icon: "out", action: () => void onAction("sign-out", el, new MouseEvent("click")) });
+  items.push("-", { label: "Help and support", icon: "help", action: () => void onAction("help", el, new MouseEvent("click")) }, ...(themeAllowed() ? [{ label: "Appearance", icon: "palette", action: () => void onAction("theme-menu", el, new MouseEvent("click")) } as MenuItem] : []), "-", { label: "Sign out", icon: "out", action: () => void onAction("sign-out", el, new MouseEvent("click")) });
   contextMenu(Math.max(8, r.right - 220), r.bottom + 4, "", items);
 }
 /** Where a page sits in the app: back to the open notebook and to the list (desktop; phones use the ⋯ menu). */
 const pageNav = () => S.mobile ? "" : `${S.notebook ? `<a class="btn btn-ghost" href="#/notebook/${S.notebook.canister.toText()}" data-action="nav">${icon("links")}<span class="lbl">Back to “${esc(S.notebook.name)}”</span></a>` : ""}<a class="btn btn-ghost" href="#/" data-action="nav">${icon("list")}<span class="lbl">Your notebooks</span></a>`;
-const themeBtn = () => S.mobile ? moreBtn() : `${S.community ? "" : `<a class="btn btn-ghost" href="#/community" data-action="nav" title="Community chat">${icon("users")}<span class="lbl">Community</span></a>`}${S.board || !flag("board") ? "" : `<a class="btn btn-ghost" href="#/board" data-action="nav" title="Posts and discussion">${icon("pin")}<span class="lbl">Board</span></a>`}${S.market || !flag("market") ? "" : `<a class="btn btn-ghost" href="#/market" data-action="nav" title="Notebooks for sale">${icon("tag")}<span class="lbl">Market</span></a>`}${S.isAdmin ? `<a class="btn btn-ghost" href="#/admin" data-action="nav" title="Reports and ideas">${icon("bug")}<span class="lbl">Admin</span></a>` : ""}<button type="button" class="btn btn-ghost icon-btn" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="btn btn-ghost icon-btn" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon(S.theme.mode === "dark" ? "moon" : "sun")}</button>`;
+/** The appearance can be changed on the notebook, chat and board pages only. */
+const themeAllowed = () => !!S.community || !!S.board || (!!S.notebook && !S.market && !S.admin && !S.shared);
+const themeBtn = () => S.mobile ? moreBtn() : `${S.community ? "" : `<a class="btn btn-ghost" href="#/community" data-action="nav" title="Community chat">${icon("users")}<span class="lbl">Community</span></a>`}${S.board || !flag("board") ? "" : `<a class="btn btn-ghost" href="#/board" data-action="nav" title="Posts and discussion">${icon("pin")}<span class="lbl">Board</span></a>`}${S.market || !flag("market") ? "" : `<a class="btn btn-ghost" href="#/market" data-action="nav" title="Notebooks for sale">${icon("tag")}<span class="lbl">Market</span></a>`}${S.isAdmin ? `<a class="btn btn-ghost" href="#/admin" data-action="nav" title="Reports and ideas">${icon("bug")}<span class="lbl">Admin</span></a>` : ""}<button type="button" class="btn btn-ghost icon-btn" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button>${themeAllowed() ? `<button type="button" class="btn btn-ghost icon-btn" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon(S.theme.mode === "dark" ? "moon" : "sun")}</button>` : ""}`;
 const account = () => `<footer class="account">${icon("shield")}<span>Signed in as <code class="principal" title="${S.principal}">${shortPrincipal(S.principal)}</code></span><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="copy-principal">${S.copied === "principal" ? "Copied" : "Copy principal"}</button><button type="button" class="btn btn-ghost" data-action="sign-out">Sign out</button></span></footer>`;
 
 function landing(): string {
@@ -5674,6 +5676,7 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
     case "sign-out":
       return signOut();
     case "theme-menu": {
+      if (!themeAllowed()) return;
       const r = el.getBoundingClientRect();
       return themeMenu(r.right - 200, r.bottom + 4);
     }
