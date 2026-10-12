@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Lab: Bring your Obsidian notes</title>
+<link rel="stylesheet" href="../shared/base.css">
+<style>
+  .wbody { display: grid; grid-template-columns: 300px 1fr; }
+  .side { position: relative; background: var(--bg-2); border-right: 1px solid var(--line); padding: 16px 12px; }
+  .side .pt { font-size: 13px; font-weight: 800; color: var(--fg-3); letter-spacing: .08em; text-transform: uppercase; margin: 2px 8px 10px; }
+  #empty { position: absolute; inset: 56px 16px 16px; border: 2px dashed var(--line); border-radius: 16px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; text-align: center; color: var(--fg-3); font-size: 18px; padding: 20px; }
+  #empty svg { width: 40px; height: 40px; }
+  #empty.over { border-color: var(--accent); background: var(--accent-dim); color: var(--accent-2); }
+  .row { display: flex; align-items: center; gap: 9px; height: 36px; padding: 0 10px; border-radius: 9px; font-size: 18px; color: var(--fg-2); white-space: nowrap; }
+  .row svg { width: 18px; height: 18px; color: var(--fg-3); } .row.dir svg { color: var(--gold); } .row.sub { padding-left: 34px; }
+  .row.on { background: var(--accent-dim); color: var(--fg); } .row .n { margin-left: auto; font-size: 14px; color: var(--fg-3); }
+  .main { position: relative; padding: 30px 36px; }
+  #welcome { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; color: var(--fg-3); font-size: 20px; text-align: center; }
+  #welcome b { color: var(--fg); font-size: 28px; }
+  #note { position: absolute; inset: 30px 36px; }
+  #note .path { font-family: var(--mono); font-size: 14px; color: var(--fg-3); margin-bottom: 8px; }
+  #note h1 { font-size: 36px; letter-spacing: -.02em; margin-bottom: 14px; }
+  #note p { font-size: 19px; line-height: 1.6; color: var(--fg-2); margin-bottom: 12px; }
+  .wl { color: var(--accent-2); border-bottom: 1px solid hsl(212 86% 70% / .4); }
+  .tag { display: inline-flex; padding: 1px 10px; border-radius: 999px; background: hsl(270 70% 60% / .18); color: hsl(270 80% 78%); font-size: 16px; font-weight: 600; }
+  .callout { border-left: 4px solid #38bdf8; background: hsl(199 89% 48% / .10); border-radius: 10px; padding: 12px 16px; margin: 6px 0 14px; font-size: 18px; color: var(--fg-2); }
+  .callout b { color: #7dd3fc; display: block; margin-bottom: 4px; font-size: 17px; }
+  .task { display: flex; align-items: center; gap: 10px; font-size: 18px; color: var(--fg-2); margin: 6px 0; }
+  .task i { width: 18px; height: 18px; border-radius: 5px; border: 2px solid var(--fg-3); display: grid; place-items: center; } .task i.x { background: var(--accent); border-color: var(--accent); }
+  .task i svg { width: 12px; height: 12px; stroke: #fff; stroke-width: 3; }
+  #back { position: absolute; right: 0; bottom: 0; width: 290px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }
+  #back .pt { font-size: 13px; font-weight: 800; color: var(--fg-3); letter-spacing: .08em; text-transform: uppercase; margin-bottom: 8px; }
+  #back div.l { font-size: 16px; color: var(--accent-2); margin: 6px 0; } #back small { display: block; color: var(--fg-3); font-size: 14px; }
+  #folder { width: 330px; background: var(--bg-3); border: 1px solid hsl(48 96% 60% / .45); border-radius: 16px; padding: 14px 16px; box-shadow: 0 30px 80px rgba(0,0,0,.6); z-index: 20; }
+  #folder .h { display: flex; align-items: center; gap: 12px; font-size: 20px; font-weight: 700; } #folder .h svg { width: 34px; height: 34px; color: var(--gold); }
+  #folder .h small { display: block; font-size: 14px; color: var(--fg-3); font-weight: 500; }
+  #folder ul { list-style: none; margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; } #folder li { font-size: 15px; color: var(--fg-2); } #folder li.dim { color: var(--fg-3); text-decoration: line-through; }
+  #toast { left: 400px; top: 820px; width: 560px; background: var(--bg-3); border: 1px solid var(--line); border-radius: 14px; padding: 14px 18px; box-shadow: 0 20px 60px rgba(0,0,0,.5); z-index: 15; }
+  #toast b { font-size: 18px; } #toast small { display: block; color: var(--fg-3); font-size: 15px; margin-top: 4px; }
+  #toast .bar2 { height: 8px; border-radius: 99px; background: var(--bg-1); margin-top: 10px; overflow: hidden; } #toast .bar2 i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), #38bdf8); }
+  #toast.done { border-color: hsl(142 70% 55% / .5); } #toast.done b { color: var(--ok); }
+  #tag { left: 0; right: 0; bottom: 40px; text-align: center; font-size: 30px; font-weight: 700; letter-spacing: -.01em; } #tag em { font-style: normal; color: var(--accent-2); }
+</style></head>
+<body><div id="stage">
+  <div class="win abs">
+    <div class="bar"><i></i><i></i><i></i><b>Lab <em>/ My notes</em></b></div>
+    <div class="wbody">
+      <div class="side"><div class="pt">Files</div><div id="tree"></div>
+        <div id="empty"><svg class="i"><use href="#i-folder"/></svg><span id="emptyText">Empty notebook.<br>Drop your Obsidian folder here.</span></div></div>
+      <div class="main">
+        <div id="welcome"><b>A new notebook</b>Its own canister, owned by you.</div>
+        <div id="note">
+          <div class="path">Projects/Thesis.md</div>
+          <h1>Thesis</h1>
+          <p>Sleep and recall, building on <span class="wl">Spaced repetition</span> and <span class="wl">Ada's study</span>. <span class="tag">#research</span> <span class="tag">#sleep</span></p>
+          <div class="callout"><b>ⓘ Tip</b>Every [[link]], #tag, callout and task came across as it was.</div>
+          <div class="task"><i class="x"><svg class="i"><use href="#i-check"/></svg></i>Read the 2024 meta-analysis</div>
+          <div class="task"><i></i>Draft chapter two 📅 Nov 3</div>
+          <div id="back"><div class="pt">Linked from</div><div class="l">Daily/2026-10-01<small>…talked to Ada about the thesis…</small></div><div class="l">People/Ada<small>…co-author on the sleep study…</small></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div id="folder" class="abs"><div class="h"><svg class="i"><use href="#i-folder"/></svg><div>My notes<small>Obsidian · 248 notes, 31 attachments</small></div></div>
+    <ul><li>Daily/</li><li>Projects/</li><li>People/</li><li>Reading/</li><li>Attachments/</li><li class="dim">.obsidian/</li></ul></div>
+  <div id="toast" class="abs"><b id="tt"></b><small id="ts"></small><div class="bar2"><i id="tp"></i></div></div>
+  <div id="tag" class="abs">Your Obsidian notes, <em>now on-chain</em>.</div>
+</div>
+<script src="../shared/base.js"></script>
+<script>
+const { $, seg, ease, inout, pop, show, icon, cursor, at, run, cards } = Promo;
+cards({ title: "Bring your Obsidian notes.", subtitle: "Drop the folder in. Links, tags and all.", heading: "Bring your Obsidian notes" });
+// the tree that fills in after the drop: [label, is folder, count, indent, appears at]
+const TREE = [["Daily", 1, 92, 0], ["People", 1, 24, 0], ["Projects", 1, 18, 0], ["Thesis.md", 0, 0, 1], ["Lab notebook.md", 0, 0, 1], ["Reading", 1, 83, 0], ["Attachments", 1, 31, 0], ["Spaced repetition.md", 0, 0, 0], ["index.md", 0, 0, 0]];
+function scene(t) {
+  // the folder appears outside the window, gets dragged onto the file pane, and drops
+  const fIn = ease(seg(t, 3.0, 3.4));
+  const drag = inout(seg(t, 3.9, 5.0));
+  const [ex, ey] = at("#empty");
+  const sx = 560, sy = 300;
+  // it lands low in the pane so "Drop to import" stays readable above it
+  const fx = sx + (ex - 165 - sx) * drag, fy = sy + (ey + 90 - sy) * drag;
+  $("folder").style.left = `${fx}px`; $("folder").style.top = `${fy}px`;
+  const drop = seg(t, 5.0, 5.3);
+  show($("folder"), fIn * (1 - ease(drop)), 0, (1 + (drag > 0 && drag < 1 ? .04 : 0)) * (1 - ease(drop) * .5));
+  $("empty").classList.toggle("over", drag > .55 && t < 5.15);
+  $("emptyText").innerHTML = drag > .55 && t < 5.15 ? "Drop to import" : "Empty notebook.<br>Drop your Obsidian folder here.";
+  // importing: batches go up, the settings folder is skipped
+  const imp = seg(t, 5.2, 7.2);
+  show($("empty"), 1 - ease(seg(t, 5.2, 5.5)));
+  const done = t >= 7.2;
+  $("toast").className = `abs${done ? " done" : ""}`;
+  $("tt").textContent = done ? "Imported 248 notes and 31 attachments" : `Importing… ${Math.round(imp * 279)} of 279 files`;
+  $("ts").textContent = done ? "Links, tags, callouts and tasks work as they did in Obsidian" : "Uploading in batches · skipping .obsidian/ settings";
+  $("tp").style.width = `${imp * 100}%`;
+  show($("toast"), ease(seg(t, 5.2, 5.5)) * (1 - ease(seg(t, 9.0, 9.4))), (1 - ease(seg(t, 5.2, 5.5))) * 20);
+  // the tree fills, one row after another
+  const open = t >= 8.6;
+  $("tree").innerHTML = TREE.map(([label, dir, n, ind], i) => {
+    const a = 6.0 + i * .14, p = ease(seg(t, a, a + .3));
+    if (p <= 0) return "";
+    const on = !dir && label === "Thesis.md" && open;
+    return `<div class="row${dir ? " dir" : ""}${ind ? " sub" : ""}${on ? " on" : ""}" id="r${i}" style="opacity:${p};transform:translateX(${(1 - p) * -14}px)">${icon(dir ? "folder" : "file")}${label.replace(/\.md$/, "")}${dir ? `<span class="n">${n}</span>` : ""}</div>`;
+  }).join("");
+  // open the thesis: its links, tags, callout, tasks and backlinks came across
+  show($("welcome"), 1 - ease(seg(t, 8.4, 8.7)));
+  const nt = ease(seg(t, 8.6, 9.0));
+  show($("note"), nt, (1 - nt) * 14);
+  document.querySelectorAll("#note .wl").forEach((el, i) => { el.style.background = t >= 9.6 + i * .25 && t < 10.4 + i * .25 ? "hsl(212 86% 60% / .22)" : "transparent"; });
+  const b = ease(seg(t, 10.3, 10.7));
+  show($("back"), b, (1 - b) * 16);
+  // the cursor: grab the folder, drop it, open Thesis
+  // held by its folder icon, so the name stays readable
+  const keys = [[3.5, 720, 330], [3.9, sx + 22, sy + 16], [5.0, ex - 165 + 22, ey + 90 + 16]];
+  if (t >= 8.0) { const r3 = $("r3"); if (r3) keys.push([8.0, ex - 40, ey + 40], [8.5, ...at(r3)]); }
+  cursor(t, keys, [3.9, 8.5]);
+  const tg = ease(seg(t, 11.6, 12.0));
+  show($("tag"), tg * (1 - ease(seg(t, 12.95, 13.2))), (1 - tg) * 12);
+}
+run(15, scene);
+</script></body></html>

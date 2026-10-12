@@ -12,6 +12,7 @@ Scenes share `shared/base.css` and `shared/base.js` (palette, title and end card
 | `get-feedback` | a note shared in #general, replies, reactions |
 | `learn-what-you-wrote` | highlights becoming flashcards, Again/Hard/Good/Easy reviews, the streak |
 | `fits-how-you-work` | onboarding presets, the ribbon reshaping, Research, Trips and Study |
+| `bring-your-obsidian-notes` | an Obsidian folder dropped on an empty notebook, the import skipping `.obsidian/`, the tree filling, a note with its links, tags, callout, tasks and backlinks |
 
 `promo/build.sh` renders and encodes every scene, or just the ones you name.
 
