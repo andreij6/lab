@@ -629,3 +629,11 @@ body .wsbar, body .topbar { padding-right: 50px; } /* keep the corner clear for 
 .danger-zone { border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); } .danger-zone h2 { color: var(--danger); }
 .compose-box .join-chat { flex: 1; justify-content: center; padding: 10px; color: var(--accent-2); }
 .chan-sec { display: flex; align-items: center; gap: 4px; border: 0; background: transparent; color: var(--fg-3); font-size: .72rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; padding: 12px 4px 4px; cursor: pointer; text-align: left; } .chan-sec:first-child { padding-top: 4px; } .chan-sec:hover { color: var(--fg-2); } .chan-sec .ico { width: 12px; height: 12px; } .chan-sec .unread { margin-left: auto; background: var(--danger); color: #fff; border-radius: 999px; padding: 0 6px; font-size: .7rem; letter-spacing: 0; }
+.pdf-embed { margin: 14px 0; border: 1px solid var(--line); border-radius: var(--r); background: var(--bg-1); overflow: hidden; }
+.pdf-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: .9rem; } .pdf-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1 1 160px; }
+.pdf-meta { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; color: var(--fg-3); font-size: .82rem; } .pdf-meta .btn { padding: 4px 8px; font-size: .82rem; }
+.pdf-body { display: flex; flex-direction: column; gap: 10px; padding: 12px; align-items: center; } .pdf-body .btn { align-self: center; }
+.pdf-page { width: 100%; max-width: 900px; border-radius: 4px; box-shadow: 0 2px 10px rgba(0,0,0,.25); background: #fff; }
+@media print { .pdf-meta { display: none; } }
+.career-stats { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 22px; margin: 6px 0 4px; } .career-stats > div { display: flex; flex-direction: column; } .career-stats b { font-size: 1.6rem; line-height: 1.1; } .career-stats span { font-size: .78rem; color: var(--fg-3); }
+.career-bars { width: 280px; max-width: 100%; height: 70px; margin-left: auto; } .career-bars rect { fill: var(--accent); } .career-bars text { fill: var(--fg-3); font-size: 8px; text-anchor: middle; }

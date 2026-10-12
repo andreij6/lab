@@ -70,6 +70,16 @@ const CALLOUTS: Record<string, [string, string]> = {
 
 let cur: RenderCtx = { resolve: () => undefined, note: () => undefined, attachment: () => undefined };
 
+/** A PDF viewer placeholder; the app fetches and draws its pages after render. `src` is an https
+ *  link (fetched by the notebook) or a path to a PDF saved in this notebook. */
+export function pdfHtml(src: string, label?: string): string {
+  const url = /^https:\/\//i.test(src);
+  const name = label || decodeURIComponent(src.split(/[?#]/)[0].split("/").pop() || src);
+  return `<div class="pdf-embed" ${url ? `data-pdf-url="${esc(src)}"` : `data-pdf-attach="${esc(src)}"`}><div class="pdf-head"><span class="pdf-name">📄 ${esc(name)}</span><span class="pdf-meta"></span></div><div class="pdf-body"><span class="small muted">Loading…</span></div></div>`;
+}
+/** Links an embed should show as a document, not an image: .pdf files and arXiv's /pdf/ links. */
+export const isPdfLink = (href: string) => /^https:\/\/\S+?(\.pdf(?:[?#]\S*)?$|\/pdf\/\S+$)/i.test(href);
+
 function attachmentHtml(path: string, alt: string, width?: string): string {
   const dest = cur.resolve(path) ?? path;
   const data = cur.attachment(dest);
@@ -77,10 +87,16 @@ function attachmentHtml(path: string, alt: string, width?: string): string {
   if (IMAGE_EXT.test(dest)) return data ? `<img class="embed-img" src="${data}" alt="${esc(alt || base(dest))}"${w}>` : `<span class="attach-pending" data-attach="${esc(dest)}">${esc(base(dest))}…</span>`;
   if (AUDIO_EXT.test(dest)) return data ? `<audio controls src="${data}"></audio>` : `<span class="attach-pending" data-attach="${esc(dest)}">${esc(base(dest))}…</span>`;
   if (VIDEO_EXT.test(dest)) return data ? `<video controls src="${data}"${w}></video>` : `<span class="attach-pending" data-attach="${esc(dest)}">${esc(base(dest))}…</span>`;
+  if (/\.pdf$/i.test(dest)) return pdfHtml(dest, alt);
   return `<a href="#" class="wikilink attach-link" data-action="attach-open" data-target="${esc(dest)}">${esc(alt || dest.split("/").pop()!)}</a>`;
 }
 
 function embedHtml(target: string, heading: string, alias: string): string {
+  // `![[https://…]]`: an image by its extension, anything else is treated as a document (PDF)
+  if (/^https:\/\//i.test(target)) {
+    const url = heading ? `${target}#${heading}` : target;
+    return IMAGE_EXT.test(url.split(/[?#]/)[0]) ? `<img src="${esc(url)}" alt="${esc(alias || "")}">` : pdfHtml(url, alias);
+  }
   const dest = cur.resolve(target);
   if (dest && isAttachment(dest)) return attachmentHtml(dest, "", /^\d+$/.test(alias) ? alias : undefined);
   if (dest && isExcalidraw(dest, cur.note(dest))) return `<div class="excalidraw-embed" data-excalidraw-embed="${esc(dest)}"${/^\d+$/.test(alias) ? ` style="max-width:${Number(alias)}px"` : ""}><span class="attach-pending">${esc(base(dest))}…</span></div>`;
@@ -192,6 +208,7 @@ const md = new Marked(
         return `<a href="#" class="wikilink${dest ? "" : " unresolved"}" data-action="wiki" data-target="${esc(target)}${h ? `#${esc(h)}` : ""}"${t}>${text}</a>`;
       },
       image({ href, text, title }: Tokens.Image) {
+        if (isPdfLink(href)) return pdfHtml(href, text);
         if (/^(https?:|data:)/i.test(href)) return `<img src="${esc(href)}" alt="${esc(text)}"${title ? ` title="${esc(title)}"` : ""}>`;
         return attachmentHtml(decodeURIComponent(href.replace(/^\.\//, "")), text);
       },

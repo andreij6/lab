@@ -179,6 +179,23 @@ Personal notes for keeping track and preparing conversations with clinicians, no
 - **Appointments and questions.** Write `Q::` in any note as questions come up. Prepare the summary builds one page with medicines taken, symptoms with average and worst severity, and the open questions since the last appointment.
 - **Care team.** Share the Care folder read-only, and set a daily check-in: if it is missed, the person chosen gets an alert anywhere in Lab (the same mechanism as trip check-ins).
 
+## Career
+
+For working professionals looking for a new job; turn it on in Manage → Notebook → Features or pick the Job seeker preset.
+
+- **Applications board.** `Career/Applications.md` is a Kanban board with Saved, Applied, Screen, Interview, Offer and Closed lanes. Adding an application makes its card and a company dossier note; the card's follow-up date (ten days out) shows in Work like any task.
+- **Waiting for a reply.** Applications 10+ days in Applied with no later follow-up are listed with Followed up (check again in a week) and Heard back (move to Screen).
+- **Weekly review.** Sent this week and in all, how many heard back, how many reached an interview, offers, and a bar per week for the last eight.
+- **Experience bank and résumés.** One note per role or accomplishment (`type: experience`, role, company, dates, skills, bullets). A résumé note lists the ones to include; compiling expands them into one document with a Skills line, to download as Word or Markdown or print to PDF.
+- **Interview stories.** Each story is a flashcard: the question on the front, situation, task, action and result on the back, in `Career/Interview stories.md`; Study schedules them like any deck.
+- **Networking follow-ups.** Person notes with `last_contacted`, `next_follow_up` and `referral_for`; someone comes due on their follow-up date or after a month of quiet, and Contacted today pushes the next follow-up two weeks out.
+- **#careers.** A community channel for résumé reviews, interview practice and job leads; Get feedback compiles a résumé and shares a snapshot there.
+
+## Documents from the web
+
+- **PDF embeds.** `![[https://….pdf]]` or `![title](https://….pdf)` (arXiv `/pdf/` links too) shows the pages in the note. The browser fetches it when the site allows; otherwise the notebook does, over HTTPS, following up to three redirects, up to 1.9 MB, paying a few cycles. Fetched PDFs stay on this device, so they open instantly and offline afterwards. The first three pages show; Show all draws the rest.
+- **Save a copy.** Keeps a PDF of up to 700 KB in the notebook next to the note, with one searchable note per page, and points the embed at the copy. PDFs already in the notebook (`![[paper.pdf]]`) show the same way. In community snapshots an embed shows only as its title.
+
 ## Software
 
 - **Decision records.** ADR-0001 onwards with status (proposed, accepted, superseded, deprecated, rejected), supersedes links that mark the old one superseded, and a small graph of what replaced what.

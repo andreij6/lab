@@ -23,7 +23,8 @@ CYC=$(icp canister call registry stats '()' --query | grep -o 'cycles = [0-9_]*'
 expect() {
   local d=$1 want=$2; shift 2
   local out; out=$("$@" 2>&1 || true)
-  if printf '%s' "$out" | grep -qF -- "$want"; then echo "  ok: $d"; PASS=$((PASS+1)); else echo "FAIL: $d"; echo "  wanted: $want"; echo "  got: $(printf '%s' "$out" | tr -s ' \n' ' ' | head -c 600)"; exit 1; fi
+  # not grep -q: it exits at the first match and, with pipefail, printf's SIGPIPE on a big output fails the check
+  if printf '%s' "$out" | grep -F -- "$want" >/dev/null; then echo "  ok: $d"; PASS=$((PASS+1)); else echo "FAIL: $d"; echo "  wanted: $want"; echo "  got: $(printf '%s' "$out" | tr -s ' \n' ' ' | head -c 600)"; exit 1; fi
 }
 reg() { icp canister call registry "$@" --identity "$OWNER"; }
 # an ICRC-2 approval to the registry's subaccount for one caller (how OISY approves for a sign-in)
@@ -389,6 +390,7 @@ expect "a short message costs a few million cycles" "_" icp canister call regist
 icp token transfer 1 "$OTHERP" -q >/dev/null; icp token approve 0.5 "$(icp canister status registry -i)" --identity "$OTHER" -q >/dev/null; icp token approve 0.5 "$(icp canister status registry -i)" -q >/dev/null
 SUF=$(date +%s | tail -c 5)
 expect "six channels exist" "general" icp canister call registry channels '()' --query
+expect "#careers is seeded for the Career kit" 'name = "careers"; section = opt "Lab"' icp canister call registry channels '()' --query
 expect "the built-in channels sit in sections" 'section = opt "Lab"' icp canister call registry channels '()' --query
 expect "only admins move channels between sections" "admin only" reg set_channel_section '("help", opt "Support")'
 expect "an admin moves one" 'section = opt "Support"' icp canister call registry set_channel_section '("help", opt "Support")'
@@ -575,6 +577,11 @@ expect "the buyer gives it back with icrc7_transfer" "Ok" icp canister call regi
 expect "the original owner reads again" "journal" notebook read '("Daily/2026-10-10.md")' --query
 expect "a market fee needs the controller" "controller only" reg set_market_fee '(100)'
 
+echo "== documents from the web: the notebook fetches a public PDF for its owner"
+expect "a stranger cannot make the notebook fetch" "Unauthorized" icp canister call "$V" fetch_url '("https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf")' --identity "$OTHER"
+expect "only https links" "only https" notebook fetch_url '("http://example.com/x.pdf")'
+expect "a public PDF comes back as bytes" '\25\50\44\46' notebook fetch_url '("https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf")'
+expect "redirects are followed" 'url = "https://raw.githubusercontent.com/' notebook fetch_url '("https://github.com/mozilla/pdf.js/raw/master/web/compressed.tracemonkey-pldi-09.pdf")'
 echo "== upgrade all notebooks from the registry (controller only)"
 expect "a stranger cannot upgrade" "controller only" reg upgrade_notebooks '()'
 N=$(icp canister call registry stats '()' --query | grep -o 'notebooks = [0-9_]*' | tr -d 'notebooks =_')

@@ -25,7 +25,7 @@ evidence pointers, are in [`docs/REVERSE_ENGINEERING.md`](docs/REVERSE_ENGINEERI
 | List editing (Enter continues items, Tab indents, task toggles), dependency-free ZIP writer and reader, all tested | [`editor.ts`](frontend/src/editor.ts), [`zip.ts`](frontend/src/zip.ts), [`unzip.ts`](frontend/src/unzip.ts) |
 | Themes on Obsidian variable names: Velocity (default), Nord, Gruvbox, Red Graphite, custom CSS | [`themes.ts`](frontend/src/themes.ts) |
 | The skill an agent installs (API URL, key and notebook filled in by Manage → Agents) | [`frontend/public/skill.md`](frontend/public/skill.md) |
-| Candid + HTTP end-to-end on the local network (408 hard checks) | [`scripts/e2e_local.sh`](scripts/e2e_local.sh) |
+| Candid + HTTP end-to-end on the local network (413 hard checks) | [`scripts/e2e_local.sh`](scripts/e2e_local.sh) |
 | What REA observed in Obsidian and what the rebuild keeps | [`docs/REVERSE_ENGINEERING.md`](docs/REVERSE_ENGINEERING.md) |
 
 

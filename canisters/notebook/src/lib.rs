@@ -852,6 +852,76 @@ fn transfer_owner(new_owner: Principal) -> Result<(), NotebookError> {
     Ok(())
 }
 
+// ---------------------------------------------------------------- documents from the web
+
+/// A public document fetched for the owner to view: where it ended up, what the site said it is,
+/// and its bytes. Nothing is stored; the app keeps a copy only when the owner saves one.
+#[derive(CandidType, Deserialize, Clone, Debug)]
+pub struct Fetched {
+    pub url: String,
+    pub content_type: String,
+    pub bytes: Vec<u8>,
+}
+
+/// Replies carry at most 2 MiB, so the document must fit under that with room to spare.
+const MAX_FETCH: u64 = 1_900_000;
+
+/// Fetch a public document (a PDF linked from a note) over HTTPS, following up to three
+/// redirects. Owner only; the notebook pays for the outcall in cycles.
+#[update]
+async fn fetch_url(url: String) -> Result<Fetched, NotebookError> {
+    owner()?;
+    let mut url = url.trim().to_string();
+    for _ in 0..4 {
+        if !url.starts_with("https://") || url.len() > 2048 || url.contains(char::is_whitespace) {
+            return Err(NotebookError::Invalid("only https:// links can be fetched".into()));
+        }
+        let r = ic_cdk_management_canister::HttpRequest::new(url.clone())
+            .with_max_response_bytes(MAX_FETCH)
+            .with_header("User-Agent", "lab-notebook")
+            .with_transform(ic_cdk_management_canister::transform_context_from_query("transform_fetch".into(), vec![]))
+            .send()
+            .await
+            .map_err(|e| {
+                let e = e.to_string();
+                NotebookError::Invalid(if e.contains("size limit") { "it is over 1.9 MB, more than a notebook can fetch; download it and import it instead".into() } else { format!("could not fetch it: {e}") })
+            })?;
+        let status: u32 = r.status.0.clone().try_into().unwrap_or(0);
+        let header = |name: &str| r.headers.iter().find(|h| h.name.eq_ignore_ascii_case(name)).map(|h| h.value.clone());
+        if (300..400).contains(&status) {
+            let loc = header("location").ok_or_else(|| NotebookError::Invalid(format!("the site answered {status} without a new address")))?;
+            url = resolve_location(&url, &loc);
+            continue;
+        }
+        if status != 200 {
+            return Err(NotebookError::Invalid(format!("the site answered {status}")));
+        }
+        return Ok(Fetched { url, content_type: header("content-type").unwrap_or_default(), bytes: r.body });
+    }
+    Err(NotebookError::Invalid("too many redirects".into()))
+}
+
+/// Every replica must agree on the response: keep the body, the status, and only the two headers
+/// this notebook reads (dates, cookies and request ids differ from replica to replica).
+#[query]
+fn transform_fetch(args: ic_cdk_management_canister::TransformArgs) -> ic_cdk_management_canister::HttpRequestResult {
+    let headers = args.response.headers.into_iter().filter(|h| h.name.eq_ignore_ascii_case("location") || h.name.eq_ignore_ascii_case("content-type")).collect();
+    ic_cdk_management_canister::HttpRequestResult { status: args.response.status, headers, body: args.response.body }
+}
+
+/// A redirect's Location may be absolute, host-relative ("/x") or relative to the current path.
+fn resolve_location(current: &str, loc: &str) -> String {
+    if loc.starts_with("https://") || loc.starts_with("http://") {
+        return loc.to_string();
+    }
+    let origin_end = current.find("://").map(|i| current[i + 3..].find('/').map_or(current.len(), |j| i + 3 + j)).unwrap_or(current.len());
+    if let Some(rest) = loc.strip_prefix('/') {
+        return format!("{}/{rest}", &current[..origin_end]);
+    }
+    let dir = current[..current.rfind('/').filter(|&i| i >= origin_end).unwrap_or(origin_end)].to_string();
+    format!("{dir}/{loc}")
+}
+
 /// The most one community fee may be (a long board post is ~0.03 B cycles), and what a notebook keeps
 /// above its freezing reserve after paying: chatting never freezes anyone's notes.
 const MAX_FEE: u128 = 1_000_000_000;
@@ -2403,5 +2473,17 @@ mod ask_tests {
         assert!(p.starts_with("Notes:\n\n[1] n0.md\n") && p.ends_with("what is it? /no_think"));
         assert_eq!(strip_think("<think>hmm</think>\nAnswer [1]"), "Answer [1]");
         assert_eq!(clip("héllo", 3), "hé…");
+    }
+}
+
+#[cfg(test)]
+mod fetch_tests {
+    use super::resolve_location;
+    #[test]
+    fn redirects_resolve_against_the_current_address() {
+        assert_eq!(resolve_location("https://a.org/papers/x.pdf", "https://cdn.b.net/x.pdf"), "https://cdn.b.net/x.pdf");
+        assert_eq!(resolve_location("https://a.org/papers/x.pdf", "/files/x.pdf"), "https://a.org/files/x.pdf");
+        assert_eq!(resolve_location("https://a.org/papers/x.pdf", "y.pdf"), "https://a.org/papers/y.pdf");
+        assert_eq!(resolve_location("https://a.org", "/y.pdf"), "https://a.org/y.pdf");
     }
 }

@@ -258,6 +258,7 @@ fn init() {
     seed_tokens();
     seed_channels();
     seed_developers();
+    seed_careers();
     seed_sections();
     start_timers();
 }
@@ -266,6 +267,7 @@ fn post_upgrade() {
     seed_tokens();
     seed_channels();
     seed_developers();
+    seed_careers();
     seed_sections();
     start_timers();
 }
@@ -1239,6 +1241,13 @@ fn set_channel_section(name: String, section: Option<String>) -> Result<Channel,
         c.insert(n, C(ch.clone()));
         Ok(ch)
     })
+}
+/// #careers: résumé reviews, interview practice and job leads, for the Career kit.
+fn seed_careers() {
+    if CHANNELS.with_borrow(|c| c.contains_key(&"careers".to_string())) {
+        return;
+    }
+    CHANNELS.with_borrow_mut(|c| c.insert("careers".into(), C(Channel { name: "careers".into(), topic: "Résumés, interviews and job leads".into(), created_by: canister_self(), created_at: time(), gate: None, section: Some("Lab".into()) })));
 }
 fn gate_of(channel: &str) -> Option<String> {
     CHANNELS.with_borrow(|c| c.get(&channel.to_string()).and_then(|x| x.0.gate))

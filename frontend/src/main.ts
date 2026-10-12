@@ -21,6 +21,7 @@ import { CITE, answer, cited, decide, excerpt, type Pick } from "./chat";
 import { NEW_BOARD, isKanban, moveCard, parseBoard, serializeBoard, type Board } from "./kanban";
 import { NEW_CARDS, NEW_CHOICE, graded, parseCards, parseChoice, quizKind, shuffled } from "./quiz";
 import { countByDay, dayKey, gridWeeks, level, streak } from "./activity";
+import { APPLICATIONS_BOARD, EXPERIENCE_TEMPLATE, PERSON_TEMPLATE, RESUME_TEMPLATE, STAGES, STORIES_DECK, addApplication, addDays, applicationCard, applications, compileResume, contacts, experience, isExperience, markContacted, parseStar, searchStats, storyCard, updateApplication, waiting } from "./career";
 import { cardKey, isDue, review as srsReview, type Rating, type Sched } from "./srs";
 import { align, isLeanNote, leanCode, parseLean, statementCard, unmentionedHyps } from "./lean";
 import { NEW_IPYNB, addCell as nbAddCell, isNotebookPath, moveCell as nbMoveCell, parseNotebook, serializeNotebook, type Cell as NbCell, type Notebook as Nb, type Output as NbOutput } from "./ipynb";
@@ -152,7 +153,7 @@ const nb = (): NotebookApi => notebookOf(S.notebook!.canister.toText());
 
 // ---------- state ----------
 
-type Tab = "notes" | "chat" | "graph" | "manage" | "study" | "work" | "organize" | "trips" | "research" | "writing" | "care" | "software";
+type Tab = "notes" | "chat" | "graph" | "manage" | "study" | "work" | "organize" | "trips" | "research" | "writing" | "care" | "software" | "career";
 type Settings = { bookmarks: string[]; srs: Record<string, Record<string, Sched>>; deckStats: Record<string, { reviews: number; good: number }>; study: Record<string, number>; goals: { notesPerWeek?: number; cardsPerDay?: number }; searches: { name: string; q: string }[]; rules: Rule[]; resurface: Resurface; decayDays: number; hideFaded: boolean; kanbanArchiveDays: number; features: Partial<Record<Tab, boolean>>; onboarded?: boolean; writingGoal: number; citeStyle: Style };
 const parseSettings = (j: Partial<Settings> | undefined): Settings => ({ bookmarks: Array.isArray(j?.bookmarks) ? j!.bookmarks : [], srs: j?.srs ?? {}, deckStats: j?.deckStats ?? {}, study: j?.study ?? {}, goals: j?.goals ?? {}, searches: Array.isArray(j?.searches) ? j!.searches : [], rules: Array.isArray(j?.rules) ? j!.rules : [], resurface: j?.resurface ?? {}, decayDays: typeof j?.decayDays === "number" ? j.decayDays : 180, hideFaded: !!j?.hideFaded, kanbanArchiveDays: typeof j?.kanbanArchiveDays === "number" ? j.kanbanArchiveDays : 14, features: j?.features ?? {}, onboarded: j?.onboarded, writingGoal: typeof j?.writingGoal === "number" ? j.writingGoal : 500, citeStyle: j?.citeStyle === "chicago" ? "chicago" : "apa" });
 type ManageTab = "finance" | "notebook" | "sharing" | "agents" | "market";
@@ -397,6 +398,7 @@ const ICONS: Record<string, string> = {
   "panel-right": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/>',
   mountain: '<path d="M3 20l6-10 4 6 3-4 5 8z"/><path d="M8.2 11.4l1.8 1.6 1.4-1.2"/>',
   sliders: '<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
+  compass: '<circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/>',
   heart: '<path d="M12 20s-7.5-4.6-9.2-9.3A4.8 4.8 0 0 1 12 6.6a4.8 4.8 0 0 1 9.2 4.1C19.5 15.4 12 20 12 20z"/>',
   users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14a6.5 6.5 0 0 1 3.5 6"/>',
   pin: '<path d="M9 3h6l-1 6 4 4H6l4-4zM12 13v8"/>',
@@ -550,6 +552,7 @@ function afterRender(root: ParentNode = document) {
   void renderDiagrams(root, dark);
   decorateGlossary(root);
   decorateTables(root);
+  hydratePdfs(root);
   root.querySelectorAll<HTMLElement>("[data-excalidraw-embed]:not([data-done])").forEach((el) => {
     el.dataset.done = "1";
     const path = el.dataset.excalidrawEmbed!;
@@ -858,7 +861,7 @@ function routeSheet(el: HTMLElement) {
   const tab = (t: Tab, label: string, ic: string): R => ({ label, icon: ic, sub: true, hidden: !featureOn(t), on: inNb && S.tab === t, go: () => { const i = document.createElement("i"); i.dataset.tab = t; if (!inNb) { S.community = undefined; S.board = undefined; S.market = undefined; S.admin = undefined; location.hash = `#/notebook/${nbId}`; } void onAction("tab", i, new MouseEvent("click")); } });
   const routes: R[] = [
     { label: "Your notebooks", icon: "list", on: !S.notebook && !S.community && !S.board && !S.market && !S.admin, go: () => { location.hash = "#/"; } },
-    ...(S.notebook ? [{ label: S.notebook.name, icon: "notebook", on: inNb && S.tab === "notes", go: () => { if (!inNb) location.hash = `#/notebook/${nbId}`; else { const i = document.createElement("i"); i.dataset.tab = "notes"; void onAction("tab", i, new MouseEvent("click")); } } } as R, tab("chat", "Chat with your notes", "chat"), tab("graph", "Graph", "graph"), tab("study", "Study", "check"), tab("work", "Work", "briefcase"), tab("organize", "Organize", "sliders"), tab("research", "Research", "cap"), tab("writing", "Writing", "edit"), tab("care", "Care", "heart"), tab("software", "Software", "terminal"), tab("trips", "Trips", "mountain"), tab("manage", "Manage", "bolt")].filter((r) => !r.hidden) : []),
+    ...(S.notebook ? [{ label: S.notebook.name, icon: "notebook", on: inNb && S.tab === "notes", go: () => { if (!inNb) location.hash = `#/notebook/${nbId}`; else { const i = document.createElement("i"); i.dataset.tab = "notes"; void onAction("tab", i, new MouseEvent("click")); } } } as R, tab("chat", "Chat with your notes", "chat"), tab("graph", "Graph", "graph"), tab("study", "Study", "check"), tab("work", "Work", "briefcase"), tab("organize", "Organize", "sliders"), tab("research", "Research", "cap"), tab("writing", "Writing", "edit"), tab("care", "Care", "heart"), tab("software", "Software", "terminal"), tab("career", "Career", "compass"), tab("trips", "Trips", "mountain"), tab("manage", "Manage", "bolt")].filter((r) => !r.hidden) : []),
     { label: "Community", icon: "users", on: !!S.community, go: () => { location.hash = "#/community"; } },
     ...(flag("board") ? [{ label: "Board", icon: "pin", on: !!S.board, go: () => { location.hash = "#/board"; } } as R] : []),
     ...(flag("market") ? [{ label: "Market", icon: "tag", on: !!S.market, go: () => { location.hash = "#/market"; } } as R] : []),
@@ -1007,7 +1010,7 @@ function ribbonHtml(i?: Info, low = false): string {
   const inNb = !!S.notebook && !S.community && !S.board && !S.market && !S.admin;
   const rb = (tab: Tab, label: string, ic: string, extra = "") => !featureOn(tab) ? "" : `<button type="button" class="rb ${inNb && S.tab === tab ? "on" : ""}" data-action="ribbon-tab" data-tab="${tab}" title="${label}" aria-label="${label}" aria-pressed="${inNb && S.tab === tab}">${icon(ic)}${extra}</button>`;
   return `<nav class="ribbon" aria-label="Sections">
-      <div class="rb-group">${rb("notes", "Notes", "file")}${rb("chat", "Chat with your notes", "chat")}${rb("graph", "Knowledge graph", "graph")}${rb("study", `Study${dueTotal() ? ` · ${dueTotal()} cards due` : ""}`, "check", dueTotal() ? `<i class="rb-count">${dueTotal()}</i>` : "")}${rb("work", `Work${overdueCount() ? ` · ${overdueCount()} overdue` : ""}`, "briefcase", overdueCount() ? `<i class="rb-count danger">${overdueCount()}</i>` : "")}${rb("organize", "Organize: saved searches, triage, rules, tidy-up", "sliders")}${rb("research", "Research: sources, citations, claims, thesis", "cap")}${rb("writing", "Writing: manuscript, story bible, timeline", "edit")}${rb("care", "Care: log, appointments, care team", "heart")}${rb("software", "Software: decisions, runbooks, changelog", "terminal")}${rb("trips", S.trips.watching.some((w) => w.overdue && !w.closed) ? "Trips · someone is overdue" : "Trips", "mountain", S.trips.watching.some((w) => w.overdue && !w.closed) ? `<i class="rb-dot"></i>` : "")}</div>
+      <div class="rb-group">${rb("notes", "Notes", "file")}${rb("chat", "Chat with your notes", "chat")}${rb("graph", "Knowledge graph", "graph")}${rb("study", `Study${dueTotal() ? ` · ${dueTotal()} cards due` : ""}`, "check", dueTotal() ? `<i class="rb-count">${dueTotal()}</i>` : "")}${rb("work", `Work${overdueCount() ? ` · ${overdueCount()} overdue` : ""}`, "briefcase", overdueCount() ? `<i class="rb-count danger">${overdueCount()}</i>` : "")}${rb("organize", "Organize: saved searches, triage, rules, tidy-up", "sliders")}${rb("research", "Research: sources, citations, claims, thesis", "cap")}${rb("writing", "Writing: manuscript, story bible, timeline", "edit")}${rb("care", "Care: log, appointments, care team", "heart")}${rb("software", "Software: decisions, runbooks, changelog", "terminal")}${rb("career", "Career: applications, résumés, interviews, networking", "compass")}${rb("trips", S.trips.watching.some((w) => w.overdue && !w.closed) ? "Trips · someone is overdue" : "Trips", "mountain", S.trips.watching.some((w) => w.overdue && !w.closed) ? `<i class="rb-dot"></i>` : "")}</div>
       <div class="rb-group bottom">${rb("manage", `Manage${i ? ` · ${tc(i.cycles)}` : ""}`, "bolt", low ? `<i class="rb-dot"></i>` : "")}<a class="rb ${S.community ? "on" : ""}" href="#/community" data-action="nav" title="Community${S.mentions ? ` · ${S.mentions} new mention${S.mentions === 1 ? "" : "s"}` : ""}" aria-label="Community">${icon("users")}${S.mentions ? `<i class="rb-badge">${S.mentions > 9 ? "9+" : S.mentions}</i>` : ""}</a>${flag("board") ? `<a class="rb ${S.board ? "on" : ""}" href="#/board" data-action="nav" title="Board: posts and discussion" aria-label="Board">${icon("pin")}</a>` : ""}${flag("market") ? `<a class="rb ${S.market ? "on" : ""}" href="#/market" data-action="nav" title="Notebook market" aria-label="Notebook market">${icon("tag")}</a>` : ""}${S.isAdmin ? `<a class="rb ${S.admin ? "on" : ""}" href="#/admin" data-action="nav" title="Reports and ideas" aria-label="Reports and ideas">${icon("bug")}</a>` : ""}<button type="button" class="rb" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="rb" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button><button type="button" class="rb" data-action="sign-out" title="Sign out" aria-label="Sign out">${icon("out")}</button></div>
     </nav>`;
 }
@@ -1015,10 +1018,10 @@ function shellBody(body: string, i: Info | undefined, low: boolean, alert: strin
   const ribbon = ribbonHtml(i, low);
   return `<div class="shell ${S.mobile ? "is-mobile" : ""}">${ribbon}<div class="shell-main">
     ${alert}
-    <header class="wsbar">${brand()}${S.mobile ? seg : `<span class="crumb"><b>${esc(S.notebook!.name)}</b><span class="faint">/</span><span>${S.tab === "notes" ? (cur() ? esc(title(cur()!)) : "Notes") : S.tab === "chat" ? "Chat" : S.tab === "graph" ? "Graph" : S.tab === "study" ? "Study" : S.tab === "work" ? "Work" : S.tab === "organize" ? "Organize" : S.tab === "trips" ? "Trips" : S.tab === "research" ? "Research" : S.tab === "writing" ? "Writing" : S.tab === "care" ? "Care" : S.tab === "software" ? "Software" : "Manage"}</span></span>`}
+    <header class="wsbar">${brand()}${S.mobile ? seg : `<span class="crumb"><b>${esc(S.notebook!.name)}</b><span class="faint">/</span><span>${S.tab === "notes" ? (cur() ? esc(title(cur()!)) : "Notes") : S.tab === "chat" ? "Chat" : S.tab === "graph" ? "Graph" : S.tab === "study" ? "Study" : S.tab === "work" ? "Work" : S.tab === "organize" ? "Organize" : S.tab === "trips" ? "Trips" : S.tab === "research" ? "Research" : S.tab === "writing" ? "Writing" : S.tab === "care" ? "Care" : S.tab === "career" ? "Career" : S.tab === "software" ? "Software" : "Manage"}</span></span>`}
       <span class="right">${S.mobile ? "" : `<button type="button" class="btn btn-ghost" data-action="palette" title="Open or create a note (${MOD}K)">${icon("search")}<span class="kbd">${MOD}K</span></button>`}${S.mobile ? moreBtn() : ""}</span>
     </header>
-    ${panebar({ on: S.sideOpen, what: "the file pane", action: "side-toggle", off: S.tab === "graph" || S.tab === "manage" || S.tab === "study" || S.tab === "work" || S.tab === "organize" || S.tab === "trips" || S.tab === "research" || S.tab === "writing" || S.tab === "care" || S.tab === "software" }, { on: S.asideOpen, what: "the right pane", action: "aside-toggle", off: S.tab === "graph" || S.tab === "manage" || S.tab === "study" || S.tab === "work" || S.tab === "organize" || S.tab === "trips" || S.tab === "research" || S.tab === "writing" || S.tab === "care" || S.tab === "software" })}
+    ${panebar({ on: S.sideOpen, what: "the file pane", action: "side-toggle", off: S.tab === "graph" || S.tab === "manage" || S.tab === "study" || S.tab === "work" || S.tab === "organize" || S.tab === "trips" || S.tab === "research" || S.tab === "writing" || S.tab === "care" || S.tab === "software" || S.tab === "career" }, { on: S.asideOpen, what: "the right pane", action: "aside-toggle", off: S.tab === "graph" || S.tab === "manage" || S.tab === "study" || S.tab === "work" || S.tab === "organize" || S.tab === "trips" || S.tab === "research" || S.tab === "writing" || S.tab === "care" || S.tab === "software" || S.tab === "career" })}
     ${body}
     ${mobileNav}
   </div></div>`;
@@ -1586,7 +1589,7 @@ function reactionsHtml(m: Message): string {
   return `<div class="reacts">${rs.map((r) => `<button type="button" class="react ${r.by.some((p) => p.toText() === S.principal) ? "on" : ""}" data-action="chat-react" data-mid="${m.id}" data-emoji="${esc(r.emoji)}" title="${r.by.length} ${r.by.length === 1 ? "person" : "people"}">${esc(r.emoji)}<span class="n">${r.by.length}</span></button>`).join("")}<button type="button" class="react add" data-action="chat-emoji" data-mid="${m.id}" title="Add a reaction" aria-label="Add a reaction">+</button></div>`;
 }
 /** A gist is a note snapshot: rendered like a note, but links go dead and images vanish (community rule). */
-const gistMd = (t: string) => renderMd(t).replace(/<a\b[^>]*>/gi, '<span class="dead">').replace(/<\/a>/gi, "</span>").replace(/<(img|video|audio|iframe)\b[^>]*>/gi, "");
+const gistMd = (t: string) => renderMd(t).replace(/<div class="pdf-embed"[^>]*><div class="pdf-head"><span class="pdf-name">([^<]*)<\/span>[\s\S]*?<\/div><\/div><\/div>/g, '<p class="dead">$1</p>').replace(/<a\b[^>]*>/gi, '<span class="dead">').replace(/<\/a>/gi, "</span>").replace(/<(img|video|audio|iframe)\b[^>]*>/gi, "");
 function gistHtml(m: Message): string {
   const g = m.gist!;
   const open = `<button type="button" class="btn btn-ghost" data-action="gist-open" data-nb="${g.notebook.toText()}" data-path="${esc(g.path)}" title="Open the live note (if you have access)">${icon("out")}Open</button>`;
@@ -1776,7 +1779,7 @@ async function myNotebookChoice(title: string): Promise<NotebookRec | undefined>
   return id === null ? undefined : mine.find((n) => n.canister.toText() === id);
 }
 /** Share a note in the community for opinions: from a note (prefilled) or picked from your notebooks. */
-async function shareGist(pre?: { notebook: string; path: string; text: string }) {
+async function shareGist(pre?: { notebook: string; path: string; text: string }, toChannel?: string) {
   let gist = pre;
   if (!gist) {
     const n = await myNotebookChoice("Share a note for opinions");
@@ -1790,7 +1793,7 @@ async function shareGist(pre?: { notebook: string; path: string; text: string })
     try { content = unwrap(await notebookOf(n.canister.toText()).read(path)).content; } catch (e) { return toast(errMsg(e), "error"); }
     gist = { notebook: n.canister.toText(), path, text: content };
   }
-  let channel = S.community?.channel;
+  let channel = toChannel ?? S.community?.channel;
   if (!channel) {
     const chs = await registry().channels();
     channel = (await ask({ title: "Post in the community", label: "Channel", choices: chs.map((ch) => ({ value: ch.name, label: `#${ch.name} · ${ch.topic}` })), value: "general", ok: "Next" })) ?? undefined;
@@ -1873,18 +1876,45 @@ async function makeRain() {
   const c = S.community!;
   const eligible = await registry().rain_eligible().catch(() => 0);
   if (!eligible) return toast("Nobody but you has chatted in the last 30 minutes; rain needs someone to fall on.", "info");
-  const count = await ask({ title: "☔ Make it rain", body: `${eligible} ${eligible === 1 ? "person has" : "people have"} chatted in the last 30 minutes. Pick how many of them get a share, chosen at random, and the total ICP to split. Each transfer costs the ledger fee.`, label: "How many people (1 to 10)", value: String(Math.min(5, eligible)), ok: "Next" });
-  if (count === null) return;
-  const n = Math.max(1, Math.min(10, Number(count) || 1));
-  const amt = await ask({ title: `Rain on ${Math.min(n, eligible)} ${Math.min(n, eligible) === 1 ? "person" : "people"}`, label: "Total ICP", value: "0.1", body: useOisy ? "Your OISY wallet opens to approve the total; the registry splits it and sends each share straight to their wallet." : `Paid from ${payLabel()}; the registry splits it and sends each share straight to their wallet.`, ok: useOisy ? "Approve in OISY" : "Rain" });
-  if (amt === null) return;
-  const total = BigInt(Math.round(Number(amt) * 1e8));
+  // one screen for who and how much; the next and last one is OISY's approval
+  const picked = await rainForm(eligible);
+  if (!picked) return;
+  const { n, total } = picked;
   await act("rain", async () => {
     await approvePayment(Principal.fromText(REGISTRY), total + ICP_FEE);
     const r = await registry().rain(c.channel, total, n);
     if (r.__kind__ === "Err") throw new Error(r.Err);
     await loadCommunity(c.channel);
     return `☔ Rained ${icp(r.Ok.each_e8s)} ICP on ${r.Ok.recipients.map(([, h]) => `@${h}`).join(", ")}.`;
+  });
+}
+/** How many people and how much, on one screen. Resolves null on cancel. */
+function rainForm(eligible: number): Promise<{ n: number; total: bigint } | null> {
+  return new Promise((res) => {
+    const scrim = document.createElement("div");
+    scrim.className = "scrim";
+    scrim.innerHTML = `<form class="modal" role="dialog" aria-modal="true" aria-labelledby="rain-t">
+      <h2 id="rain-t">☔ Make it rain</h2>
+      <p class="muted">${eligible} ${eligible === 1 ? "person has" : "people have"} chatted in the last 30 minutes. The registry picks who gets a share at random and sends each straight to their wallet; each transfer costs the ledger fee.</p>
+      <div class="row tight"><label class="field"><span class="label">People (1 to ${Math.min(10, eligible)})</span><input class="input" name="n" type="number" min="1" max="${Math.min(10, eligible)}" value="${Math.min(5, eligible)}" required></label>
+      <label class="field"><span class="label">Total ICP</span><input class="input" name="total" inputmode="decimal" value="0.1" required></label></div>
+      <div class="actions"><button type="button" class="btn" data-x="cancel">Cancel</button><button type="submit" class="btn btn-primary">${useOisy ? "Approve in OISY" : "Rain"}</button></div>
+    </form>`;
+    const done = (v: { n: number; total: bigint } | null) => { scrim.remove(); document.removeEventListener("keydown", onKey); res(v); };
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && done(null);
+    scrim.addEventListener("click", (e) => e.target === scrim && done(null));
+    scrim.querySelector("[data-x=cancel]")!.addEventListener("click", () => done(null));
+    scrim.querySelector("form")!.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const f = e.target as HTMLFormElement;
+      const n = Math.max(1, Math.min(10, eligible, Number((f.elements.namedItem("n") as HTMLInputElement).value) || 1));
+      const amt = Number((f.elements.namedItem("total") as HTMLInputElement).value);
+      if (!(amt > 0)) return void toast("Enter the total ICP to split.", "error");
+      done({ n, total: BigInt(Math.round(amt * 1e8)) });
+    });
+    document.addEventListener("keydown", onKey);
+    document.body.append(scrim);
+    scrim.querySelector<HTMLInputElement>("input[name=total]")!.focus();
   });
 }
 /** The celebration: drops fall over the whole app and a card says who rained how much. Shown once per rain, anywhere, while signed in. */
@@ -2016,6 +2046,7 @@ const FEATURES: { id: Tab; label: string; icon: string; desc: string }[] = [
   { id: "writing", label: "Writing", icon: "edit", desc: "Manuscript of scenes, word goals, story bible, continuity, timeline, beta readers." },
   { id: "care", label: "Care", icon: "heart", desc: "Symptom and medication log, care-team sharing and check-ins, appointment prep." },
   { id: "software", label: "Software", icon: "terminal", desc: "Decision records, runbooks, a changelog, runnable snippets." },
+  { id: "career", label: "Career", icon: "compass", desc: "Job applications board, experience bank and résumés, interview stories, networking follow-ups, a weekly search review." },
   { id: "trips", label: "Trips", icon: "mountain", desc: "Trip plans, gear, food, water, GPX routes, field journal, check-ins." },
 ];
 /** Notebooks made before features existed keep every tab they had; the new kits start off. */
@@ -2028,6 +2059,7 @@ const PRESETS: Record<string, Tab[]> = {
   Caregiver: ["chat", "care", "work"],
   Developer: ["chat", "graph", "work", "software", "organize"],
   Hiker: ["chat", "trips", "study"],
+  "Job seeker": ["chat", "career", "study", "work", "organize"],
   Everything: FEATURES.map((f) => f.id),
 };
 function featuresCard(): string {
@@ -2080,6 +2112,11 @@ async function addStarters(chosen: Set<Tab>) {
   if (chosen.has("writing")) { await createQuiet("Manuscript/Opening.md", `---\ntype: scene\nchapter: Chapter 1\norder: 1\npov: \ndate: Day 1\n---\n# Opening\n\nWrite the first scene here.\n`); await createQuiet("Bible/Main character.md", `---\ntype: character\neyes: \nhair: \nage: \n---\n# Main character\n\n`); }
   if (chosen.has("care")) { await createQuiet("Care/Log.sheet", careWorkbook()); await createQuiet("Care/Diary.md", `# Diary\n\nQ:: A question for the next appointment\n`); }
   if (chosen.has("software")) { await createQuiet(`Decisions/${nextAdr(paths())} Record decisions.md`, adrTemplate(nextAdr(paths()), "Record decisions")); }
+  if (chosen.has("career")) {
+    if (!note(CAREER_BOARD)) await createQuiet(CAREER_BOARD, addApplication(APPLICATIONS_BOARD, "[[Example company]] · The role you want", "Saved"));
+    if (!paths().some((p) => p.startsWith("Career/Experience/"))) await createQuiet("Career/Experience/Your current role.md", EXPERIENCE_TEMPLATE("Your current role", "Company", today.slice(0, 4)));
+    if (!note(CAREER_DECK)) await createQuiet(CAREER_DECK, STORIES_DECK);
+  }
   if (chosen.has("trips") && !paths().some((p) => p.startsWith("Trips/"))) await createQuiet("Trips/First trip/Plan.md", fillTemplate(TRIP_TEMPLATE, { title: "First trip" }));
   if (chosen.has("organize") && !note("Inbox/Welcome.md")) await createQuiet("Inbox/Welcome.md", `# Welcome\n\nThis note is in your inbox. Triage it from Organize: file it, tag it or archive it.\n\ncreated: ${today}\n`);
 }
@@ -2143,6 +2180,152 @@ async function compileThesisNote(path: string) {
   S.tab = "notes";
   await open(out);
   if (choice === "print") { const p = pane(); if (p.view === "edit") { p.view = "preview"; render(); } setTimeout(() => window.print(), 400); }
+}
+
+// --- the Career kit
+
+const CAREER_BOARD = "Career/Applications.md";
+const CAREER_DECK = "Career/Interview stories.md";
+const textOf = (p: string) => S.drafts.get(p)?.text ?? note(p)?.content;
+function careerTab(): string {
+  const notes = orgNotes();
+  const today = dayKey(new Date());
+  const board = textOf(CAREER_BOARD);
+  const apps = board ? applications(board) : [];
+  const late = waiting(apps, today);
+  const st = searchStats(apps, today);
+  const exps = notes.filter((n) => isExperience(n.content)).map((n) => experience(n.path, n.content));
+  const resumes = notes.filter((n) => (frontmatter(n.content).data.type ?? "").trim() === "resume");
+  const deck = textOf(CAREER_DECK);
+  const stories = deck ? parseCards(deck).length : 0;
+  const ppl = contacts(notes, today);
+  const max = Math.max(1, ...st.weeks.map((w) => w.sent));
+  const bars = `<svg class="career-bars" viewBox="0 0 ${st.weeks.length * 34} 70" role="img" aria-label="Applications sent per week">${st.weeks.map((w, i) => `<rect x="${i * 34 + 6}" y="${60 - (w.sent / max) * 52}" width="22" height="${(w.sent / max) * 52 || 1}" rx="3"><title>Week of ${w.week}: ${w.sent}</title></rect><text x="${i * 34 + 17}" y="69">${w.week.slice(5).replace("-", "/")}</text>`).join("")}</svg>`;
+  const appRow = (a: (typeof apps)[number], i: number) => `<div class="run"><span><a href="#" data-action="wiki" data-target="${esc(a.company)}">${esc(a.company)}</a> <span class="small muted">${esc(a.role)}${a.applied ? ` · applied ${esc(a.applied)}` : ""}</span></span><span class="row-actions"><button type="button" class="btn btn-ghost" data-action="career-followed" data-i="${i}" title="Followed up today: check again in a week">Followed up</button><button type="button" class="btn btn-ghost" data-action="career-heard" data-i="${i}" title="Move it to Screen">Heard back</button></span></div>`;
+  return `<section class="main" style="overflow:auto"><div class="page wide kit">
+    <div class="card band"><div class="row"><h2>${icon("compass")} Applications</h2><span class="right-actions"><button type="button" class="btn" data-action="career-board">${icon("board")}Open the board</button><button type="button" class="btn btn-primary" data-action="career-app-add">${icon("plus")}Add application</button></span></div>
+      <div class="career-stats"><div><b>${st.thisWeek}</b><span>sent this week</span></div><div><b>${st.total}</b><span>sent in all</span></div><div><b>${st.responseRate}%</b><span>heard back</span></div><div><b>${st.interviewRate}%</b><span>reached an interview</span></div><div><b>${st.offers}</b><span>offer${st.offers === 1 ? "" : "s"}</span></div>${bars}</div>
+      <div class="tags nudge">${STAGES.map((sg) => `<span class="tag-chip"><span>${sg}</span><span class="cnt">${apps.filter((a) => a.stage === sg).length}</span></span>`).join("")}</div>
+      ${late.length ? `<div class="band-title">Waiting 10+ days for a reply <span class="count">${late.length}</span></div><div class="runs">${late.map((a) => appRow(a, apps.indexOf(a))).join("")}</div>` : apps.length ? `<p class="small muted">Nothing has been waiting 10 days without a follow-up.</p>` : `<p class="small muted">Each application is a card on <code>${CAREER_BOARD}</code>, one lane per stage. Its follow-up date shows up in Work like any task.</p>`}
+    </div>
+    <div class="grid2">
+      <div class="card band"><div class="row"><h2>${icon("briefcase")} Experience and résumés</h2><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="career-exp-add">${icon("plus")}Experience</button><button type="button" class="btn" data-action="career-resume-new">${icon("plus")}Résumé</button></span></div>
+        <p class="small muted">One note per role or accomplishment, with its skills. A résumé lists the ones to include; compiling turns them into one document, ready for Word or PDF.</p>
+        ${exps.length ? `<div class="runs">${exps.map((e) => `<div class="run"><span><a href="#" data-action="open" data-path="${esc(e.path)}">${esc(e.role || e.title)}</a> <span class="small muted">${esc(e.company)}${e.start ? ` · ${esc(e.start)}–${esc(e.end)}` : ""} · ${e.bullets.length} bullet${e.bullets.length === 1 ? "" : "s"}</span><div class="tags">${e.skills.map((k) => `<span class="tag-chip small">${esc(k)}</span>`).join("")}</div></span></div>`).join("")}</div>` : ""}
+        ${resumes.map((r) => `<div class="run"><span><b><a href="#" data-action="open" data-path="${esc(r.path)}">${esc(stem(r.path))}</a></b></span><span class="row-actions"><button type="button" class="btn btn-ghost" data-action="career-compile" data-path="${esc(r.path)}">Compile</button><button type="button" class="btn btn-ghost" data-action="career-feedback" data-path="${esc(r.path)}" title="Share a snapshot of the compiled résumé in #careers">${icon("users")}Get feedback</button></span></div>`).join("")}
+      </div>
+      <div class="card band"><div class="row"><h2>${icon("check")} Interview stories</h2><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="career-practice">Practice</button><button type="button" class="btn btn-primary" data-action="career-story-add">${icon("plus")}Story</button></span></div>
+        <p class="small muted">A behavioural question on the front, your answer as situation, task, action and result on the back. They are flashcards, so Study brings each back just before you would forget it.</p>
+        <p><b>${stories}</b> stor${stories === 1 ? "y" : "ies"} in <a href="#" data-action="open" data-path="${CAREER_DECK}">${esc(stem(CAREER_DECK))}</a></p>
+      </div>
+    </div>
+    <div class="grid2">
+      <div class="card band"><div class="row"><h2>${icon("users")} People</h2><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="career-person-add">${icon("plus")}Contact</button></span></div>
+        <p class="small muted">Person notes with <code>last_contacted</code>, <code>next_follow_up</code> and <code>referral_for</code>. Someone comes due on their follow-up date, or after a month of quiet.</p>
+        ${ppl.length ? `<div class="runs">${ppl.map((c) => `<div class="run"><span><a href="#" data-action="open" data-path="${esc(c.path)}">${esc(c.name)}</a> <span class="small ${c.due ? "" : "muted"}" ${c.due ? 'style="color:var(--danger)"' : ""}>${c.due ? "follow up now" : c.nextFollowUp ? `next ${esc(c.nextFollowUp)}` : ""}${c.lastContacted ? ` · last ${esc(c.lastContacted)}` : ""}${c.referralFor ? ` · referral for ${esc(c.referralFor)}` : ""}</span></span><span class="row-actions"><button type="button" class="btn btn-ghost" data-action="career-contacted" data-path="${esc(c.path)}">Contacted today</button></span></div>`).join("")}</div>` : `<p class="small muted">No contacts yet.</p>`}
+      </div>
+      <div class="card band"><div class="row"><h2>${icon("chat")} #careers</h2><span class="right-actions"><button type="button" class="btn" data-action="career-channel">Open #careers</button></span></div>
+        <p class="small muted">Résumé reviews, interview practice and job leads with the community. Sharing a résumé posts a snapshot; your notebook stays private.</p>
+      </div>
+    </div>
+  </div></section>`;
+}
+async function careerBoard(): Promise<string> {
+  if (!note(CAREER_BOARD)) await createQuiet(CAREER_BOARD, APPLICATIONS_BOARD);
+  return textOf(CAREER_BOARD) ?? APPLICATIONS_BOARD;
+}
+async function careerAddApplication() {
+  const company = (await ask({ title: "Add an application", label: "Company", placeholder: "Acme", ok: "Next" }))?.trim();
+  if (!company) return;
+  const role = (await ask({ title: company, label: "Role", placeholder: "Senior Engineer", ok: "Next" }))?.trim();
+  if (role === undefined) return;
+  const today = dayKey(new Date());
+  const applied = await ask({ title: `${company} · ${role}`, label: "Applied on (YYYY-MM-DD; empty for today)", value: today, ok: "Add" });
+  if (applied === null) return;
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(applied.trim()) ? applied.trim() : today;
+  await writeNote(CAREER_BOARD, addApplication(await careerBoard(), applicationCard(company, role || "Role", day, addDays(day, 10))));
+  const dossier = `Career/Companies/${company.replace(/[\\/#^[\]|:]/g, " ").trim()}.md`;
+  if (!resolveLink(company)) await createQuiet(dossier, `---\ntype: company\n---\n\n# ${company}\n\n## Why them\n\n## People I know there\n\n## Questions to ask\n\n## Salary research\n`);
+  toast(`Added ${company}; a follow-up is due ${addDays(day, 10)} and shows in Work.`, "ok");
+  render();
+}
+async function careerResumeCompile(path: string, then?: "feedback") {
+  const r = compileResume(textOf(path)!, (t) => { const p = resolveLink(t); return p ? textOf(p) : undefined; });
+  const out = `${stem(path)} (compiled).md`;
+  if (note(out)) await writeNote(out, r.md); else await createQuiet(out, r.md);
+  if (then === "feedback") return shareGist({ notebook: S.notebook!.canister.toText(), path: out, text: r.md }, "careers");
+  const choice = await ask({ title: "Résumé compiled", body: `${r.used} experience${r.used === 1 ? "" : "s"} included.${r.missing.length ? ` Not found: ${r.missing.join(", ")}.` : ""} Saved as ${out}.`, label: "Then", choices: [{ value: "open", label: "Open it" }, { value: "docx", label: "Download as Word (.docx)" }, { value: "print", label: "Print or save as PDF" }, { value: "md", label: "Download as Markdown" }], value: "docx", ok: "Go" });
+  if (choice === "docx") return downloadBytes(`${stem(path)}.docx`, markdownToDocx(r.md, stem(path)), "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+  if (choice === "md") return downloadBytes(`${stem(path)}.md`, r.md, "text/markdown");
+  if (choice === null) return;
+  S.tab = "notes";
+  await open(out);
+  if (choice === "print") { const p = pane(); if (p.view === "edit") { p.view = "preview"; render(); } setTimeout(() => window.print(), 400); }
+}
+async function careerAction(action: string, el: HTMLElement) {
+  const today = dayKey(new Date());
+  const apps = applications(textOf(CAREER_BOARD) ?? APPLICATIONS_BOARD);
+  switch (action) {
+    case "career-app-add": return careerAddApplication();
+    case "career-board": { await careerBoard(); S.tab = "notes"; return open(CAREER_BOARD); }
+    case "career-followed": case "career-heard": {
+      const a = apps[Number(el.dataset.i)];
+      if (!a) return;
+      await writeNote(CAREER_BOARD, updateApplication(textOf(CAREER_BOARD)!, a, action === "career-heard" ? { stage: "Screen" } : { followUp: addDays(today, 7) }));
+      return render();
+    }
+    case "career-exp-add": {
+      const role = (await ask({ title: "Add experience", label: "Role", placeholder: "Staff Engineer", ok: "Next" }))?.trim();
+      if (!role) return;
+      const company = (await ask({ title: role, label: "Company", placeholder: "Acme", ok: "Next" }))?.trim() ?? "";
+      const start = (await ask({ title: `${role} · ${company}`, label: "Started (year or month)", value: today.slice(0, 4), ok: "Create" }))?.trim();
+      if (start === undefined) return;
+      const path = `Career/Experience/${`${role} at ${company}`.replace(/[\\/#^[\]|:]/g, " ").trim()}.md`;
+      if (!note(path)) await createQuiet(path, EXPERIENCE_TEMPLATE(role, company, start));
+      S.tab = "notes";
+      return open(path);
+    }
+    case "career-resume-new": {
+      const name = (await ask({ title: "New résumé", label: "Your name", placeholder: "Ada Lovelace", ok: "Create" }))?.trim();
+      if (!name) return;
+      const exps = orgNotes().filter((n) => isExperience(n.content)).map((n) => stem(n.path));
+      let path = "Career/Résumé.md";
+      for (let i = 2; note(path); i++) path = `Career/Résumé ${i}.md`;
+      await createQuiet(path, RESUME_TEMPLATE(name, exps));
+      S.tab = "notes";
+      return open(path);
+    }
+    case "career-compile": return careerResumeCompile(el.dataset.path!);
+    case "career-feedback": return careerResumeCompile(el.dataset.path!, "feedback");
+    case "career-story-add": {
+      const q = (await ask({ title: "An interview story", label: "The question", placeholder: "Tell me about a time you disagreed with your manager", ok: "Next" }))?.trim();
+      if (!q) return;
+      const a = await ask({ title: q, label: "Your answer", multiline: true, value: "Situation: \nTask: \nAction: \nResult: ", ok: "Add the card" });
+      if (a === null) return;
+      const deck = textOf(CAREER_DECK) ?? STORIES_DECK;
+      const next = `${deck.trimEnd()}\n\n${storyCard(parseStar(q, a))}\n`;
+      if (note(CAREER_DECK)) await writeNote(CAREER_DECK, next); else await createQuiet(CAREER_DECK, next);
+      toast("Story added. Study will bring it back for practice.", "ok");
+      return render();
+    }
+    case "career-practice": { S.tab = "study"; return render(); }
+    case "career-contacted": {
+      const p = el.dataset.path!;
+      await writeNote(p, markContacted(textOf(p)!, today));
+      toast(`Noted. Next follow-up ${addDays(today, 14)}.`, "ok");
+      return render();
+    }
+    case "career-person-add": {
+      const name = (await ask({ title: "Add a contact", label: "Name", placeholder: "Grace Hopper", ok: "Next" }))?.trim();
+      if (!name) return;
+      const how = (await ask({ title: name, label: "How you know them", placeholder: "Former manager at Acme", ok: "Next" }))?.trim() ?? "";
+      const ref = (await ask({ title: name, label: "Could refer you to (optional)", placeholder: "Globex", ok: "Add" }))?.trim() ?? "";
+      const path = `People/${name.replace(/[\\/#^[\]|:]/g, " ").trim()}.md`;
+      if (note(path)) await writeNote(path, markContacted(textOf(path)!, today)); else await createQuiet(path, PERSON_TEMPLATE(name, how, ref, today));
+      return render();
+    }
+    case "career-channel": { store("nb-chat-channel", "careers"); location.hash = "#/community"; return; }
+  }
 }
 
 // --- the Writing kit
@@ -3385,6 +3568,7 @@ function workspace(): string {
   if (S.tab === "research") return shell(researchTab());
   if (S.tab === "writing") return shell(writingTab());
   if (S.tab === "care") return shell(careTab());
+  if (S.tab === "career") return shell(careerTab());
   if (S.tab === "software") return shell(softwareTab());
   if (S.tab === "trips") return shell(tripsTab());
   if (S.tab === "chat") return shell(`<div class="workspace m-${S.mobilePane} ${S.sideOpen ? "" : "no-side"} ${S.asideOpen ? "" : "no-aside"}"><nav id="side" class="side" aria-label="Files">${side()}</nav>${chatHtml()}<aside id="aside" class="aside" aria-label="Sources">${chatAside()}</aside></div>`);
@@ -4378,13 +4562,105 @@ async function openAttachment(path: string) {
 
 const TEXT_EXT = /\.(md|markdown|txt|canvas|excalidraw|json|csv|yaml|yml|base|css|js|html|ipynb)$/i;
 const MAX_ATTACHMENT = 700_000;
+// --- PDF viewer: `![[https://….pdf]]` links (fetched by the browser when the site allows it, else
+// by the notebook) and PDFs saved in the notebook. Fetched bytes are cached on this device, and the
+// drawn pages are kept as images so a re-render does not redraw them.
+const PDF_FIRST = 3;
+const pdfBytesMem = new Map<string, Uint8Array>();
+const pdfShots = new Map<string, { pages: string[]; total: number }>();
+const isPdfBytes = (b: Uint8Array) => b.length > 4 && b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46;
+const dataUrlBytes = (d: string) => Uint8Array.from(atob(d.slice(d.indexOf(",") + 1)), (c) => c.charCodeAt(0));
+async function fetchPdf(url: string): Promise<Uint8Array> {
+  try {
+    const r = await fetch(url, { mode: "cors", credentials: "omit" });
+    if (r.ok) { const b = new Uint8Array(await r.arrayBuffer()); if (isPdfBytes(b)) return b; }
+  } catch { /* the site does not let browsers read it; the notebook can */ }
+  const got = unwrap(await nb().fetch_url(url));
+  const b = got.bytes instanceof Uint8Array ? got.bytes : new Uint8Array(got.bytes);
+  if (!isPdfBytes(b)) throw new Error("that link is not a PDF");
+  return b;
+}
+async function pdfBytesFor(el: HTMLElement, load: boolean): Promise<Uint8Array | undefined> {
+  const att = el.dataset.pdfAttach;
+  if (att) { const d = attachment(att); return d ? dataUrlBytes(d) : undefined; }
+  const url = el.dataset.pdfUrl!;
+  let b = pdfBytesMem.get(url) ?? (await cacheGet<Uint8Array>(`pdf:${url}`).catch(() => undefined));
+  if (!b && load) { b = await fetchPdf(url); void cacheSet(`pdf:${url}`, b).catch(() => {}); }
+  if (b) pdfBytesMem.set(url, b);
+  return b;
+}
+function pdfActions(el: HTMLElement, total: number, shown: number, size?: number): string {
+  const url = el.dataset.pdfUrl;
+  return `${shown < total ? `<button type="button" class="btn btn-ghost" data-action="pdf-all">Show all ${total} pages</button>` : ""}${url && size !== undefined ? (size <= MAX_ATTACHMENT ? `<button type="button" class="btn btn-ghost" data-action="pdf-save" title="Keep the PDF in this notebook, with its text as searchable notes">${icon("download")}Save a copy</button>` : `<span class="small faint" title="Notebook files hold up to ${Math.round(MAX_ATTACHMENT / 1000)} KB">too big to save here</span>`) : ""}${url ? `<a class="btn btn-ghost" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${icon("link")}Original</a>` : ""}`;
+}
+async function drawPdf(el: HTMLElement, all = false) {
+  const src = el.dataset.pdfUrl ?? el.dataset.pdfAttach!;
+  const body = el.querySelector<HTMLElement>(".pdf-body")!;
+  const meta = el.querySelector<HTMLElement>(".pdf-meta")!;
+  const width = Math.min(body.clientWidth || 640, 900);
+  const key = `${src}|${all}|${Math.round(width / 50)}`;
+  const shot = pdfShots.get(key);
+  if (shot) {
+    body.innerHTML = shot.pages.map((p, i) => `<img class="pdf-page" src="${p}" alt="Page ${i + 1}">`).join("");
+    meta.innerHTML = `${shot.total} page${shot.total === 1 ? "" : "s"}${pdfActions(el, shot.total, shot.pages.length, el.dataset.pdfUrl ? pdfBytesMem.get(el.dataset.pdfUrl)?.length : undefined)}`;
+    return;
+  }
+  let bytes: Uint8Array | undefined;
+  try { bytes = await pdfBytesFor(el, false); } catch { bytes = undefined; }
+  if (!bytes) {
+    if (el.dataset.pdfAttach) return; // still loading; the preview re-renders when it arrives
+    body.innerHTML = `<button type="button" class="btn" data-action="pdf-load">${icon("file")}Show this PDF</button><span class="small muted">Your notebook fetches it once (a few cycles), then it is kept on this device.</span>`;
+    return;
+  }
+  body.innerHTML = `<span class="small muted">Drawing pages…</span>`;
+  const pdfjs = await pdfjsLib();
+  const doc = await pdfjs.getDocument({ data: bytes.slice() }).promise;
+  const n = all ? doc.numPages : Math.min(doc.numPages, PDF_FIRST);
+  const pages: string[] = [];
+  for (let i = 1; i <= n; i++) {
+    const page = await doc.getPage(i);
+    const vp = page.getViewport({ scale: (width / page.getViewport({ scale: 1 }).width) * Math.min(2, window.devicePixelRatio || 1) });
+    const c = document.createElement("canvas");
+    c.width = Math.floor(vp.width);
+    c.height = Math.floor(vp.height);
+    await page.render({ canvasContext: c.getContext("2d")!, viewport: vp }).promise;
+    pages.push(c.toDataURL("image/jpeg", 0.85));
+  }
+  pdfShots.set(key, { pages, total: doc.numPages });
+  if (el.isConnected) void drawPdf(el, all);
+}
+function hydratePdfs(root: ParentNode) {
+  root.querySelectorAll<HTMLElement>(".pdf-embed:not([data-done])").forEach((el) => { el.dataset.done = "1"; void drawPdf(el, el.dataset.all === "1").catch((e) => { el.querySelector(".pdf-body")!.innerHTML = `<span class="small" style="color:var(--danger)">Could not show it: ${esc(errMsg(e))}</span>`; }); });
+}
+/** Keep a fetched PDF in the notebook next to the note, with one searchable note per page, and point the embed at the copy. */
+async function savePdfCopy(el: HTMLElement) {
+  const url = el.dataset.pdfUrl!;
+  const bytes = pdfBytesMem.get(url);
+  const from = cur();
+  if (!bytes || !from) return;
+  const name = (decodeURIComponent(url.split(/[?#]/)[0].split("/").pop() || "document").replace(/\.pdf$/i, "").replace(/[^\w .()-]+/g, " ").trim() || "document") + ".pdf";
+  const dir = from.includes("/") ? from.slice(0, from.lastIndexOf("/") + 1) : "";
+  const path = `${dir}${name}`;
+  const pages = await pdfPages(bytes).catch(() => [] as string[]);
+  await createQuiet(path, `data:application/pdf;base64,${b64(bytes)}`);
+  for (const [i, text] of pages.entries()) await createQuiet(`${path.replace(/\.pdf$/i, "")}/Page ${String(i + 1).padStart(3, "0")}.md`, `---\nsource: ${url}\n---\n\n# ${name.replace(/\.pdf$/i, "")} · page ${i + 1}\n\n${text.trim() || "_(no text on this page)_"}\n`);
+  const text = S.drafts.get(from)?.text ?? note(from)?.content ?? "";
+  const swapped = text.split(url).join(name);
+  if (swapped !== text) await writeNote(from, swapped);
+  toast(`Saved ${name}${pages.length ? ` and ${pages.length} page note${pages.length === 1 ? "" : "s"} you can search` : ""}.`, "ok");
+}
+
 const BATCH_BYTES = 1_400_000;
 type Incoming = { path: string; bytes: Uint8Array };
+/** pdf.js, loaded on first use. */
+async function pdfjsLib() {
+  const pdfjs = await import("pdfjs-dist");
+  pdfjs.GlobalWorkerOptions.workerSrc = (await import("pdfjs-dist/build/pdf.worker.min.mjs?url")).default as string;
+  return pdfjs;
+}
 /** The text of each page of a PDF, through pdf.js loaded on first use. */
 async function pdfPages(bytes: Uint8Array): Promise<string[]> {
-  const pdfjs = await import("pdfjs-dist");
-  const worker = (await import("pdfjs-dist/build/pdf.worker.min.mjs?url")).default as string;
-  pdfjs.GlobalWorkerOptions.workerSrc = worker;
+  const pdfjs = await pdfjsLib();
   const doc = await pdfjs.getDocument({ data: bytes.slice() }).promise;
   const out: string[] = [];
   for (let i = 1; i <= doc.numPages; i++) {
@@ -5497,6 +5773,21 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
     case "deck-add": { const k = el.dataset.deck!; await createQuiet(`Skills/${k}.md`, DECKS[k]); S.tab = "notes"; return open(`Skills/${k}.md`); }
     case "conflicts-open": return conflictDialog();
     case "keep-offline": return keepOffline();
+    case "career-app-add": case "career-board": case "career-followed": case "career-heard": case "career-exp-add": case "career-resume-new": case "career-compile": case "career-feedback": case "career-story-add": case "career-practice": case "career-contacted": case "career-person-add": case "career-channel": return careerAction(action, el);
+    case "pdf-load": case "pdf-all": {
+      const box = el.closest<HTMLElement>(".pdf-embed");
+      if (!box) return;
+      if (action === "pdf-all") box.dataset.all = "1";
+      const body = box.querySelector<HTMLElement>(".pdf-body")!;
+      body.innerHTML = `<span class="small muted">${action === "pdf-load" ? "Fetching…" : "Drawing pages…"}</span>`;
+      try { if (action === "pdf-load") await pdfBytesFor(box, true); await drawPdf(box, box.dataset.all === "1"); } catch (e) { body.innerHTML = `<span class="small" style="color:var(--danger)">Could not show it: ${esc(errMsg(e))}</span>`; }
+      return;
+    }
+    case "pdf-save": {
+      const box = el.closest<HTMLElement>(".pdf-embed");
+      if (box) await savePdfCopy(box);
+      return;
+    }
     case "nb-delete": return deleteNotebook();
     case "conflict-mine": case "conflict-theirs": case "conflict-both": return resolveConflict(Number(el.dataset.i), action.slice(9) as "mine" | "theirs" | "both");
     case "chat-clear":
