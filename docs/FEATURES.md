@@ -20,7 +20,7 @@ sentence or three. Keyboard shortcuts use ⌘ on a Mac and Ctrl elsewhere.
 - **Snapshots.** Take a full canister snapshot from Manage before anything risky, list it, restore it (stop, load, start) or delete it. One snapshot is kept; a new one replaces it.
 - **Download the notebook.** A zip of every note, folder and attachment, built in the browser with no library.
 - **Restore from zip.** Puts a zip back: notes in the zip overwrite yours, notes missing from the zip are deleted, agent notes are kept.
-- **Import from Obsidian.** Pick the Obsidian folder or a zip, or drop it on the file list. Markdown and text become notes; images, audio and PDFs under 700 KB come along as attachments; `.obsidian` is skipped; existing notes are kept unless you choose overwrite. Big imports go up in batches and load back in pages.
+- **Import from Obsidian.** Pick the Obsidian folder or a zip, or drop it on the file list. From the notebooks screen, Import from Obsidian makes a new notebook from them: it counts what will come across, asks for a name (the folder's, to start with), takes the deposit like Create notebook does, and only then creates the canister and copies the notes in (replacing the starter index.md and Projects/First project.md, and leaving example notes unticked in the setup tour). Markdown and text become notes; images, audio and PDFs under 700 KB come along as attachments; `.obsidian` is skipped; existing notes are kept unless you choose overwrite. Big imports go up in batches and load back in pages.
 
 ## Writing
 

@@ -843,7 +843,7 @@ const COMMANDS: { label: string; kbd?: string; run: () => void }[] = [
   { label: "Show notes", run: () => { S.tab = "notes"; render(); } },
   { label: "Manage notebook", run: () => { S.tab = "manage"; render(); } },
   { label: "Download notebook (.zip)", run: () => void downloadNotebook() },
-  { label: "Import from Obsidian", run: importDialog },
+  { label: "Import from Obsidian", run: () => importDialog() },
   { label: "Toggle dark / light", run: () => { S.theme = { ...S.theme, mode: S.theme.mode === "dark" ? "light" : "dark" }; saveThemeState(S.theme); applyTheme(S.theme); render(); } },
   { label: "Help and support", run: () => void helpDialog() },
   { label: "All notebooks", run: () => { location.hash = "#/"; } },
@@ -1001,7 +1001,7 @@ function notebooksPage(): string {
         <span class="name">${icon("plus")}New notebook</span>
         <span class="small muted">Spawns a canister with you as owner and controller.${S.price > 0n ? ` Spawning costs ${icp(S.price)} ICP.` : ""}</span>
         <div class="row tight"><input class="input" name="newNotebook" value="${esc(S.newNotebook)}" placeholder="Name" required aria-label="Notebook name"><input class="input" name="newDesc" value="${esc(S.newDesc)}" placeholder="What it is for (optional)" aria-label="Description" style="flex:1 1 100%"></div>
-        <div class="row tight"><button type="submit" class="btn btn-primary" ${S.busy ? "disabled" : ""}>${S.busy === "create" ? esc(S.createStep || "Spawning…") : "Create notebook"}</button></div>
+        <div class="row tight wrap"><button type="submit" class="btn btn-primary" ${S.busy ? "disabled" : ""}>${S.busy === "create" ? esc(S.createStep || "Spawning…") : "Create notebook"}</button><button type="button" class="btn btn-ghost" data-action="import-new" ${S.busy ? "disabled" : ""} title="Make a notebook from an Obsidian folder or zip">${icon("upload")}Import from Obsidian</button></div>
         ${S.error ? `<span class="small error" role="alert">${esc(S.error)}.</span>` : ""}
       </form></div>`;
   return `<div class="page ${S.mobile ? "" : "has-activity"}">
@@ -2131,7 +2131,7 @@ function onboarding(step = 0, picked?: Set<Tab>) {
     { title: "Find and connect", body: `<ul><li>Search by words, <code>tag:</code>, <code>folder:</code> or any property such as <code>status:open</code>.</li><li>Tags like <code>#idea</code> collect notes; the tag list sits under the files.</li><li>Organize turns a search into a live view you can save, sort and edit as a table.</li></ul>` },
     { title: "Ask your notes", body: `<ul><li>Chat picks the notes that fit your question and answers from them, citing each claim with a number you can click.</li><li>When your notes do not cover it, the model says so and answers from its own knowledge under a clear label.</li><li>Save any answer as a note in the folder you choose.</li></ul>` },
     { title: "Choose your tools", body: `<p class="muted small">Start from a preset or tick what you need. You can change this any time in Manage → Notebook.</p><div class="row tight wrap">${Object.keys(PRESETS).map((p) => `<button type="button" class="btn btn-ghost" data-preset="${p}">${p}</button>`).join("")}</div><div class="feature-grid nudge">${FEATURES.map((f) => `<label class="feature-opt"><input type="checkbox" data-pick="${f.id}" ${chosen.has(f.id) ? "checked" : ""}><span>${icon(f.icon)}<b>${esc(f.label)}</b><span class="small muted">${esc(f.desc)}</span></span></label>`).join("")}</div>` },
-    { title: "You are set", body: `<p>The ribbon on the left now shows ${[...chosen].map((t) => `<b>${esc(FEATURES.find((f) => f.id === t)?.label ?? t)}</b>`).join(", ") || "just your notes"}.</p><label class="switch"><input type="checkbox" data-starters checked> Add example notes that show how to make each kind of note</label><p class="small muted nudge">Change the tools in Manage → Notebook → Features, where you can also replay this tour.</p>` },
+    { title: "You are set", body: `<p>The ribbon on the left now shows ${[...chosen].map((t) => `<b>${esc(FEATURES.find((f) => f.id === t)?.label ?? t)}</b>`).join(", ") || "just your notes"}.</p><label class="switch"><input type="checkbox" data-starters ${S.notebook && fromImport.has(S.notebook.canister.toText()) ? "" : "checked"}> Add example notes that show how to make each kind of note</label><p class="small muted nudge">Change the tools in Manage → Notebook → Features, where you can also replay this tour.</p>` },
   ];
   const s = steps[step];
   const el = document.createElement("div");
@@ -4504,9 +4504,10 @@ function depositDialog(name: string, minE8s: bigint): Promise<bigint | null> {
 /** Spawn a notebook and fund it: one approval (OISY's popup, opened straight from the click) covers
  *  the spawn price and the deposit, then the registry spawns the canister and mints the deposit
  *  into its cycles. A failed deposit leaves the notebook created; Manage can top it up later. */
-async function createNotebook() {
-  if (!S.newNotebook.trim()) return;
-  const deposit = await depositDialog(S.newNotebook.trim(), minDepositE8s(await icpXdrRate()));
+/** Pay (the deposit dialog, then OISY or the in-app wallet), spawn the canister and add its cycles.
+ *  Resolves to the new notebook's id, or undefined when cancelled or refused. */
+async function spawnNotebook(name: string, desc: string): Promise<string | undefined> {
+  const deposit = await depositDialog(name, minDepositE8s(await icpXdrRate()));
   if (deposit === null) return;
   S.busy = "create";
   S.error = "";
@@ -4516,9 +4517,9 @@ async function createNotebook() {
     const need = (S.price > 0n ? S.price + ICP_FEE : 0n) + (deposit > 0n ? deposit + ICP_FEE : 0n);
     if (need > 0n) { step(useOisy ? "Approve in OISY…" : "Approving…"); payer = await approvePayment(Principal.fromText(REGISTRY), need); }
     step("Spawning…");
-    const r = S.price > 0n ? await registry().create_notebook_paid_by(S.newNotebook.trim(), payer!) : await registry().create_notebook(S.newNotebook.trim());
+    const r = S.price > 0n ? await registry().create_notebook_paid_by(name, payer!) : await registry().create_notebook(name);
     if (r.__kind__ === "Err") throw new Error(r.Err);
-    if (S.newDesc.trim()) { try { await registry().set_notebook_meta(r.Ok.canister, null, S.newDesc.trim()); } catch { /* the card can be edited later */ } }
+    if (desc) { try { await registry().set_notebook_meta(r.Ok.canister, null, desc); } catch { /* the card can be edited later */ } }
     let funded = "";
     if (deposit > 0n) {
       step("Adding cycles…");
@@ -4528,17 +4529,45 @@ async function createNotebook() {
         funded = ` ${icp(deposit)} ICP became ${tc(t.Ok)} of cycles.`;
       } catch (e) { funded = ` The deposit did not go through (${errMsg(e)}); top it up from Manage.`; }
     }
-    S.newNotebook = "";
-    S.newDesc = "";
     toast(`Notebook “${r.Ok.name}” is live.${funded}`, funded.includes("did not") ? "error" : "ok");
     await loadNotebooks();
-    void openNotebook(r.Ok.canister.toText());
+    return r.Ok.canister.toText();
   } catch (e) {
     S.error = errMsg(e);
+  } finally {
+    S.busy = "";
+    S.createStep = "";
+    render();
   }
-  S.busy = "";
-  S.createStep = "";
-  render();
+}
+async function createNotebook() {
+  if (!S.newNotebook.trim()) return;
+  const id = await spawnNotebook(S.newNotebook.trim(), S.newDesc.trim());
+  if (!id) return;
+  S.newNotebook = "";
+  S.newDesc = "";
+  void openNotebook(id);
+}
+/** Notebooks just made from an Obsidian import: their setup tour starts with examples unticked. */
+const fromImport = new Set<string>();
+/** Home screen: a new notebook from an Obsidian folder or zip. Payment comes first; the notes are
+ *  written once the canister exists. */
+async function importNewNotebook(picked: Incoming[], suggested: string) {
+  const files = (await expandZips(picked)).filter((f) => !/(^|\/)\./.test(f.path));
+  const notes = files.filter((f) => TEXT_EXT.test(f.path)).length;
+  const other = files.filter((f) => !TEXT_EXT.test(f.path) && !!MIME[f.path.split(".").pop()!.toLowerCase()]).length;
+  if (!notes && !other) return toast("Nothing importable in there: no markdown, text or supported attachments.", "error");
+  const name = (await ask({ title: "New notebook from Obsidian", body: `${notes} note${notes === 1 ? "" : "s"}${other ? ` and ${other} attachment${other === 1 ? "" : "s"}` : ""} ready to import. Name the notebook, then choose its deposit: it is created once the payment goes through, and your notes are copied in right after.`, label: "Notebook name", value: suggested, ok: "Next" }))?.trim();
+  if (!name) return;
+  const id = await spawnNotebook(name, "");
+  if (!id) return;
+  fromImport.add(id);
+  await openNotebook(id);
+  if (S.notebook?.canister.toText() !== id || !S.notes) return;
+  // a new notebook starts with index.md and Projects/First project.md: your files take their place
+  const incoming = new Set(files.map((f) => f.path));
+  for (const p of paths()) if (!incoming.has(p) && !isAgentPath(p)) await nb().delete_(p).catch(() => undefined);
+  await importFiles(files, true);
 }
 
 function reindex() {
@@ -5451,6 +5480,18 @@ async function filesFromDrop(dt: DataTransfer): Promise<Incoming[]> {
   return out;
 }
 
+/** Zips opened into their files (a single top-level folder stripped), everything else as it is. */
+async function expandZips(files: Incoming[]): Promise<Incoming[]> {
+  const out: Incoming[] = [];
+  for (const f of files) {
+    if (!/\.zip$/i.test(f.path)) { out.push(f); continue; }
+    const inner = (await unzip(f.bytes.buffer.slice(f.bytes.byteOffset, f.bytes.byteOffset + f.bytes.byteLength) as ArrayBuffer)).filter((e) => !e.dir);
+    const roots = new Set(inner.map((e) => e.path.split("/")[0]));
+    const strip = roots.size === 1 && inner.every((e) => e.path.includes("/"));
+    out.push(...inner.map((e) => ({ path: strip ? e.path.split("/").slice(1).join("/") : e.path, bytes: e.data })));
+  }
+  return out;
+}
 /** Import files into the open notebook: text as-is, small attachments as data: URLs, dotfolders skipped. */
 async function importFiles(incoming: Incoming[], overwrite: boolean, restore = false) {
   if (!S.notebook || !S.notes) return;
@@ -5460,15 +5501,7 @@ async function importFiles(incoming: Incoming[], overwrite: boolean, restore = f
   let zips = 0;
   for (const f of incoming) {
     if (/(^|\/)\./.test(f.path)) continue; // .obsidian, .trash, .DS_Store
-    if (/\.zip$/i.test(f.path)) {
-      zips++;
-      const inner = await unzip(f.bytes.buffer.slice(f.bytes.byteOffset, f.bytes.byteOffset + f.bytes.byteLength) as ArrayBuffer);
-      const all = inner.filter((e) => !e.dir);
-      const roots = new Set(all.map((e) => e.path.split("/")[0]));
-      const strip = roots.size === 1 && all.every((e) => e.path.includes("/"));
-      incoming.push(...all.map((e) => ({ path: strip ? e.path.split("/").slice(1).join("/") : e.path, bytes: e.data })));
-      continue;
-    }
+    if (/\.zip$/i.test(f.path)) { zips++; incoming.push(...(await expandZips([f]))); continue; }
     const ext = f.path.split(".").pop()!.toLowerCase();
     if (ext === "pdf") {
       try {
@@ -5550,18 +5583,19 @@ async function restoreDialog() {
   inp.click();
 }
 
-/** The import dialog: pick a folder or a zip, or drop either onto the file pane. */
-function importDialog() {
+/** The import dialog: pick a folder or a zip, or drop either onto the file pane. With `forNew`
+ *  (the home screen) the files go into a new notebook, made and paid for first. */
+function importDialog(forNew = false) {
   const scrim = document.createElement("div");
   scrim.className = "scrim";
   scrim.innerHTML = `<form class="modal" role="dialog" aria-modal="true" aria-labelledby="imp-t">
-    <h2 id="imp-t">${icon("upload")} Import from Obsidian</h2>
-    <p class="muted small">Pick your Obsidian folder, or a zip of it. Markdown and text files are imported as notes, a PDF becomes one note per page plus the file; images, audio and PDFs under ${Math.round(MAX_ATTACHMENT / 1000)} KB come along as attachments. The .obsidian settings folder is skipped. You can also drop a folder onto the file list any time.</p>
+    <h2 id="imp-t">${icon("upload")} ${forNew ? "New notebook from Obsidian" : "Import from Obsidian"}</h2>
+    <p class="muted small">${forNew ? "A new notebook (its own canister) is made from them: you name it and pay its deposit before anything is created. " : ""}Pick your Obsidian folder, or a zip of it. Markdown and text files are imported as notes, a PDF becomes one note per page plus the file; images, audio and PDFs under ${Math.round(MAX_ATTACHMENT / 1000)} KB come along as attachments. The .obsidian settings folder is skipped. You can also drop a folder onto the file list any time.</p>
     <div class="row tight nudge">
       <label class="btn btn-primary">${icon("folder")}Choose folder<input type="file" name="dir" webkitdirectory multiple hidden></label>
       <label class="btn">${icon("file")}Choose zip or files<input type="file" name="zip" multiple accept=".zip,.md,.txt,.canvas,image/*,audio/*,video/*,application/pdf" hidden></label>
     </div>
-    <label class="switch nudge"><input type="checkbox" name="overwrite"> Overwrite notes that already exist</label>
+    ${forNew ? "" : `<label class="switch nudge"><input type="checkbox" name="overwrite"> Overwrite notes that already exist</label>`}
     <div class="actions"><button type="button" class="btn" data-x="cancel">Cancel</button></div>
   </form>`;
   const close = () => scrim.remove();
@@ -5570,9 +5604,14 @@ function importDialog() {
   scrim.querySelectorAll<HTMLInputElement>("input[type=file]").forEach((inp) =>
     inp.addEventListener("change", async () => {
       const files = inp.files;
-      const overwrite = scrim.querySelector<HTMLInputElement>("[name=overwrite]")!.checked;
+      const overwrite = !!scrim.querySelector<HTMLInputElement>("[name=overwrite]")?.checked;
       close();
-      if (files?.length) await importFiles(await filesFromList(files), overwrite);
+      if (!files?.length) return;
+      if (!forNew) return importFiles(await filesFromList(files), overwrite);
+      // the folder's (or zip's) name is the notebook's name to start with
+      const first = files[0] as File & { webkitRelativePath?: string };
+      const root = first.webkitRelativePath ? first.webkitRelativePath.split("/")[0] : files.length === 1 ? first.name.replace(/\.zip$/i, "") : "";
+      await importNewNotebook(await filesFromList(files), root || "From Obsidian");
     }),
   );
   document.body.append(scrim);
@@ -5700,7 +5739,7 @@ function menuFor(kind: "file" | "folder" | "root", path: string, x: number, y: n
       { label: "New folder", icon: "folder", action: () => void newFolder("") },
       { label: "Agents and keys", icon: "bot", action: () => { S.tab = "manage"; render(); } },
       "-",
-      { label: "Import from Obsidian…", icon: "upload", action: importDialog },
+      { label: "Import from Obsidian…", icon: "upload", action: () => importDialog() },
       { label: "Download notebook (.zip)", icon: "download", action: () => void downloadNotebook() },
       { label: S.collapsed.size ? "Expand all folders" : "Collapse all folders", icon: "chevron", action: () => { if (S.collapsed.size) S.collapsed.clear(); else for (const f of S.folders) S.collapsed.add(f); store("nb-collapsed", JSON.stringify([...S.collapsed])); renderSide(); } },
     ]);
@@ -7047,6 +7086,8 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
         toast(errMsg(e), "error");
       }
       return render();
+    case "import-new":
+      return importDialog(true);
     case "import":
       return importDialog();
     case "restore":

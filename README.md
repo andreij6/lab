@@ -75,7 +75,7 @@ The notes chat calls the ICP LLM canister. Locally, `icp deploy` also deploys `l
   block of an Obsidian theme can be pasted in from the appearance menu. Built in: Velocity (the
   default, after the community theme by gonzalo-d-sales), Nord, Gruvbox (yellow/orange), Red Graphite (red); each in dark and
   light.
-- **Import from Obsidian.** Manage → Import, the file pane's ⋯ menu, or drop the Obsidian folder
+- **Import from Obsidian.** Into a new notebook from the notebooks screen (paid for before it is created), or into an open one from Manage → Import, the file pane's ⋯ menu, or by dropping the Obsidian folder
   (or a zip of it) onto the file list. Markdown and text files become notes; images, audio and PDFs
   under 700 KB come along as attachments stored as `data:` URLs and fetched on demand; `.obsidian`
   and other dotfolders are skipped; existing notes are kept unless you choose to overwrite. Files
