@@ -37,6 +37,12 @@ type Channel = record {
   created_at : nat64;
   created_by : principal;
 };
+type Flag = record {
+  on : bool;
+  name : text;
+  description : text;
+  default : bool;
+};
 // A fundraiser whose only possible outcome is cycles for `canister`: every donation is ICP pulled
 // from the donor and minted straight into that notebook; the owner never holds the tokens.
 type Fund = record {
@@ -206,7 +212,8 @@ type Result_18 = variant { Ok : vec Online; Err : text };
 type Result_19 = variant { Ok : Rain; Err : text };
 type Result_2 = variant { Ok : nat32; Err : text };
 type Result_20 = variant { Ok : Bug; Err : text };
-type Result_21 = variant { Ok : SnapshotInfo; Err : text };
+type Result_21 = variant { Ok : Flag; Err : text };
+type Result_22 = variant { Ok : SnapshotInfo; Err : text };
 type Result_3 = variant { Ok : Attestation; Err : text };
 type Result_4 = variant { Ok : vec Bug; Err : text };
 type Result_5 = variant { Ok : Notebook; Err : text };
@@ -334,6 +341,7 @@ service : () -> {
   donate : (text, nat64, nat64) -> (Result_6);
   // The author rewrites a message; the same filters apply and it is marked edited.
   edit_message : (text, nat64, text) -> (Result_6);
+  flags : () -> (vec Flag) query;
   // Forget a notebook you own (after deleting the canister yourself); the canister is not touched.
   forget_notebook : (principal) -> (Result);
   get_post : (nat64) -> (opt Post) query;
@@ -376,6 +384,8 @@ service : () -> {
   listings : () -> (vec ListingView) query;
   market_fee : () -> (nat64) query;
   members : () -> (vec Member) query;
+  message_fee : () -> (nat64) query;
+  message_ttl_days : () -> (nat64) query;
   // Messages in a channel after `after` (0 for the newest page), oldest first, at most `limit` (≤ 100).
   messages : (text, nat64, nat32) -> (Result_16) query;
   // The caller's own reports, newest first.
@@ -441,6 +451,8 @@ service : () -> {
   // Roll a notebook back to a snapshot: stop, load, start.
   restore_snapshot : (principal, blob) -> (Result);
   set_chat_min : (nat64) -> (Result);
+  // Admin: switch a feature on or off for everyone.
+  set_flag : (text, bool) -> (Result_21);
   // Change one notebook's freezing threshold (controller only): the admin's knob for testing a freeze or granting more time.
   set_freezing_threshold : (principal, nat64) -> (Result);
   // Admin: the `owner/name` repository whose contributors may use the developers channel.
@@ -460,7 +472,7 @@ service : () -> {
   // The registry keeps no tokens either: market fees in ck tokens or TCYCLES become its own cycles hourly.
   sweep_holdings : () -> (Result_13);
   // Take a snapshot of a notebook canister (its owner); at most one is kept, the newest replaces it.
-  take_snapshot : (principal, opt blob) -> (Result_21);
+  take_snapshot : (principal, opt blob) -> (Result_22);
   token_id : (principal) -> (opt nat64) query;
   // Give every notebook from before tokenisation an ICRC-7 id (controller only; new ones get it at spawn).
   tokenize_all : () -> (Result_2);

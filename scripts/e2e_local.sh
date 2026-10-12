@@ -182,7 +182,6 @@ expect "top_up converted the approved ICP" "Completed" notebook top_up '(20_000_
 icp token transfer 1 "$OTHERP" -q >/dev/null; icp token approve 0.1001 "$V" --identity "$OTHER" -q >/dev/null
 expect "top_up_from pulls from another account's allowance (the OISY flow)" "Completed" notebook top_up_from "(principal \"$OTHERP\", 10_000_000)"
 expect "top_up_from is owner only" "owner only" icp canister call "$V" top_up_from "(principal \"$OTHERP\", 10_000_000)" --identity "$OTHER"
-expect "the auto top-up payer can be set" 'payer = opt principal' notebook set_auto_topup_payer "(opt principal \"$OTHERP\")"
 expect "below the minimum is refused" "minimum" notebook top_up '(10)'
 expect "a stranger with no allowance cannot top up" "Err" icp canister call "$V" top_up '(20_000_000)' --identity "$OTHER"
 C1=$(notebook info '()' --query | grep -o 'cycles = [0-9_]*' | head -1 | tr -d 'cycles =_')
@@ -315,10 +314,6 @@ expect "unpublish" "Ok" notebook set_published '(null)'
 expect "nothing is published now" "nothing is published" curl -s "$URL/p/"
 notebook delete_folder '("Shared")' >/dev/null
 
-echo "== auto top-up and snapshots"
-expect "auto top-up settings are kept" 'enabled = true' notebook set_auto_topup '(true, 5_000_000_000_000, 10_000_000)'
-expect "below the minimum is refused" "minimum" notebook set_auto_topup '(true, 1, 10)'
-notebook set_auto_topup '(false, 0, 10_000_000)' >/dev/null
 SNAP=$(reg take_snapshot "(principal \"$V\", null)"); echo "$SNAP" | grep -q "taken_at" && echo "  ok: snapshot taken" || fail "snapshot: $SNAP"
 expect "snapshots are listed" "taken_at" reg list_snapshots "(principal \"$V\")"
 SNAP_ID=$(echo "$SNAP" | grep -o 'id = blob "[^"]*"' | head -1 | sed 's/id = blob //')
@@ -370,7 +365,9 @@ CA=$(reg notebook_status "(principal \"$V\")" | grep -o 'cycles = [0-9_]*' | hea
 expect "the sweep is recorded" "TCYCLES" notebook deposits '()' --query
 expect "a second sweep finds nothing" "nothing to convert" notebook sweep_deposits '()'
 
-echo "== community: ICP-gated chat with channels and presence"
+echo "== community: ICP-gated chat with channels and presence (every new message costs twice the ledger fee)"
+expect "a message costs twice the ledger fee" "(20_000 : nat64)" icp canister call registry message_fee '()' --query
+icp token approve 0.5 "$(icp canister status registry -i)" --identity "$OWNER" -q >/dev/null; icp token transfer 1 "$OTHERP" -q >/dev/null; icp token approve 0.5 "$(icp canister status registry -i)" --identity "$OTHER" -q >/dev/null; icp token approve 0.5 "$(icp canister status registry -i)" -q >/dev/null
 SUF=$(date +%s | tail -c 5)
 expect "six channels exist" "general" icp canister call registry channels '()' --query
 expect "anonymous cannot join" "sign in" icp canister call registry join_community '("anon")' --identity anonymous
@@ -477,6 +474,13 @@ expect "recent_rain lists it" "recipients = vec" icp canister call registry rece
 expect "the minimum balance is a setting" "Ok" icp canister call registry set_chat_min '(1_000_000)'
 icp canister call registry set_chat_min '(1)' >/dev/null
 
+echo "== feature flags"
+expect "flags are listed with the market off" 'name = "market"' icp canister call registry flags '()' --query
+icp canister call registry set_flag '("market", false)' >/dev/null  # a previous run may have left it on
+expect "the market is closed while its flag is off" "switched off" reg list_notebook "(principal \"$V\", \"ICP\", 1_000_000, \"x\")"
+expect "only an admin flips a flag" "admin only" reg set_flag '("market", true)'
+expect "an unknown flag is refused" "unknown flag" icp canister call registry set_flag '("teleport", true)'
+expect "the admin opens the market" "on = true" icp canister call registry set_flag '("market", true)'
 echo "== tokenised notebooks: ICRC-7, the judge, the market, ratings"
 expect "the notebook has an ICRC-7 token id" "opt" reg token_id "(principal \"$V\")" --query
 TID=$(reg token_id "(principal \"$V\")" --query | grep -oE '[0-9_]+ : nat64' | sed 's/ : nat64//; s/_//g')
@@ -526,4 +530,5 @@ expect "forget_notebook refuses a stranger" "not your notebook" icp canister cal
 expect "forget_notebook works for the owner" "Ok" reg forget_notebook "(principal \"$V\")"
 for PAIDID in $(reg my_notebooks '()' --query | grep -o 'canister = principal "[^"]*"' | sed 's/.*"\(.*\)"/\1/'); do reg forget_notebook "(principal \"$PAIDID\")" >/dev/null; done
 expect "notebooks no longer listed" "(vec {})" reg my_notebooks '()' --query
+icp canister call registry set_flag '("market", false)' >/dev/null  # leave the market closed, as shipped
 echo "E2E OK ($PASS checks)"

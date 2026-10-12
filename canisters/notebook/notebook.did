@@ -37,17 +37,6 @@ type Audit = record {
   decks : nat64;
   with_tags : nat64;
 };
-type AutoTopUp = record {
-  // top up when cycles fall under this
-  threshold : nat;
-  last_result : text;
-  enabled : bool;
-  // how much ICP to pull from the owner's approved allowance each time
-  amount_e8s : nat64;
-  // the account the allowance was approved from (an OISY wallet, usually); the owner when absent
-  payer : opt principal;
-  last_run : nat64;
-};
 type Comment = record {
   at : nat64;
   id : nat64;
@@ -163,13 +152,12 @@ type Result_19 = variant { Ok : Renamed; Err : NotebookError };
 type Result_2 = variant { Ok : vec Comment; Err : NotebookError };
 type Result_20 = variant { Ok : FolderRenamed; Err : NotebookError };
 type Result_21 = variant { Ok : vec Hit; Err : NotebookError };
-type Result_22 = variant { Ok : AutoTopUp; Err : NotebookError };
-type Result_23 = variant { Ok : Share; Err : NotebookError };
-type Result_24 = variant { Ok : vec Share; Err : NotebookError };
-type Result_25 = variant { Ok : Attempt; Err : NotebookError };
-type Result_26 = variant { Ok : TopUp; Err : text };
-type Result_27 = variant { Ok : FileMeta; Err : NotebookError };
-type Result_28 = variant { Ok : Imported; Err : NotebookError };
+type Result_22 = variant { Ok : Share; Err : NotebookError };
+type Result_23 = variant { Ok : vec Share; Err : NotebookError };
+type Result_24 = variant { Ok : Attempt; Err : NotebookError };
+type Result_25 = variant { Ok : TopUp; Err : text };
+type Result_26 = variant { Ok : FileMeta; Err : NotebookError };
+type Result_27 = variant { Ok : Imported; Err : NotebookError };
 type Result_3 = variant { Ok : NoteAttestation; Err : NotebookError };
 type Result_4 = variant { Ok : Audit; Err : NotebookError };
 type Result_5 = variant { Ok : text; Err : NotebookError };
@@ -233,7 +221,6 @@ service : (Init) -> {
   attest_note : (text, text, text, opt text, text) -> (Result_3);
   // Structure of the notebook for the registry's quality judge (owner or registry).
   audit : () -> (Result_4) query;
-  auto_topup : () -> (AutoTopUp) query;
   // A Bitcoin address owned by this canister: bitcoin sent there becomes ckBTC, then cycles.
   btc_address : () -> (Result_5);
   comment : (text, text) -> (Result_6);
@@ -289,9 +276,6 @@ service : (Init) -> {
   revision : (text, nat64) -> (Result_16) query;
   revoke_agent_key : (text) -> (Result_7);
   search_notes : (text, nat32) -> (Result_21) query;
-  set_auto_topup : (bool, nat, nat64) -> (Result_22);
-  // Which account the automatic top-up pulls from (the one that approved the allowance).
-  set_auto_topup_payer : (opt principal) -> (Result_22);
   // Mark where you are with a note: 1 read, 2 reviewing, 3 known (0 clears).
   set_progress : (text, nat8) -> (Result_7);
   // Publish `folder` ("" for the whole notebook, except Agents/ and attachments) at /p/; `None` unpublishes.
@@ -299,25 +283,25 @@ service : (Init) -> {
   set_settings : (text) -> (Result_7);
   // Share with explicit permissions: what the link allows (view, comment or edit; editing needs a
   // sign-in) and who may view, comment or edit. Replaces an earlier share of the same path.
-  set_share : (ShareArgs) -> (Result_23);
+  set_share : (ShareArgs) -> (Result_22);
   // Share a note, a folder, or the whole notebook ("") with readers and editors.
-  share : (text, bool, vec principal, vec principal) -> (Result_23);
+  share : (text, bool, vec principal, vec principal) -> (Result_22);
   // What a viewer may know about a share: the notebook's name, whether it is public, and their role.
   share_info : (text) -> (opt record { text; bool }) query;
   // Share a note with everyone (`public`) or with `principals` (readers); replaces an earlier share.
-  share_note : (text, bool, vec principal) -> (Result_23);
-  shares : () -> (Result_24) query;
+  share_note : (text, bool, vec principal) -> (Result_22);
+  shares : () -> (Result_23) query;
   // A finished quiz or deck session on a shared note; the owner sees who scored what.
-  submit_attempt : (text, nat32, nat32) -> (Result_25);
+  submit_attempt : (text, nat32, nat32) -> (Result_24);
   // Convert everything that arrived since the last run, now instead of at the next 10-minute tick.
   sweep_deposits : () -> (Result_5);
   // Convert whatever ICP sits on the account (minus one fee) into cycles now.
-  sweep_topups : () -> (Result_26);
+  sweep_topups : () -> (Result_25);
   // Pull `amount_e8s` the caller approved on the ICP ledger and turn it into this canister's cycles.
-  top_up : (nat64) -> (Result_26);
+  top_up : (nat64) -> (Result_25);
   // Pull `amount_e8s` that `payer` (an OISY wallet, for instance) approved for this canister on the
   // ICP ledger and convert it; the ledger's allowance is the authorization, the owner just triggers it.
-  top_up_from : (principal, nat64) -> (Result_26);
+  top_up_from : (principal, nat64) -> (Result_25);
   topups : (nat32) -> (vec TopUp) query;
   // Hand the notebook to a new owner. Only the registry calls this, after a sale or an ICRC-7
   // transfer it brokered. Agent keys and the auto top-up payer belonged to the old owner, so they go.
@@ -325,9 +309,9 @@ service : (Init) -> {
   unshare_note : (text) -> (Result_7);
   who_is_here : (text) -> (Result_14) query;
   // Create or overwrite a file.
-  write : (text, text) -> (Result_27);
+  write : (text, text) -> (Result_26);
   // Import many files at once (a vault upload); bad names are reported, not fatal.
-  write_many : (vec record { text; text }, bool) -> (Result_28);
+  write_many : (vec record { text; text }, bool) -> (Result_27);
   // An editor's write to a shared note (owner-style rules apply; never under Agents/).
-  write_shared : (text, text) -> (Result_27);
+  write_shared : (text, text) -> (Result_26);
 }

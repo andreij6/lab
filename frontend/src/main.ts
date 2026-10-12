@@ -6,8 +6,8 @@ import { Actor, HttpAgent, type Identity } from "@icp-sdk/core/agent";
 import { safeGetCanisterEnv } from "@icp-sdk/core/agent/canister-env";
 import { IDL } from "@icp-sdk/core/candid";
 import { Ed25519KeyIdentity } from "@icp-sdk/core/identity";
-import { createActor as registryActor, type Rain, type Channel, type Member, type Message, type Post, type PostComment, type Online, type Attestation, type ListingView, type Token, type Health, type Bug, type BugStatus, type Registry, type Notebook as NotebookRec } from "./bindings/registry";
-import { createActor as notebookActor, type AttestationView, type Attempt, Role, type DepositState, type AgentKey, type AutoTopUp, type Comment, type Info, type Note, type Revision, type Share, type TopUp, type Notebook as NotebookApi, type NotebookError } from "./bindings/notebook";
+import { createActor as registryActor, type Rain, type Channel, type Member, type Message, type Post, type PostComment, type Flag, type Online, type Attestation, type ListingView, type Token, type Health, type Bug, type BugStatus, type Registry, type Notebook as NotebookRec } from "./bindings/registry";
+import { createActor as notebookActor, type AttestationView, type Attempt, Role, type DepositState, type AgentKey, type Comment, type Info, type Note, type Revision, type Share, type TopUp, type Notebook as NotebookApi, type NotebookError } from "./bindings/notebook";
 import type { SnapshotInfo } from "./bindings/registry";
 import { Principal } from "@icp-sdk/core/principal";
 import { continueList, indentLines, toggleTask } from "./editor";
@@ -141,6 +141,8 @@ function trackCall<T>(method: string, p: Promise<T>): Promise<T> {
 function tracked<T extends object>(actor: T): T {
   return new Proxy(actor, { get(target, key) { const v = Reflect.get(target, key); if (typeof v !== "function" || typeof key !== "string") return v; return (...args: unknown[]) => { const r = (v as (...a: unknown[]) => unknown).apply(target, args); return r instanceof Promise ? trackCall(key, r) : r; }; } });
 }
+/** A feature flag from the registry; unknown or not yet loaded flags count as on, except the market. */
+const flag = (name: string): boolean => { const f = S.flags.find((x) => x.name === name); return f ? f.on : name !== "market"; };
 const registry = (): Registry => tracked(registryActor(REGISTRY, { agentOptions: { identity: S.identity, rootKey: env.IC_ROOT_KEY } }));
 const notebookOf = (id: string): NotebookApi => tracked(notebookActor(id, { agentOptions: { identity: S.identity, rootKey: env.IC_ROOT_KEY } }));
 const nb = (): NotebookApi => notebookOf(S.notebook!.canister.toText());
@@ -215,6 +217,7 @@ const S = {
   newAgent: "",
   shared: undefined as { canister: string; path: string; note?: Note; name?: string; error?: string; loading: boolean; files?: { path: string; size: bigint; modified: bigint }[]; role?: string; comments?: Comment[]; dirty?: boolean; here?: string[]; progress?: [Principal, number][]; myProgress?: number } | undefined,
   isAdmin: false,
+  flags: [] as Flag[],
   admin: undefined as { bugs: Bug[]; filter: string; kind?: string; open?: bigint; loading: boolean; repo?: string } | undefined,
   settings: parseSettings(undefined) as Settings,
   /** per pane: study mode shows one section at a time */
@@ -222,7 +225,7 @@ const S = {
   pomodoro: undefined as { end: number; phase: "work" | "break" } | undefined,
   taskOwner: "" as string,
   clipperKey: undefined as string | undefined,
-  community: undefined as { channel: string; channels: Channel[]; messages: Message[]; online: Online[]; member?: Member; balance?: bigint; min: bigint; loading: boolean; draft: string; replyTo?: Message; unread: Record<string, number>; showOnline: boolean; showChannels: boolean; picker?: { mid?: bigint }; editing?: bigint; pins?: Message[]; showPins?: boolean; error?: string; github?: string; repo?: string; firstUnseen?: bigint; atBottom?: boolean; newCount?: number; gistSlide?: Map<bigint, number> } | undefined,
+  community: undefined as { channel: string; channels: Channel[]; messages: Message[]; online: Online[]; member?: Member; balance?: bigint; min: bigint; loading: boolean; draft: string; replyTo?: Message; unread: Record<string, number>; showOnline: boolean; showChannels: boolean; picker?: { mid?: bigint }; editing?: bigint; pins?: Message[]; showPins?: boolean; fee?: bigint; error?: string; github?: string; repo?: string; firstUnseen?: bigint; atBottom?: boolean; newCount?: number; gistSlide?: Map<bigint, number> } | undefined,
   show: undefined as { slides: string[]; i: number; self?: string; dead?: boolean } | undefined,
   mentions: 0, // @mentions of me in the community since I last looked
   board: undefined as { topic?: string; sort: "hot" | "new" | "top"; posts: Post[]; open?: Post; comments: PostComment[]; channels: Channel[]; member?: Member; fee: bigint; loading: boolean; replyTo?: bigint; github?: string; showSide: boolean; showAside: boolean } | undefined,
@@ -239,7 +242,6 @@ const S = {
   serverHits: undefined as { path: string; snippet: string }[] | undefined,
   comments: [] as Comment[],
   published: null as string | null,
-  autoTopup: undefined as AutoTopUp | undefined,
   snapshots: undefined as SnapshotInfo[] | undefined,
   price: 0n,
   oisyAccount: store("nb-oisy") ?? "",
@@ -825,8 +827,8 @@ function routeSheet(el: HTMLElement) {
     { label: "Your notebooks", icon: "list", on: !S.notebook && !S.community && !S.board && !S.market && !S.admin, go: () => { location.hash = "#/"; } },
     ...(S.notebook ? [{ label: S.notebook.name, icon: "book", on: inNb && S.tab === "notes", go: () => { if (!inNb) location.hash = `#/notebook/${nbId}`; else { const i = document.createElement("i"); i.dataset.tab = "notes"; void onAction("tab", i, new MouseEvent("click")); } } } as R, tab("chat", "Chat with your notes", "chat"), tab("graph", "Graph", "graph"), tab("study", "Study", "check"), tab("work", "Work", "briefcase"), tab("manage", "Manage", "bolt")] : []),
     { label: "Community", icon: "person", on: !!S.community, go: () => { location.hash = "#/community"; } },
-    { label: "Board", icon: "list", on: !!S.board, go: () => { location.hash = "#/board"; } },
-    { label: "Market", icon: "tag", on: !!S.market, go: () => { location.hash = "#/market"; } },
+    ...(flag("board") ? [{ label: "Board", icon: "list", on: !!S.board, go: () => { location.hash = "#/board"; } } as R] : []),
+    ...(flag("market") ? [{ label: "Market", icon: "tag", on: !!S.market, go: () => { location.hash = "#/market"; } } as R] : []),
     ...(S.isAdmin ? [{ label: "Admin", icon: "bug", on: !!S.admin, go: () => { location.hash = "#/admin"; } } as R] : []),
   ];
   const extras: R[] = [
@@ -861,7 +863,7 @@ function moreMenu(el: HTMLElement) {
   if (S.notebook && (S.market || S.admin || S.community)) items.push({ label: `Back to “${S.notebook.name}”`, icon: "book", action: go(`#/notebook/${S.notebook.canister.toText()}`) });
   if (S.notebook || S.market || S.admin || S.community) items.push({ label: "Your notebooks", icon: "list", action: go("#/") });
   if (!S.community) items.push({ label: "Community chat", icon: "person", action: go("#/community") });
-  if (!S.market) items.push({ label: "Notebook market", icon: "tag", action: go("#/market") });
+  if (!S.market && flag("market")) items.push({ label: "Notebook market", icon: "tag", action: go("#/market") });
   if (!S.board) items.push({ label: "Board", icon: "list", action: go("#/board") });
   if (S.isAdmin && !S.admin) items.push({ label: "Admin · reports and ideas", icon: "bug", action: go("#/admin") });
   items.push("-", { label: "Help and support", icon: "help", action: () => void onAction("help", el, new MouseEvent("click")) }, { label: "Appearance", icon: "palette", action: () => void onAction("theme-menu", el, new MouseEvent("click")) }, "-", { label: "Sign out", icon: "out", action: () => void onAction("sign-out", el, new MouseEvent("click")) });
@@ -869,7 +871,7 @@ function moreMenu(el: HTMLElement) {
 }
 /** Where a page sits in the app: back to the open notebook and to the list (desktop; phones use the ⋯ menu). */
 const pageNav = () => S.mobile ? "" : `${S.notebook ? `<a class="btn btn-ghost" href="#/notebook/${S.notebook.canister.toText()}" data-action="nav">${icon("links")}<span class="lbl">Back to “${esc(S.notebook.name)}”</span></a>` : ""}<a class="btn btn-ghost" href="#/" data-action="nav">${icon("list")}<span class="lbl">Your notebooks</span></a>`;
-const themeBtn = () => S.mobile ? moreBtn() : `${S.community ? "" : `<a class="btn btn-ghost" href="#/community" data-action="nav" title="Community chat">${icon("person")}<span class="lbl">Community</span></a>`}${S.board ? "" : `<a class="btn btn-ghost" href="#/board" data-action="nav" title="Posts and discussion">${icon("list")}<span class="lbl">Board</span></a>`}${S.market ? "" : `<a class="btn btn-ghost" href="#/market" data-action="nav" title="Notebooks for sale">${icon("tag")}<span class="lbl">Market</span></a>`}${S.isAdmin ? `<a class="btn btn-ghost" href="#/admin" data-action="nav" title="Reports and ideas">${icon("bug")}<span class="lbl">Admin</span></a>` : ""}<button type="button" class="btn btn-ghost icon-btn" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="btn btn-ghost icon-btn" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon(S.theme.mode === "dark" ? "moon" : "sun")}</button>`;
+const themeBtn = () => S.mobile ? moreBtn() : `${S.community ? "" : `<a class="btn btn-ghost" href="#/community" data-action="nav" title="Community chat">${icon("person")}<span class="lbl">Community</span></a>`}${S.board || !flag("board") ? "" : `<a class="btn btn-ghost" href="#/board" data-action="nav" title="Posts and discussion">${icon("list")}<span class="lbl">Board</span></a>`}${S.market || !flag("market") ? "" : `<a class="btn btn-ghost" href="#/market" data-action="nav" title="Notebooks for sale">${icon("tag")}<span class="lbl">Market</span></a>`}${S.isAdmin ? `<a class="btn btn-ghost" href="#/admin" data-action="nav" title="Reports and ideas">${icon("bug")}<span class="lbl">Admin</span></a>` : ""}<button type="button" class="btn btn-ghost icon-btn" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="btn btn-ghost icon-btn" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon(S.theme.mode === "dark" ? "moon" : "sun")}</button>`;
 const account = () => `<footer class="account">${icon("shield")}<span>Signed in as <code class="principal" title="${S.principal}">${shortPrincipal(S.principal)}</code></span><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="copy-principal">${S.copied === "principal" ? "Copied" : "Copy principal"}</button><button type="button" class="btn btn-ghost" data-action="sign-out">Sign out</button></span></footer>`;
 
 function landing(): string {
@@ -976,7 +978,7 @@ function ribbonHtml(i?: Info, low = false): string {
   const rb = (tab: Tab, label: string, ic: string, extra = "") => `<button type="button" class="rb ${inNb && S.tab === tab ? "on" : ""}" data-action="ribbon-tab" data-tab="${tab}" title="${label}" aria-label="${label}" aria-pressed="${inNb && S.tab === tab}">${icon(ic)}${extra}</button>`;
   return `<nav class="ribbon" aria-label="Sections">
       <div class="rb-group">${rb("notes", "Notes", "notes")}${rb("chat", "Chat with your notes", "chat")}${rb("graph", "Knowledge graph", "graph")}${rb("study", `Study${dueTotal() ? ` · ${dueTotal()} cards due` : ""}`, "check", dueTotal() ? `<i class="rb-count">${dueTotal()}</i>` : "")}${rb("work", `Work${overdueCount() ? ` · ${overdueCount()} overdue` : ""}`, "briefcase", overdueCount() ? `<i class="rb-count danger">${overdueCount()}</i>` : "")}</div>
-      <div class="rb-group bottom">${rb("manage", `Manage${i ? ` · ${tc(i.cycles)}` : ""}`, "bolt", low ? `<i class="rb-dot"></i>` : "")}<a class="rb ${S.community ? "on" : ""}" href="#/community" data-action="nav" title="Community${S.mentions ? ` · ${S.mentions} new mention${S.mentions === 1 ? "" : "s"}` : ""}" aria-label="Community">${icon("person")}${S.mentions ? `<i class="rb-badge">${S.mentions > 9 ? "9+" : S.mentions}</i>` : ""}</a><a class="rb ${S.board ? "on" : ""}" href="#/board" data-action="nav" title="Board: posts and discussion" aria-label="Board">${icon("list")}</a><a class="rb ${S.market ? "on" : ""}" href="#/market" data-action="nav" title="Notebook market" aria-label="Notebook market">${icon("tag")}</a>${S.isAdmin ? `<a class="rb ${S.admin ? "on" : ""}" href="#/admin" data-action="nav" title="Reports and ideas" aria-label="Reports and ideas">${icon("bug")}</a>` : ""}<button type="button" class="rb" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="rb" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button><button type="button" class="rb" data-action="sign-out" title="Sign out" aria-label="Sign out">${icon("out")}</button></div>
+      <div class="rb-group bottom">${rb("manage", `Manage${i ? ` · ${tc(i.cycles)}` : ""}`, "bolt", low ? `<i class="rb-dot"></i>` : "")}<a class="rb ${S.community ? "on" : ""}" href="#/community" data-action="nav" title="Community${S.mentions ? ` · ${S.mentions} new mention${S.mentions === 1 ? "" : "s"}` : ""}" aria-label="Community">${icon("person")}${S.mentions ? `<i class="rb-badge">${S.mentions > 9 ? "9+" : S.mentions}</i>` : ""}</a>${flag("board") ? `<a class="rb ${S.board ? "on" : ""}" href="#/board" data-action="nav" title="Board: posts and discussion" aria-label="Board">${icon("list")}</a>` : ""}${flag("market") ? `<a class="rb ${S.market ? "on" : ""}" href="#/market" data-action="nav" title="Notebook market" aria-label="Notebook market">${icon("tag")}</a>` : ""}${S.isAdmin ? `<a class="rb ${S.admin ? "on" : ""}" href="#/admin" data-action="nav" title="Reports and ideas" aria-label="Reports and ideas">${icon("bug")}</a>` : ""}<button type="button" class="rb" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="rb" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button><button type="button" class="rb" data-action="sign-out" title="Sign out" aria-label="Sign out">${icon("out")}</button></div>
     </nav>`;
 }
 function shellBody(body: string, i: Info | undefined, low: boolean, alert: string, mobileNav: string, seg: string): string {
@@ -1423,7 +1425,8 @@ async function loadCommunity(channel?: string) {
   S.community = c;
   render();
   try {
-    const [chs, mem, min, gh, repo] = await Promise.all([registry().channels(), registry().my_membership(), registry().chat_min(), registry().my_github(), registry().github_repo()]);
+    const [chs, mem, min, gh, repo, fee] = await Promise.all([registry().channels(), registry().my_membership(), registry().chat_min(), registry().my_github(), registry().github_repo(), registry().message_fee().catch(() => 20_000n)]);
+    c.fee = fee;
     c.channels = chs;
     c.member = mem ?? undefined;
     c.min = min;
@@ -1489,11 +1492,23 @@ function channelsHtml(): string {
       <div class="wallet-bal"><b>${c.balance === undefined ? "…" : `${icp(c.balance)} ICP`}</b><button type="button" class="btn btn-ghost icon-btn" data-action="wallet-refresh" title="Refresh" aria-label="Refresh balance">${icon("refresh")}</button></div>
       <div class="small muted">${verifiedNow(c.member) ? `Chatting as <b>@${esc(c.member!.handle)}</b> · checked ${ago(c.member!.verified_until - 86_400_000_000_000n)}` : c.member ? "Your ICP check has lapsed; renew to post." : c.min <= 10_000n ? "Hold any ICP here, then join, to post." : `Hold at least ${icp(c.min)} ICP here to post.`}</div>
       <div class="row tight nudge"><button type="button" class="btn btn-primary" data-action="wallet-add" title="${useOisy ? "Opens your OISY wallet to send ICP here; no address to copy" : "Locally: shows the command that funds your development account"}">${icon("bolt")}Add ICP${useOisy ? " from OISY" : ""}</button>${verifiedNow(c.member) ? `<button type="button" class="btn btn-ghost" data-action="chat-join" title="Change your handle or renew the check">${icon("edit")}Handle</button>` : `<button type="button" class="btn" data-action="chat-join">${icon("check")}${c.member ? "Renew" : "Join"}</button>`}</div>
-      ${useOisy ? `<div class="small faint">${S.oisyAccount ? `OISY account ${esc(shortPrincipal(S.oisyAccount))} · ` : ""}rain, donations and posts are paid from this wallet</div>` : `<div class="small faint mono" title="ICP sent to this principal lands in your in-app wallet">${esc(shortPrincipal(S.principal))}<button type="button" class="btn btn-ghost icon-btn" data-action="copy-principal" aria-label="Copy principal">${icon("copy")}</button></div>`}
+      ${useOisy ? `<div class="small faint">${S.oisyAccount ? `OISY account ${esc(shortPrincipal(S.oisyAccount))} · ` : ""}messages (0.0002 ICP each), rain, donations and posts are paid from this wallet</div>` : `<div class="small faint mono" title="ICP sent to this principal lands in your in-app wallet">${esc(shortPrincipal(S.principal))}<button type="button" class="btn btn-ghost icon-btn" data-action="copy-principal" aria-label="Copy principal">${icon("copy")}</button></div>`}
     </div>`;
   return `<div class="pane-head"><span class="pane-title" style="padding:0">Channels</span>${S.isAdmin ? `<button type="button" class="btn btn-ghost icon-btn" data-action="chat-new-channel" title="New channel" aria-label="New channel">${icon("plus")}</button>` : ""}</div>
     <div class="chans">${c.channels.map((ch) => `<button type="button" class="chan ${ch.name === c.channel ? "on" : ""}" data-action="chat-channel" data-channel="${esc(ch.name)}" title="${esc(ch.topic)}"><span class="hash">#</span>${esc(ch.name)}${ch.gate ? `<span class="gate-ico" title="Contributors only">${icon("lock")}</span>` : ""}${c.unread[ch.name] ? `<span class="unread">${c.unread[ch.name]}</span>` : ""}${S.isAdmin && ch.name !== "general" ? `<span class="chan-del" data-action="chat-del-channel" data-channel="${esc(ch.name)}" title="Delete channel">${icon("x")}</span>` : ""}</button>`).join("")}</div>
     ${wallet}`;
+}
+/** New chat messages cost the registry's message fee from the member's allowance. The first refusal
+ *  approves enough for about 100 messages (one OISY popup), then retries, so posting stays one step. */
+const CHAT_ALLOWANCE_E8S = 2_000_000n;
+async function paidPost<T extends { __kind__: "Ok" } | { __kind__: "Err"; Err: string }>(call: () => Promise<T>): Promise<T> {
+  const r = await call();
+  if (r.__kind__ === "Err" && /payment refused|allowance/i.test(r.Err)) {
+    toast("Approving ICP for your messages (about 100 of them)…", "info");
+    await approvePayment(Principal.fromText(REGISTRY), CHAT_ALLOWANCE_E8S + ICP_FEE);
+    return call();
+  }
+  return r;
 }
 /** Chat text: bold, italics, code and @mentions only; everything else is plain text (no links, no images). */
 const SHORTCODES: Record<string, string> = { smile: "😄", grin: "😁", joy: "😂", wink: "😉", heart: "❤️", "+1": "👍", thumbsup: "👍", "-1": "👎", clap: "👏", fire: "🔥", rocket: "🚀", eyes: "👀", tada: "🎉", thinking: "🤔", pray: "🙏", wave: "👋", ok: "👌", check: "✅", x: "❌", star: "⭐", bulb: "💡", warning: "⚠️", coffee: "☕", bug: "🐛", sparkles: "✨", "100": "💯", sob: "😭", sunglasses: "😎", muscle: "💪", brain: "🧠", books: "📚", memo: "📝", money: "💰", rain: "☔", zap: "⚡", pin: "📌" };
@@ -1569,13 +1584,14 @@ function chatHtmlC(): string {
   const ch = c.channels.find((x) => x.name === c.channel);
   const can = verifiedNow(c.member) && !(ch?.gate === "github" && !c.github);
   const msgs = c.messages.length ? c.messages.map((m, i) => messageHtml(m, c.messages[i - 1])).join("") : `<div class="chat-empty">${icon("chat")}<h3>#${esc(c.channel)}</h3><p class="muted small">${esc(ch?.topic ?? "")}. Nothing here yet; say hello.</p></div>`;
-  return `<div class="chat-head"><span class="hash">#</span><b>${esc(c.channel)}</b><span class="small muted">${esc(ch?.topic ?? "")}</span><span class="right-actions">${c.pins?.length ? `<button type="button" class="btn btn-ghost" data-action="chat-pins" title="Pinned messages">📌<span class="small lbl">${c.pins.length}</span></button>` : ""}<button type="button" class="btn btn-ghost" data-action="rain" title="Send ICP to random people who chatted in the last 30 minutes" ${can ? "" : "disabled"}>☔<span class="small lbl">Rain</span></button>${S.mobile ? `<button type="button" class="btn btn-ghost icon-btn" data-action="chat-online-toggle" title="Who is online" aria-label="Who is online">${icon("person")}</button>` : ""}</span></div>
+  return `<div class="chat-head"><span class="hash">#</span><b>${esc(c.channel)}</b><span class="small muted">${esc(ch?.topic ?? "")}</span><span class="right-actions">${c.pins?.length ? `<button type="button" class="btn btn-ghost" data-action="chat-pins" title="Pinned messages">📌<span class="small lbl">${c.pins.length}</span></button>` : ""}${flag("rain") ? `<button type="button" class="btn btn-ghost" data-action="rain" title="Send ICP to random people who chatted in the last 30 minutes" ${can ? "" : "disabled"}>☔<span class="small lbl">Rain</span></button>` : ""}${S.mobile ? `<button type="button" class="btn btn-ghost icon-btn" data-action="chat-online-toggle" title="Who is online" aria-label="Who is online">${icon("person")}</button>` : ""}</span></div>
     ${c.showPins && c.pins?.length ? `<div class="pins"><div class="pane-title" style="padding:0 0 4px">Pinned</div>${c.pins.map((m) => `<button type="button" class="pin-row" data-action="chat-goto" data-mid="${m.id}"><b>@${esc(m.handle)}</b> ${esc(m.text.slice(0, 100))}</button>`).join("")}</div>` : ""}
     <div class="chat-log" data-chat-log>${c.loading && !c.messages.length ? `<p class="muted small" style="padding:12px">Loading…</p>` : msgs}</div>
     <button type="button" class="btn jump" data-action="chat-jump" data-jump hidden>${icon("down")}<span class="n">Jump to latest</span></button>
     ${ch?.gate === "github" && !c.github && verifiedNow(c.member) ? `<div class="gate"><b>#${esc(c.channel)} is for contributors${c.repo ? ` to ${esc(c.repo)}` : ""}.</b> ${c.repo ? `Put your principal <code>${esc(S.principal)}</code><button type="button" class="btn btn-ghost icon-btn" data-action="copy-principal" aria-label="Copy principal">${icon("copy")}</button> in your GitHub bio, then link your login.` : "An admin has not set the repository yet."}${c.repo ? `<button type="button" class="btn btn-primary" data-action="link-github">${icon("link")}Link GitHub</button>` : ""}</div>` : ""}
     <form class="composer" data-form="chat-post">${c.editing !== undefined ? `<div class="replying">${icon("edit")}Editing your message<button type="button" class="btn btn-ghost icon-btn" data-action="chat-edit-cancel" aria-label="Cancel edit">${icon("x")}</button></div>` : ""}${c.replyTo ? `<div class="replying">${icon("links")}Replying to <b>@${esc(c.replyTo.handle)}</b>: ${esc(c.replyTo.text.slice(0, 80))}<button type="button" class="btn btn-ghost icon-btn" data-action="chat-reply-cancel" aria-label="Cancel reply">${icon("x")}</button></div>` : ""}
       <div class="compose-box ${can ? "" : "off"}"><button type="button" class="btn btn-ghost icon-btn" data-action="chat-plus" title="Poll, gist or fundraiser" aria-label="More" ${can ? "" : "disabled"}>${icon("plus")}</button><textarea name="chattext" rows="1" placeholder="${can ? `Message #${esc(c.channel)}` : ch?.gate === "github" && verifiedNow(c.member) ? `Link your GitHub to post in #${esc(c.channel)}` : c.member ? "Renew your ICP check to post" : "Add ICP to your wallet and join to post"}" ${can ? "" : "disabled"} aria-label="Message" title="↵ to send, ⇧↵ for a new line">${esc(c.draft)}</textarea><button type="button" class="btn btn-ghost icon-btn emoji-btn" data-action="chat-emoji" title="Emoji" aria-label="Emoji" ${can ? "" : "disabled"}>☺</button></div>
+      ${can ? `<div class="compose-hint small muted">${icon("bolt")}Each new message costs <b>${icp(c.fee ?? 20_000n)} ICP</b> from your wallet${c.balance !== undefined ? ` · ${icp(c.balance)} ICP left` : ""} · edits, reactions and votes are free</div>` : ""}
       ${c.picker ? `<div class="pop-scrim" data-action="chat-pick-close"></div><div class="emoji-pop" role="dialog" aria-label="Emoji">${c.picker.mid !== undefined ? `<div class="small muted" style="padding:4px 6px">React to <b>@${esc(c.messages.find((m) => m.id === c.picker!.mid)?.handle ?? "")}</b></div>` : ""}<div class="emoji-grid">${CHAT_EMOJI.map((e) => `<button type="button" class="emoji" data-action="chat-pick" data-emoji="${e}" aria-label="${e}">${e}</button>`).join("")}</div></div>` : ""}
     </form>`;
 }
@@ -1587,7 +1603,7 @@ function onlineHtml(): string {
   return `<div class="pane-title">Online <span class="count">${here.length}</span></div>
     ${here.length ? [...byChan.entries()].map(([ch, os]) => `<div class="pane-sub" style="padding:0 10px">#${esc(ch)}</div>${os.map((o) => `<div class="online-row"><span class="avatar" style="--h:${[...o.principal.toText()].reduce((a, x) => a + x.charCodeAt(0), 0) % 360}">${esc(o.handle.slice(0, 2).toUpperCase())}</span><span>${esc(o.handle)}</span>${o.principal.toText() === S.principal ? `<span class="small muted">you</span>` : ""}</div>`).join("")}`).join("") : `<div class="empty-side">Nobody is reading right now.</div>`}
     <div class="pane-title">Notifications</div><div class="empty-side"><label class="switch" style="padding:0"><input type="checkbox" name="notify" ${notifyOn() ? "checked" : ""}> Tell me when I'm @mentioned, anywhere in the app</label>${notifyOn() && "Notification" in window && Notification.permission === "default" ? `<div class="nudge"><button type="button" class="btn btn-ghost" data-action="notify-allow">${icon("bell")}Also notify when this tab is hidden</button></div>` : ""}</div>
-    <div class="pane-title">House rules</div><div class="empty-side">Anyone signed in can read. To post, keep ICP in your in-app wallet and join; the check is renewed daily. No links, no images, no foul language; the registry refuses them. Admins make channels.</div>`;
+    <div class="pane-title">House rules</div><div class="empty-side">Anyone signed in can read. To post, keep ICP in your in-app wallet and join; the check is renewed daily. No links, no images, no foul language; the registry refuses them. Each new message costs 0.0002 ICP (twice the ledger fee) from your wallet; edits, reactions and votes are free. Messages are cleaned up after 90 days (pinned ones stay). Admins make channels.</div>`;
 }
 // --- the board: reddit-style posts per topic
 const score = (x: { ups: Principal[]; downs: Principal[] }) => x.ups.length - x.downs.length;
@@ -1631,7 +1647,7 @@ function boardPage(): string {
   const side = `<div class="pane-head"><span class="pane-title" style="padding:0">Topics</span></div>
     <div class="chans"><button type="button" class="chan ${!b.topic ? "on" : ""}" data-action="board-topic" data-topic=""><span class="hash">∗</span>all</button>${b.channels.map((c) => `<button type="button" class="chan ${c.name === b.topic ? "on" : ""}" data-action="board-topic" data-topic="${esc(c.name)}" title="${esc(c.topic)}"><span class="hash">#</span>${esc(c.name)}${c.gate ? `<span class="gate-ico">${icon("lock")}</span>` : ""}</button>`).join("")}</div>
     <div class="wallet"><div class="pane-title">Posting</div><div class="small muted">A post costs ${icp(b.fee)} ICP from your in-app wallet: about what storing it for 60 days costs in cycles, rounded up to twice the transfer minimum. Comments and votes are free for members.</div>${can ? `<div class="nudge"><button type="button" class="btn btn-primary" data-action="board-new" ${gated ? "disabled" : ""}>${icon("plus")}New post</button></div>` : `<div class="small muted nudge">${b.member ? "Renew your ICP check in the community to post." : "Join the community (hold ICP in your wallet) to post, comment and vote."}</div>`}</div>`;
-  const main = b.open ? (() => { const p = b.open!; const mine = p.author.toText() === S.principal; return `<div class="chat-head"><a href="#/board" class="btn btn-ghost" data-action="nav" title="Back to the list">${icon("chevron")}<span class="small lbl">Posts</span></a><span class="small muted">#${esc(p.topic)}</span><span class="right-actions">${can ? `<button type="button" class="btn btn-ghost" data-action="board-share" data-id="${p.id}" title="Drop a card into a chat channel">${icon("chat")}<span class="small lbl">Discuss in chat</span></button>` : ""}${mine || S.isAdmin ? `<button type="button" class="btn btn-ghost" data-action="board-del" data-id="${p.id}">${icon("trash")}</button>` : ""}</span></div>
+  const main = b.open ? (() => { const p = b.open!; const mine = p.author.toText() === S.principal; return `<div class="chat-head"><a href="#/board" class="btn btn-ghost" data-action="nav" title="Back to the list">${icon("chevron")}<span class="small lbl">Posts</span></a><span class="small muted">#${esc(p.topic)}</span><span class="right-actions">${can ? `<button type="button" class="btn btn-ghost" data-action="board-share" data-id="${p.id}" title="Drop a card into a chat channel (0.0002 ICP, like any message)">${icon("chat")}<span class="small lbl">Discuss in chat · 0.0002 ICP</span></button>` : ""}${mine || S.isAdmin ? `<button type="button" class="btn btn-ghost" data-action="board-del" data-id="${p.id}">${icon("trash")}</button>` : ""}</span></div>
     <div class="post-view"><div class="prow"><div class="prow-votes">${voteArrows("post", p, `data-id="${p.id}"`, can)}</div><div class="prow-main"><h2 class="ptitle">${esc(p.title)}</h2><div class="small muted">@${esc(p.handle)} · ${when(p.created_at)} · ${p.comments} comment${p.comments === 1 ? "" : "s"} · gone a week after the last comment</div>${p.body ? `<div class="mtext pbody">${chatText(p.body)}</div>` : ""}${p.gist ? `<div class="gist"><div class="gist-head">${icon("file")}<b>${esc(p.gist.title)}</b><span class="small muted">${esc(p.gist.path)}</span><button type="button" class="btn btn-ghost" data-action="gist-open" data-nb="${p.gist.notebook.toText()}" data-path="${esc(p.gist.path)}">${icon("out")}Open</button></div><div class="gist-body md">${gistMd(p.gist.text)}</div></div>` : ""}</div></div>
       ${can ? `<form class="pc-form top" data-form="board-comment" data-post="${p.id}"><textarea class="input" name="ptext" rows="2" placeholder="Add a comment…" required></textarea><div class="row tight"><button type="submit" class="btn btn-primary">${icon("send")}Comment</button></div></form>` : ""}
       <div class="pcomments">${commentTree(b, undefined, 0, can) || `<p class="muted small">No comments yet.</p>`}</div></div>`; })()
@@ -1702,7 +1718,7 @@ async function createPoll() {
   if (!q?.trim()) return;
   const opts = await ask({ title: q.trim(), body: "One option per line, 2 to 10 of them.", multiline: true, placeholder: "Lean\nRust\nAgents", ok: "Post poll" });
   if (opts === null) return;
-  const r = await registry().post_poll(c.channel, q.trim(), opts.split("\n").map((o) => o.trim()).filter(Boolean));
+  const r = await paidPost(() => registry().post_poll(c.channel, q.trim(), opts.split("\n").map((o) => o.trim()).filter(Boolean)));
   if (r.__kind__ === "Err") return toast(r.Err, "error");
   c.messages.push(r.Ok);
   markChatSeen(c.channel, r.Ok.id);
@@ -1737,7 +1753,7 @@ async function shareGist(pre?: { notebook: string; path: string; text: string })
   }
   const comment = await ask({ title: `Share “${title(gist.path)}” in #${channel}`, body: gist.text.length > 8000 ? "Only the first 8000 characters go with it." : "A snapshot of the note goes with your message; replies are the opinions.", label: "What do you want opinions on? (optional)", placeholder: "Does the argument in section 2 hold?", ok: "Share" });
   if (comment === null) return;
-  const r = await registry().post_gist(channel, comment.trim(), title(gist.path), gist.text.slice(0, 8000), Principal.fromText(gist.notebook), gist.path);
+  const r = await paidPost(() => registry().post_gist(channel, comment.trim(), title(gist.path), gist.text.slice(0, 8000), Principal.fromText(gist.notebook), gist.path));
   if (r.__kind__ === "Err") return toast(r.Err, "error");
   if (S.community && S.community.channel === channel) { S.community.messages.push(r.Ok); markChatSeen(channel, r.Ok.id); renderChat(); }
   else toast(`Shared in #${channel}.`, "ok");
@@ -1752,7 +1768,7 @@ async function startPlanFund() {
   if (goal === null) return;
   const pitch = await ask({ title: "What will you build with it?", label: "A sentence or two", placeholder: "Shipping the Lean checker needs long agent runs; a month of Claude Max covers it.", ok: "Start" });
   if (pitch === null) return;
-  const r = await registry().post_plan_fund(c.channel, pitch.trim(), plan, BigInt(Math.round(Number(goal) * 1e8)));
+  const r = await paidPost(() => registry().post_plan_fund(c.channel, pitch.trim(), plan, BigInt(Math.round(Number(goal) * 1e8))));
   if (r.__kind__ === "Err") return toast(r.Err, "error");
   c.messages.push(r.Ok);
   renderChat();
@@ -1779,7 +1795,7 @@ async function startFund() {
   if (goal === null) return;
   const pitch = await ask({ title: "Why should people chip in?", label: "A sentence or two", placeholder: "The Lean course notes run dry next month; 1 ICP keeps them up for a year.", ok: "Start" });
   if (pitch === null) return;
-  const r = await registry().post_fund(c.channel, pitch.trim(), n.canister, BigInt(Math.round(Number(goal) * 1e8)));
+  const r = await paidPost(() => registry().post_fund(c.channel, pitch.trim(), n.canister, BigInt(Math.round(Number(goal) * 1e8))));
   if (r.__kind__ === "Err") return toast(r.Err, "error");
   c.messages.push(r.Ok);
   markChatSeen(c.channel, r.Ok.id);
@@ -2586,7 +2602,6 @@ function manageTab(): string {
       <p class="muted small">The canister burns cycles for every call and for its memory. Top it up from your OISY wallet in ICP, ckBTC, ckETH, ckUSDC or ckUSDT; the registry converts whatever you send into this notebook's cycles at once and never keeps a token. Bitcoin, ether, USDC or USDT held natively in OISY: convert them to the ck version inside OISY first.</p>
       <form class="row tight nudge" data-form="topup"><input class="input" name="topupAmount" inputmode="decimal" value="${esc(S.topupAmount)}" required aria-label="Amount" style="max-width:140px">${tokenSelect("paytoken", S.payToken)}<button type="submit" class="btn btn-primary" ${S.busy ? "disabled" : ""}>${icon("bolt")}${S.busy === "topup" ? "Waiting for the wallet…" : `Top up with ${payLabel()}`}</button></form>
       <p class="small muted">${useOisy ? `Your OISY wallet opens and asks you to approve the amount plus one fee for the registry, which converts it into this notebook's cycles. ${S.oisyAccount ? `Last paid from <code>${esc(shortPrincipal(S.oisyAccount))}</code>.` : ""}` : "Approves the registry on the local ledger for the amount plus one fee; it converts it in one step."}</p>
-      ${autoTopupCard()}
     </div>
     <div class="band"><div class="band-title">Top-up history<button type="button" class="btn btn-ghost icon-btn" data-action="refresh-info" title="Refresh" aria-label="Refresh">${icon("refresh")}</button></div>${rows}</div>` : S.manageTab === "notebook" ? `
     <div class="card band">
@@ -2818,6 +2833,7 @@ async function loadNotebooks() {
   try {
     if (!REGISTRY) throw new Error("The registry canister ID is missing from this deployment");
     registry().is_admin().then((v) => { if (v !== S.isAdmin) { S.isAdmin = v; render(); } }).catch(() => {});
+    registry().flags().then((f) => { S.flags = f; render(); }).catch(() => {});
     registry().price().then((p) => { S.price = p; }).catch(() => {});
     registry().tokens().then((t) => { S.tokens = t; }).catch(() => {});
     S.notebooks = await registry().my_notebooks();
@@ -2885,10 +2901,9 @@ async function loadNotebook() {
     S.settings = parseSettings(undefined);
   }
   S.recent = JSON.parse(store(`nb-recent-${S.notebook!.canister.toText()}`) ?? "[]") as string[];
-  const [cm, pub, at] = await Promise.all([a.all_comments(), a.published(), a.auto_topup()]);
+  const [cm, pub] = await Promise.all([a.all_comments(), a.published()]);
   S.comments = cm.__kind__ === "Ok" ? cm.Ok : [];
   S.published = pub ?? null;
-  S.autoTopup = at;
   S.fromCache = false;
   void cacheSet(`nb:${S.notebook!.canister.toText()}`, { notes: S.notes, folders: S.folders, settings: S.settings, at: Date.now() });
   S.notes = notes.sort((x, y) => x.path.localeCompare(y.path));
@@ -4172,15 +4187,6 @@ function freezeModal(id: string, h: Health) {
   scrim.querySelector<HTMLInputElement>("[name=v]")?.focus();
 }
 
-function autoTopupCard(): string {
-  const a = S.autoTopup;
-  return `<form class="band" data-form="autotopup">
-    <div class="band-title">Automatic top-up</div>
-    <p class="small muted">When cycles fall under the threshold, the canister pulls ICP from ${useOisy ? "your OISY wallet" : "your account"} (an ICRC-2 allowance you approve once${useOisy ? " in the OISY popup" : ""}) and converts it. Approve a larger allowance to cover several top-ups.${a?.payer ? ` Pulling from <code>${esc(shortPrincipal(a.payer.toText()))}</code>.` : ""}</p>
-    <div class="row tight"><label class="switch"><input type="checkbox" name="at_on" ${a?.enabled ? "checked" : ""}> Enabled</label><label class="field"><span class="label">Below (TC)</span><input class="input" name="at_thr" type="number" step="0.1" min="0.1" value="${a ? (Number(a.threshold) / 1e12).toFixed(1) : "1.0"}" style="width:110px"></label><label class="field"><span class="label">Pull (ICP)</span><input class="input" name="at_amt" type="number" step="0.01" min="0.01" value="${a ? icp(a.amount_e8s) : "0.5"}" style="width:110px"></label><label class="field"><span class="label">Approve allowance (ICP)</span><input class="input" name="at_allow" type="number" step="0.1" min="0" value="5" style="width:130px"></label><button type="submit" class="btn btn-primary" ${S.busy ? "disabled" : ""}>Save</button></div>
-    ${a?.last_run ? `<p class="small muted nudge">Last run ${ago(a.last_run)}: ${esc(a.last_result)}</p>` : ""}
-  </form>`;
-}
 const hex = (b: Uint8Array | number[]) => [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
 const unhex = (h: string) => Uint8Array.from(h.match(/../g)!.map((x) => parseInt(x, 16)));
 
@@ -4191,6 +4197,7 @@ function attestHtml(a?: Attestation): string {
 }
 /** Manage: the notebook as an ICRC-7 token, its attestation, and the listing form. */
 function sellCard(): string {
+  if (!flag("market")) return "";
   const v = S.notebook!;
   const l = S.listing;
   const id = S.tokenId;
@@ -4389,6 +4396,9 @@ function adminPage(): string {
       <div class="tags" style="padding:4px 0 4px">${kinds}</div>
       <div class="tags" style="padding:0 0 12px">${chips}</div>
       ${a.loading ? `<p class="muted">Loading…</p>` : shown.length ? `<div class="bugs">${rows}</div>` : `<p class="muted">Nothing here.</p>`}
+      <div class="band-title nudge">Feature flags</div>
+      <div class="runs">${S.flags.map((f) => `<div class="run"><span><b>${esc(f.name)}</b> <span class="small muted">· ${esc(f.description)}${f.on === f.default ? "" : ` · default ${f.default ? "on" : "off"}`}</span></span><label class="switch"><input type="checkbox" name="flag" data-flag="${esc(f.name)}" ${f.on ? "checked" : ""}> ${f.on ? "On" : "Off"}</label></div>`).join("") || `<p class="small muted">Loading…</p>`}</div>
+      <p class="small muted">Switching a flag off hides the feature for everyone and the registry refuses its calls. The market stays off until it has been tried on mainnet.</p>
       <form class="field nudge" data-form="admin-repo"><span class="label">GitHub repository for #developers (owner/name)</span><div class="row tight"><input class="input" name="repo" value="${esc(a.repo ?? "")}" placeholder="owner/name" style="max-width:320px"><button type="submit" class="btn">Save</button></div><span class="small muted">Only its contributors can post there; they prove a login by putting their principal in their GitHub bio.</span></form>
       <p class="small muted nudge">Admins are the registry's controllers plus principals added with <code>icp canister call registry add_admin '(principal "…")'</code>. Click a report to work it; the note is shown to the reporter.</p>
       ${account()}
@@ -4547,7 +4557,7 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
       const b = S.board!;
       const ch = await ask({ title: "Discuss in chat", label: "Channel", choices: b.channels.map((c) => ({ value: c.name, label: `#${c.name}` })), value: b.open?.topic ?? "general", ok: "Drop it in" });
       if (!ch) return;
-      const r = await registry().share_post(ch, BigInt(el.dataset.id!)); if (r.__kind__ === "Err") return toast(r.Err, "error");
+      const r = await paidPost(() => registry().share_post(ch, BigInt(el.dataset.id!))); if (r.__kind__ === "Err") return toast(r.Err, "error");
       return toast(`Shared in #${ch}.`, "ok");
     }
     case "chat-join": return joinCommunity();
@@ -4627,11 +4637,11 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
     case "chat-plus": {
       const r = el.getBoundingClientRect();
       return contextMenu(r.left, r.top - 8, "", [
-        { label: "Create a poll", icon: "list", action: () => void createPoll() },
-        { label: "Share a note for opinions", icon: "file", action: () => void shareGist() },
-        S.community!.channels.find((x) => x.name === S.community!.channel)?.gate === "github"
-          ? { label: "Raise for an AI plan", icon: "bolt", action: () => void startPlanFund() }
-          : { label: "Raise cycles for a notebook", icon: "bolt", action: () => void startFund() },
+        { label: `Create a poll · ${icp(S.community!.fee ?? 20_000n)} ICP`, icon: "list", action: () => void createPoll() },
+        { label: `Share a note for opinions · ${icp(S.community!.fee ?? 20_000n)} ICP`, icon: "file", action: () => void shareGist() },
+        ...(flag("fundraisers") ? [S.community!.channels.find((x) => x.name === S.community!.channel)?.gate === "github"
+          ? { label: `Raise for an AI plan · ${icp(S.community!.fee ?? 20_000n)} ICP`, icon: "bolt", action: () => void startPlanFund() } as MenuItem
+          : { label: `Raise cycles for a notebook · ${icp(S.community!.fee ?? 20_000n)} ICP`, icon: "bolt", action: () => void startFund() } as MenuItem] : []),
       ]);
     }
     case "gist-open": { S.community = undefined; clearInterval(chatTimer); location.hash = `#/notebook/${el.dataset.nb}/${el.dataset.path}`; return; }
@@ -5229,6 +5239,11 @@ document.addEventListener("input", (ev) => {
     case "taskdone": { const p = el.dataset.path!; const line = Number(el.dataset.line); onDraftInput(p, toggleTaskLine(draftOf(p).text, line)); void save(p); setTimeout(render, 300); break; }
     case "ics": { const inp = el as HTMLInputElement; if (inp.files?.length) void importIcs(inp.files).then(render); inp.value = ""; break; }
     case "cell": { const inp = el as HTMLInputElement; if (v !== inp.dataset.raw) { const si = Number(inp.dataset.s), r = Number(inp.dataset.r), c = Number(inp.dataset.c); updateWorkbook(inp.dataset.path!, (wb) => { const sh = wb.sheets[si]; while (sh.rows.length <= r) sh.rows.push([]); while (sh.rows[r].length <= c) sh.rows[r].push(""); sh.rows[r][c] = v; }); } break; }
+    case "flag": {
+      const inp = el as HTMLInputElement;
+      void registry().set_flag(inp.dataset.flag!, inp.checked).then((r) => { if (r.__kind__ === "Err") { toast(r.Err, "error"); inp.checked = !inp.checked; return; } const i = S.flags.findIndex((f) => f.name === r.Ok.name); if (i >= 0) S.flags[i] = r.Ok; else S.flags.push(r.Ok); toast(`${r.Ok.name} is now ${r.Ok.on ? "on" : "off"}.`, "ok"); render(); });
+      break;
+    }
     case "notify": { store("nb-notify", (el as HTMLInputElement).checked ? "1" : "0"); if ((el as HTMLInputElement).checked) { store("nb-mention-seen", store("nb-mention-seen") ?? "0"); void checkMentions(); } renderOnline(); break; }
     case "csv": { const inp = el as HTMLInputElement; if (inp.files?.[0]) void importCsv(inp.dataset.path!, inp.files[0]); inp.value = ""; break; }
     case "kbdone":
@@ -5516,7 +5531,7 @@ document.addEventListener("submit", (ev) => {
             replaceMessage(r.Ok); render(); scrollChat();
             return;
           }
-          const r = await registry().post(c.channel, text, c.replyTo?.id ?? null);
+          const r = await paidPost(() => registry().post(c.channel, text, c.replyTo?.id ?? null));
           if (r.__kind__ === "Err") throw new Error(r.Err);
           c.draft = "";
           c.replyTo = undefined;
@@ -5578,19 +5593,6 @@ document.addEventListener("submit", (ev) => {
         }
         render();
       })();
-    case "autotopup":
-      return void act("autotopup", async () => {
-        const on = f.querySelector<HTMLInputElement>("[name=at_on]")!.checked;
-        const thr = BigInt(Math.round(Number(f.querySelector<HTMLInputElement>("[name=at_thr]")!.value) * 1e12));
-        const amt = BigInt(Math.round(Number(f.querySelector<HTMLInputElement>("[name=at_amt]")!.value) * 1e8));
-        const allow = Number(f.querySelector<HTMLInputElement>("[name=at_allow]")!.value);
-        if (on && allow > 0) {
-          const payer = await approvePayment(S.notebook!.canister, BigInt(Math.round(allow * 1e8)));
-          unwrap(await nb().set_auto_topup_payer(payer));
-        }
-        S.autoTopup = unwrap(await nb().set_auto_topup(on, thr, amt));
-        return on ? `Automatic top-up on: under ${(Number(thr) / 1e12).toFixed(1)} TC the canister pulls ${icp(amt)} ICP.` : "Automatic top-up off.";
-      });
     case "note-comment":
       return void (async () => {
         const inp = f.querySelector<HTMLInputElement>("[name=ctext]")!;
@@ -5677,6 +5679,7 @@ window.addEventListener("hashchange", () => {
     return;
   }
   if (location.hash === "#/market") {
+    if (!flag("market")) { toast("The market is not open yet.", "info"); location.hash = "#/"; return; }
     if (S.identity) return void loadMarket();
     location.hash = "#/";
     return;
@@ -5765,7 +5768,7 @@ currentIdentity().then(async (id) => {
     if (S.isAdmin) return loadAdmin();
     location.hash = "#/";
   }
-  if (location.hash === "#/market") return loadMarket();
+  if (location.hash === "#/market") { if (!flag("market")) { location.hash = "#/"; return; } return loadMarket(); }
   if (location.hash === "#/community") return loadCommunity();
   { const bm = /^#\/board(?:\/(\d+))?$/.exec(location.hash); if (bm) return loadBoard(undefined, bm[1] ? BigInt(bm[1]) : undefined); }
   if (location.hash === "#/capture") return captureRoute();

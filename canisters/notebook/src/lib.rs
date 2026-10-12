@@ -144,19 +144,6 @@ pub struct Hit {
     pub snippet: String,
 }
 
-#[derive(CandidType, Deserialize, Clone, Debug, Default)]
-pub struct AutoTopUp {
-    pub enabled: bool,
-    /// top up when cycles fall under this
-    pub threshold: Nat,
-    /// how much ICP to pull from the owner's approved allowance each time
-    pub amount_e8s: u64,
-    pub last_run: u64,
-    pub last_result: String,
-    /// the account the allowance was approved from (an OISY wallet, usually); the owner when absent
-    #[serde(default)]
-    pub payer: Option<Principal>,
-}
 
 #[derive(CandidType, Deserialize, Clone, Debug)]
 pub struct Renamed {
@@ -293,7 +280,6 @@ thread_local! {
     static COMMENTS: RefCell<StableBTreeMap<u64, C<Comment>, Mem>> = RefCell::new(StableBTreeMap::init(mem(11)));
     /// the folder published as a public site ("" = everything), or none
     static PUBLISHED: RefCell<StableCell<C<Option<String>>, Mem>> = RefCell::new(StableCell::init(mem(12), C(None)));
-    static AUTO_TOPUP: RefCell<StableCell<C<AutoTopUp>, Mem>> = RefCell::new(StableCell::init(mem(13), C(AutoTopUp::default())));
     /// CMC-leg block index -> top-up awaiting a successful notify_top_up; retried from a timer
     static PENDING: RefCell<StableBTreeMap<u64, C<TopUp>, Mem>> = RefCell::new(StableBTreeMap::init(mem(4)));
     static TOTALS: RefCell<StableCell<C<(u64, u128)>, Mem>> = RefCell::new(StableCell::init(mem(5), C((0, 0))));
@@ -333,7 +319,6 @@ fn post_upgrade() {
 fn start_timers() {
     ic_cdk_timers::set_timer_interval_serial(Duration::from_secs(300), retry_pending);
     ic_cdk_timers::set_timer_interval_serial(Duration::from_secs(600), deposit_tick);
-    ic_cdk_timers::set_timer_interval_serial(Duration::from_secs(600), auto_topup_tick);
 }
 
 // ---------------------------------------------------------------- paths and links (pure)
@@ -863,12 +848,6 @@ fn transfer_owner(new_owner: Principal) -> Result<(), NotebookError> {
     });
     let keys: Vec<[u8; 32]> = AGENT_KEYS.with_borrow(|k| k.iter().map(|e| *e.key()).collect());
     AGENT_KEYS.with_borrow_mut(|k| for key in keys { k.remove(&key); });
-    AUTO_TOPUP.with_borrow_mut(|a| {
-        let mut v = a.get().0.clone();
-        v.payer = None;
-        v.enabled = false;
-        a.set(C(v));
-    });
     SETTINGS.with_borrow_mut(|s| s.set(C(String::new())));
     Ok(())
 }
@@ -2031,57 +2010,6 @@ fn published_json() -> HttpResponse {
     json(200, serde_json::to_string(&serde_json::json!({"notes": notes, "links": links})).unwrap())
 }
 
-// ---------------------------------------------------------------- auto top-up from the owner's allowance
-
-#[update]
-fn set_auto_topup(enabled: bool, threshold: Nat, amount_e8s: u64) -> Result<AutoTopUp, NotebookError> {
-    owner()?;
-    if enabled && amount_e8s < MIN_TOPUP_E8S {
-        return Err(NotebookError::Invalid(format!("minimum top-up is {} ICP", MIN_TOPUP_E8S as f64 / 1e8)));
-    }
-    let prev = AUTO_TOPUP.with_borrow(|a| a.get().0.clone());
-    let a = AutoTopUp { enabled, threshold, amount_e8s, ..prev };
-    AUTO_TOPUP.with_borrow_mut(|c| c.set(C(a.clone())));
-    Ok(a)
-}
-
-/// Which account the automatic top-up pulls from (the one that approved the allowance).
-#[update]
-fn set_auto_topup_payer(payer: Option<Principal>) -> Result<AutoTopUp, NotebookError> {
-    owner()?;
-    let prev = AUTO_TOPUP.with_borrow(|a| a.get().0.clone());
-    let a = AutoTopUp { payer: payer.filter(|p| *p != Principal::anonymous()), ..prev };
-    AUTO_TOPUP.with_borrow_mut(|c| c.set(C(a.clone())));
-    Ok(a)
-}
-
-#[query]
-fn auto_topup() -> AutoTopUp {
-    AUTO_TOPUP.with_borrow(|a| a.get().0.clone())
-}
-
-/// Every 10 minutes: under the threshold, pull the owner's approved ICP and convert it.
-async fn auto_topup_tick() {
-    let a = AUTO_TOPUP.with_borrow(|c| c.get().0.clone());
-    if !a.enabled {
-        return;
-    }
-    let threshold: u128 = a.threshold.0.clone().try_into().unwrap_or(u128::MAX);
-    if canister_cycle_balance() >= threshold {
-        return;
-    }
-    let payer = a.payer.unwrap_or_else(|| config().owner);
-    let result = pull_and_convert(payer, a.amount_e8s).await;
-    AUTO_TOPUP.with_borrow_mut(|c| {
-        let mut v = c.get().0.clone();
-        v.last_run = time();
-        v.last_result = match &result {
-            Ok(t) => format!("converted {} e8s into {} cycles", t.amount_e8s, t.cycles),
-            Err(e) => format!("failed: {e}"),
-        };
-        c.set(C(v));
-    });
-}
 
 // ---------------------------------------------------------------- JSON over HTTP (agents) and public notes
 

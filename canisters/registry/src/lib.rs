@@ -274,6 +274,7 @@ fn start_timers() {
         let _ = sweep_holdings().await;
         retry_pending().await;
         expire_posts();
+        expire_messages();
     });
 }
 
@@ -1130,6 +1131,42 @@ thread_local! {
     static POSTS: RefCell<StableBTreeMap<u64, C<Post>, Mem>> = RefCell::new(StableBTreeMap::init(MM.with_borrow(|m| m.get(MemoryId::new(26)))));
     static PCOMMENTS: RefCell<StableBTreeMap<String, C<PostComment>, Mem>> = RefCell::new(StableBTreeMap::init(MM.with_borrow(|m| m.get(MemoryId::new(27)))));
     static NEXT_POST: RefCell<ic_stable_structures::StableCell<u64, Mem>> = RefCell::new(ic_stable_structures::StableCell::init(MM.with_borrow(|m| m.get(MemoryId::new(28))), 1));
+    /// feature flags: name -> on; unknown names fall back to FLAG_DEFAULTS
+    static FLAGS: RefCell<StableBTreeMap<String, u8, Mem>> = RefCell::new(StableBTreeMap::init(MM.with_borrow(|m| m.get(MemoryId::new(29)))));
+}
+/// Every flag the app knows, with its default. The market is off until it has been exercised on mainnet.
+const FLAG_DEFAULTS: &[(&str, bool, &str)] = &[
+    ("market", false, "Notebook market: list, buy and rate notebooks"),
+    ("board", true, "The board: posts, votes and comments"),
+    ("rain", true, "Rain: send ICP to random recent chatters"),
+    ("fundraisers", true, "Fundraisers in chat: notebook cycles and AI plans"),
+];
+#[derive(CandidType, Deserialize, Clone, Debug)]
+pub struct Flag {
+    pub name: String,
+    pub on: bool,
+    pub default: bool,
+    pub description: String,
+}
+fn flag_on(name: &str) -> bool {
+    FLAGS.with_borrow(|f| f.get(&name.to_string()).map(|v| v == 1)).unwrap_or_else(|| FLAG_DEFAULTS.iter().find(|(n, _, _)| *n == name).map(|(_, d, _)| *d).unwrap_or(false))
+}
+fn require_flag(name: &str) -> Result<(), String> {
+    if flag_on(name) { Ok(()) } else { Err(format!("the {name} feature is switched off right now")) }
+}
+#[query]
+fn flags() -> Vec<Flag> {
+    FLAG_DEFAULTS.iter().map(|(n, d, desc)| Flag { name: n.to_string(), on: flag_on(n), default: *d, description: desc.to_string() }).collect()
+}
+/// Admin: switch a feature on or off for everyone.
+#[update]
+fn set_flag(name: String, on: bool) -> Result<Flag, String> {
+    if !admin(&msg_caller()) {
+        return Err("admin only".into());
+    }
+    let (n, d, desc) = FLAG_DEFAULTS.iter().find(|(n, _, _)| *n == name).ok_or("unknown flag")?;
+    FLAGS.with_borrow_mut(|f| f.insert(n.to_string(), if on { 1 } else { 0 }));
+    Ok(Flag { name: n.to_string(), on, default: *d, description: desc.to_string() })
 }
 fn pc_key(post: u64, id: u64) -> String {
     format!("{post:020}#{id:020}")
@@ -1141,6 +1178,7 @@ fn post_fee() -> u64 {
 /// A new post in a topic (a community channel). Costs `post_fee` ICP, approved for the registry first.
 #[update]
 async fn create_post(topic: String, title: String, body: String, gist: Option<Gist>) -> Result<Post, String> {
+    require_flag("board")?;
     let me = msg_caller();
     let m = member_ok(me)?;
     let t = check_channel(&topic)?;
@@ -1268,6 +1306,23 @@ fn delete_post_comment(post: u64, id: u64) -> Result<(), String> {
     PCOMMENTS.with_borrow_mut(|x| x.insert(key, C(c)));
     Ok(())
 }
+/// Chat messages older than 90 days are removed for good (pinned ones stay); their mention
+/// records go with them.
+const MESSAGE_TTL_NS: u64 = 90 * 24 * 3600 * 1_000_000_000;
+#[query]
+fn message_ttl_days() -> u64 {
+    90
+}
+fn expire_messages() {
+    let cutoff = time().saturating_sub(MESSAGE_TTL_NS);
+    let dead: Vec<String> = MESSAGES.with_borrow(|x| x.iter().filter(|e| { let m = &e.value().0; m.at < cutoff && m.pinned != Some(true) }).map(|e| e.key().clone()).collect());
+    if dead.is_empty() {
+        return;
+    }
+    MESSAGES.with_borrow_mut(|x| for k in &dead { x.remove(k); });
+    let gone: Vec<String> = MENTIONS.with_borrow(|x| x.iter().filter(|e| { let (p, id) = e.key().split_once('#').unwrap_or(("", "0")); let id: u64 = id.parse().unwrap_or(0); !p.is_empty() && MESSAGES.with_borrow(|m| m.get(&msg_key(&e.value(), id)).is_none()) }).map(|e| e.key().clone()).collect());
+    MENTIONS.with_borrow_mut(|x| for k in gone { x.remove(&k); });
+}
 /// Posts quiet for a week (since the last comment) are deleted permanently, comments included.
 fn expire_posts() {
     let cutoff = time().saturating_sub(POST_TTL_NS);
@@ -1276,8 +1331,9 @@ fn expire_posts() {
 }
 /// Drop a post into a channel: a message that links to it.
 #[update]
-fn share_post(channel: String, id: u64) -> Result<Message, String> {
+async fn share_post(channel: String, id: u64) -> Result<Message, String> {
     let p = POSTS.with_borrow(|x| x.get(&id).map(|c| c.0)).ok_or("that post is gone")?;
+    charge_message().await?;
     let mut m = post_inner(channel, format!("📰 {}", p.title), None, None, None, None)?;
     m.post = Some(id);
     MESSAGES.with_borrow_mut(|x| x.insert(msg_key(&m.channel, m.id), C(m.clone())));
@@ -1378,7 +1434,8 @@ async fn link_github(login: String) -> Result<String, String> {
 /// Start a fundraiser for an AI plan: developers channel, linked contributors only; donations go
 /// to the contributor's wallet.
 #[update]
-fn post_plan_fund(channel: String, text: String, plan: String, goal_e8s: u64) -> Result<Message, String> {
+async fn post_plan_fund(channel: String, text: String, plan: String, goal_e8s: u64) -> Result<Message, String> {
+    require_flag("fundraisers")?;
     let me = msg_caller();
     let ch = check_channel(&channel)?;
     if gate_of(&ch).as_deref() != Some("github") {
@@ -1390,6 +1447,7 @@ fn post_plan_fund(channel: String, text: String, plan: String, goal_e8s: u64) ->
     if !(1_000_000..=100_000_000_000).contains(&goal_e8s) {
         return Err("goals are between 0.01 and 1000 ICP".into());
     }
+    charge_message().await?;
     post_inner(channel, text, None, None, None, Some(Fund { canister: me, name: plan.clone(), goal_e8s, raised_e8s: 0, donors: vec![], closed: false, plan: Some(plan) }))
 }
 
@@ -1531,13 +1589,26 @@ fn delete_channel(name: String) -> Result<(), String> {
 
 /// Post to a channel (members with a current ICP check). Markdown, 2000 characters at most.
 #[update]
-fn post(channel: String, text: String, reply_to: Option<u64>) -> Result<Message, String> {
+async fn post(channel: String, text: String, reply_to: Option<u64>) -> Result<Message, String> {
+    charge_message().await?;
     post_inner(channel, text, reply_to, None, None, None)
+}
+/// Every new chat message costs `MESSAGE_FEE_E8S` (twice the ledger fee), pulled from the member's
+/// allowance for the registry; edits, reactions, votes and replies to polls are free. Spam has a price.
+const MESSAGE_FEE_E8S: u64 = 2 * ICP_FEE;
+async fn charge_message() -> Result<(), String> {
+    let me = msg_caller();
+    member_ok(me)?;
+    charge(me, MESSAGE_FEE_E8S).await
+}
+#[query]
+fn message_fee() -> u64 {
+    MESSAGE_FEE_E8S
 }
 
 /// Share a note in chat: `text` is the comment (may be empty), the gist is a snapshot of the note.
 #[update]
-fn post_gist(channel: String, text: String, title: String, body: String, notebook: Principal, path: String) -> Result<Message, String> {
+async fn post_gist(channel: String, text: String, title: String, body: String, notebook: Principal, path: String) -> Result<Message, String> {
     let title = title.trim().to_string();
     let body = body.trim_end().to_string();
     if title.is_empty() || title.chars().count() > 120 {
@@ -1552,12 +1623,14 @@ fn post_gist(channel: String, text: String, title: String, body: String, noteboo
     if NOTEBOOKS.with_borrow(|m| !m.contains_key(&notebook)) {
         return Err("unknown notebook".into());
     }
+    charge_message().await?;
     post_inner(channel, text, None, None, Some(Gist { title, text: body, notebook, path }), None)
 }
 
 /// Start a fundraiser for one of your notebooks. Donations become cycles for it and nothing else.
 #[update]
-fn post_fund(channel: String, text: String, canister: Principal, goal_e8s: u64) -> Result<Message, String> {
+async fn post_fund(channel: String, text: String, canister: Principal, goal_e8s: u64) -> Result<Message, String> {
+    require_flag("fundraisers")?;
     owns(msg_caller(), canister)?;
     if !(1_000_000..=100_000_000_000).contains(&goal_e8s) {
         return Err("goals are between 0.01 and 1000 ICP".into());
@@ -1566,6 +1639,7 @@ fn post_fund(channel: String, text: String, canister: Principal, goal_e8s: u64) 
         return Err("#developers raises for AI plans; raise for a notebook in another channel".into());
     }
     let name = NOTEBOOKS.with_borrow(|m| m.get(&canister).map(|c| c.0.name)).ok_or("unknown notebook")?;
+    charge_message().await?;
     post_inner(channel, text, None, None, None, Some(Fund { canister, name, goal_e8s, raised_e8s: 0, donors: vec![], closed: false, plan: None }))
 }
 
@@ -1573,6 +1647,7 @@ fn post_fund(channel: String, text: String, canister: Principal, goal_e8s: u64) 
 /// notebook's cycles in the same call.
 #[update]
 async fn donate(channel: String, id: u64, amount_e8s: u64) -> Result<Message, String> {
+    require_flag("fundraisers")?;
     let me = msg_caller();
     member_ok(me)?;
     let ch = check_channel(&channel)?;
@@ -1626,7 +1701,7 @@ fn close_fund(channel: String, id: u64) -> Result<Message, String> {
 
 /// A poll: the text is the question, 2-10 options, one vote per member (re-voting moves it).
 #[update]
-fn post_poll(channel: String, question: String, options: Vec<String>) -> Result<Message, String> {
+async fn post_poll(channel: String, question: String, options: Vec<String>) -> Result<Message, String> {
     let options: Vec<String> = options.iter().map(|o| o.trim().to_string()).filter(|o| !o.is_empty()).collect();
     if options.len() < 2 || options.len() > 10 || options.iter().any(|o| o.chars().count() > 80) {
         return Err("polls have 2-10 options of up to 80 characters".into());
@@ -1634,6 +1709,7 @@ fn post_poll(channel: String, question: String, options: Vec<String>) -> Result<
     for o in &options {
         clean(o)?;
     }
+    charge_message().await?;
     post_inner(channel, question, None, Some(Poll { options, votes: vec![] }), None, None)
 }
 
@@ -1855,6 +1931,7 @@ fn rain_eligible() -> u32 {
 /// announced in the channel.
 #[update]
 async fn rain(channel: String, total_e8s: u64, count: u8) -> Result<Rain, String> {
+    require_flag("rain")?;
     let me = msg_caller();
     let m = member_ok(me)?;
     let ch = check_channel(&channel)?;
@@ -2071,6 +2148,7 @@ async fn icrc7_transfer(args: Vec<TransferArg>) -> Vec<Option<Result<Nat, Transf
 /// Offer a notebook you own for sale, priced in any accepted token's smallest unit. The judge runs first if it has not yet.
 #[update]
 async fn list_notebook(canister: Principal, symbol: String, price: Nat, blurb: String) -> Result<ListingView, String> {
+    require_flag("market")?;
     let caller = msg_caller();
     owns(caller, canister)?;
     let tok = token(&symbol)?;
@@ -2124,6 +2202,7 @@ fn listing(canister: Principal) -> Option<ListingView> {
 /// the seller gets it minus the market fee, and the canister changes hands.
 #[update]
 async fn buy(canister: Principal, payer: Option<Principal>) -> Result<Notebook, String> {
+    require_flag("market")?;
     let buyer = msg_caller();
     if buyer == Principal::anonymous() {
         return Err("sign in first".into());
