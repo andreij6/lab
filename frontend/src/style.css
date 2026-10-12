@@ -627,3 +627,4 @@ pre[data-tools] { position: relative; } .code-tools { position: absolute; top: 4
 body .wsbar, body .topbar { padding-right: 50px; } /* keep the corner clear for the ribbon */
 @media print { .alpha-ribbon { display: none; } }
 .danger-zone { border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); } .danger-zone h2 { color: var(--danger); }
+.compose-box .join-chat { flex: 1; justify-content: center; padding: 10px; color: var(--accent-2); }

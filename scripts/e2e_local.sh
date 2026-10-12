@@ -384,14 +384,14 @@ CA=$(reg notebook_status "(principal \"$V\")" | grep -o 'cycles = [0-9_]*' | hea
 expect "the sweep is recorded" "TCYCLES" notebook deposits '()' --query
 expect "a second sweep finds nothing" "nothing to convert" notebook sweep_deposits '()'
 
-echo "== community: chat for anyone with a notebook, channels and presence (every new message costs twice the ledger fee)"
-expect "a message costs twice the ledger fee" "(20_000 : nat64)" icp canister call registry message_fee '()' --query
-icp token approve 0.5 "$(icp canister status registry -i)" --identity "$OWNER" -q >/dev/null; icp token transfer 1 "$OTHERP" -q >/dev/null; icp token approve 0.5 "$(icp canister status registry -i)" --identity "$OTHER" -q >/dev/null; icp token approve 0.5 "$(icp canister status registry -i)" -q >/dev/null
+echo "== community: chat for anyone with a notebook, channels and presence (a notebook pays each message in cycles)"
+expect "a short message costs a few million cycles" "_" icp canister call registry message_cycles '(200)' --query
+icp token transfer 1 "$OTHERP" -q >/dev/null; icp token approve 0.5 "$(icp canister status registry -i)" --identity "$OTHER" -q >/dev/null; icp token approve 0.5 "$(icp canister status registry -i)" -q >/dev/null
 SUF=$(date +%s | tail -c 5)
 expect "six channels exist" "general" icp canister call registry channels '()' --query
 expect "anonymous cannot join" "sign in" icp canister call registry join_community '("anon")' --identity anonymous
 expect "someone without a notebook cannot join" "need a notebook" icp canister call registry join_community '("thirdy")' --identity "$OWNER2"
-icp canister call registry create_notebook '("Other notes")' --identity "$OTHER" >/dev/null
+ON=$(icp canister call registry create_notebook '("Other notes")' --identity "$OTHER" | grep -o 'canister = principal "[^"]*"' | head -1 | sed 's/.*"\(.*\)"/\1/')
 expect "a notebook owner joins" "handle = \"owner$SUF\"" reg join_community "(\"owner$SUF\")"
 expect "a taken handle is refused" "taken" icp canister call registry join_community "(\"Owner$SUF\")" --identity "$OTHER"
 expect "the other joins too" "handle = \"other$SUF\"" icp canister call registry join_community "(\"other$SUF\")" --identity "$OTHER"
@@ -454,7 +454,7 @@ expect "the author pins a message" "pinned = opt true" reg pin_message "(\"gener
 expect "pinned messages are listed" "typo here!" icp canister call registry pinned '("general")' --query
 expect "a stranger cannot pin" "only the author or an admin" icp canister call registry pin_message "(\"general\", $MID, true)" --identity "$OTHER"
 echo "== board: paid posts, votes, comments, weekly expiry"
-expect "posting costs double the ledger fee" "(20_000 : nat64)" icp canister call registry post_fee '()' --query
+expect "a board post's cycle cost grows with its size" "_" icp canister call registry post_cycles '(1000)' --query
 expect "a non-member cannot post" "join the community" icp canister call registry create_post '("general", "Hello board", "first post", null)' --identity "$OWNER2"
 icp token approve 0.0101 "$(icp canister status registry -i)" --identity "$OWNER" -q >/dev/null
 expect "a member posts" 'title = "Hello board"' reg create_post '("general", "Hello board", "first post, what do you think?", null)'
@@ -501,17 +501,29 @@ expect "the recipient's feed shows it" "from_handle = \"owner$SUF\"" icp caniste
 expect "the giver's feed does not" "(vec {})" reg my_rain '(0)' --query
 expect "the channel announces it" "rained" icp canister call registry messages '("general", 0, 50)' --query
 expect "recent_rain lists it" "recipients = vec" icp canister call registry recent_rain '(5)' --query
-echo "== paying for chat from a registered wallet (OISY), not the sign-in account"
-expect "a member registers their wallet" "Ok" reg set_wallet "(opt principal \"$OTHERP\")"
-expect "my_wallet shows it" "$OTHERP" reg my_wallet '()' --query
+echo "== chat is paid by the member's notebook in cycles, not ICP"
+cyc() { icp canister status "$1" --identity "$2" 2>&1 | grep -o 'Cycles: [0-9_]*' | tr -d 'Cycles: _'; }
+COST=$(icp canister call registry message_cycles '(17)' --query | grep -o '[0-9_]*' | head -1 | tr -d _)
+RB=$(icp canister status registry 2>&1 | grep -o 'Cycles: [0-9_]*' | tr -d 'Cycles: _')
+NB=$(cyc "$ON" "$OTHER")
+expect "a message posts with no ICP allowance at all" '"text" = "paid in cycles!!"' icp canister call registry post '("general", "paid in cycles!!", null)' --identity "$OTHER"
+NA=$(cyc "$ON" "$OTHER"); RA=$(icp canister status registry 2>&1 | grep -o 'Cycles: [0-9_]*' | tr -d 'Cycles: _')
+[ $((NB - NA)) -ge "$COST" ] && { echo "  ok: the notebook paid at least the message's cost ($COST cycles; it spent $((NB - NA)))"; PASS=$((PASS+1)); } || { echo "FAIL: the notebook spent $((NB - NA)), cost $COST"; exit 1; }
+expect "only the registry can bill a notebook" "Unauthorized" icp canister call "$ON" pay_registry '(1_000_000)' --identity "$OTHER"
+icp canister settings update "$ON" --freezing-threshold 1000000d --identity "$OTHER" >/dev/null
+expect "a member whose notebooks cannot pay is refused" "too low on cycles" icp canister call registry post '("general", "nope", null)' --identity "$OTHER"
+icp canister settings update "$ON" --freezing-threshold 90d --identity "$OTHER" >/dev/null
+echo "== rain is paid from a registered wallet (OISY), not the sign-in account"
+OWNER2P=$(icp identity principal --identity "$OWNER2"); icp token transfer 1 "$OWNER2P" -q >/dev/null
+expect "a member registers their wallet" "Ok" reg set_wallet "(opt principal \"$OWNER2P\")"
+expect "my_wallet shows it" "$OWNER2P" reg my_wallet '()' --query
 bal() { icp token balance --of-principal "$1" 2>&1 | grep -o '[0-9.]* ICP' | head -1 | tr -d ' ICP' | python3 -c 'import sys; print(round(float(sys.stdin.read())*1e8))'; }
-icp canister call $LEDGER_ID icrc2_approve "(record { spender = record { owner = principal \"$(icp canister status registry -i)\"; subaccount = opt blob \"$(subblob "$ME")\" }; amount = 0 : nat; fee = null; memo = null; from_subaccount = null; created_at_time = null; expected_allowance = null; expires_at = null })" --identity "$OTHER" >/dev/null
-expect "without the wallet's bound allowance the message is refused" "payment refused" reg post '("general", "paid by my wallet", null)'
-expect "the wallet approves the registry subaccount for this member" "Ok" bound_approve "$OTHER" 1_000_000 "$ME"
-WB=$(bal "$OTHERP")
-expect "now the message posts" '"text" = "paid by my wallet"' reg post '("general", "paid by my wallet", null)'
-WA=$(bal "$OTHERP")
-[ $((WB - WA)) -eq 30000 ] && { echo "  ok: the wallet paid the fee plus one ledger fee ($WB -> $WA)"; PASS=$((PASS+1)); } || { echo "FAIL: wallet paid $((WB - WA)) e8s, expected 30000"; exit 1; }
+expect "without the wallet's bound allowance rain is refused" "payment refused" reg rain '("general", 2_000_000, 1)'
+expect "the wallet approves the registry subaccount for this member" "Ok" bound_approve "$OWNER2" 2_010_000 "$ME"
+WB=$(bal "$OWNER2P")
+expect "now it rains" "each_e8s" reg rain '("general", 2_000_000, 1)'
+WA=$(bal "$OWNER2P")
+[ $((WB - WA)) -eq 2010000 ] && { echo "  ok: the wallet paid the rain plus one ledger fee ($WB -> $WA)"; PASS=$((PASS+1)); } || { echo "FAIL: wallet paid $((WB - WA)) e8s, expected 2010000"; exit 1; }
 expect "forgetting the wallet works" "Ok" reg set_wallet '(null)'
 expect "and my_wallet is empty again" "(null)" reg my_wallet '()' --query
 

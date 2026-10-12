@@ -316,6 +316,9 @@ type Watch = record {
   every_hours : opt nat32;
 };
 service : () -> {
+  // A notebook pays a fee: the cycles attached to this call are kept and credited to it. Only the
+  // registry's notebooks may pay; anyone else's cycles are left unaccepted and go back.
+  accept_fee : () -> ();
   // Controllers add the principal they sign in with (Internet Identity differs from the CLI identity).
   add_admin : (principal) -> (Result);
   admins : () -> (Result_1) query;
@@ -347,7 +350,7 @@ service : () -> {
   create_notebook : (text) -> (Result_5);
   // The same, with the spawn price pulled from `payer`'s allowance (an OISY wallet) instead of the caller's.
   create_notebook_paid_by : (text, principal) -> (Result_5);
-  // A new post in a topic (a community channel). Costs `post_fee` ICP, approved for the registry first.
+  // A new post in a topic (a community channel). One of the author's notebooks pays what it costs.
   create_post : (text, text, text, opt Gist) -> (Result_11);
   delete_channel : (text) -> (Result);
   // Remove a message you wrote (or any, as an admin); the slot stays with the text blanked.
@@ -409,7 +412,8 @@ service : () -> {
   listings : () -> (vec ListingView) query;
   market_fee : () -> (nat64) query;
   members : () -> (vec Member) query;
-  message_fee : () -> (nat64) query;
+  // Cycles a chat message of `bytes` costs.
+  message_cycles : (nat64) -> (nat64) query;
   message_ttl_days : () -> (nat64) query;
   // Messages in a channel after `after` (0 for the newest page), oldest first, at most `limit` (≤ 100).
   messages : (text, nat64, nat32) -> (Result_17) query;
@@ -445,7 +449,8 @@ service : () -> {
   // Post to a channel (members with a current ICP check). Markdown, 2000 characters at most.
   post : (text, text, opt nat64) -> (Result_7);
   post_comments : (nat64) -> (vec PostComment) query;
-  post_fee : () -> (nat64) query;
+  // Cycles a board post of `bytes` costs (title, text and any attached note).
+  post_cycles : (nat64) -> (nat64) query;
   // Start a fundraiser for one of your notebooks. Donations become cycles for it and nothing else.
   post_fund : (text, text, principal, nat64) -> (Result_7);
   // Share a note in chat: `text` is the comment (may be empty), the gist is a snapshot of the note.

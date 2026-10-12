@@ -1131,10 +1131,9 @@ pub struct PostComment {
     pub downs: Vec<Principal>,
     pub deleted: bool,
 }
-/// Posting costs double the ledger fee: storing a few kilobytes for 60 days costs far less in
-/// cycles than that, so the transfer minimum wins. The ICP lands in the registry and becomes its
-/// cycles with the hourly sweep.
-const POST_FEE_E8S: u64 = 2 * ICP_FEE;
+/// Board posts are billed for 60 days of storage, chat messages for their 90-day life.
+const POST_DAYS: u64 = 60;
+const MESSAGE_DAYS: u64 = 90;
 const POST_TTL_NS: u64 = 7 * 24 * 3600 * 1_000_000_000;
 /// A note shared in chat for opinions: a snapshot of its text at the time of posting.
 #[derive(CandidType, Deserialize, Clone, Debug)]
@@ -1371,11 +1370,12 @@ fn set_flag(name: String, on: bool) -> Result<Flag, String> {
 fn pc_key(post: u64, id: u64) -> String {
     format!("{post:020}#{id:020}")
 }
+/// Cycles a board post of `bytes` costs (title, text and any attached note).
 #[query]
-fn post_fee() -> u64 {
-    POST_FEE_E8S
+fn post_cycles(bytes: u64) -> u64 {
+    post_cost(bytes, POST_DAYS)
 }
-/// A new post in a topic (a community channel). Costs `post_fee` ICP, approved for the registry first.
+/// A new post in a topic (a community channel). One of the author's notebooks pays what it costs.
 #[update]
 async fn create_post(topic: String, title: String, body: String, gist: Option<Gist>) -> Result<Post, String> {
     require_flag("board")?;
@@ -1403,7 +1403,7 @@ async fn create_post(topic: String, title: String, body: String, gist: Option<Gi
             return Err("the attached note is too long or not clean".into());
         }
     }
-    charge(me, POST_FEE_E8S).await?;
+    bill_notebook(me, post_cost((title.len() + body.len() + gist.as_ref().map_or(0, |g| g.title.len() + g.text.len())) as u64, POST_DAYS)).await?;
     let id = NEXT_POST.with_borrow(|n| *n.get());
     NEXT_POST.with_borrow_mut(|n| n.set(id + 1));
     let p = Post { id, author: me, handle: m.handle, topic: t, title, body, created_at: time(), last_activity: time(), ups: vec![me], downs: vec![], comments: 0, gist };
@@ -1533,7 +1533,7 @@ fn expire_posts() {
 #[update]
 async fn share_post(channel: String, id: u64) -> Result<Message, String> {
     let p = POSTS.with_borrow(|x| x.get(&id).map(|c| c.0)).ok_or("that post is gone")?;
-    charge_message().await?;
+    charge_message(p.title.len() + 8).await?;
     let mut m = post_inner(channel, format!("📰 {}", p.title), None, None, None, None)?;
     m.post = Some(id);
     MESSAGES.with_borrow_mut(|x| x.insert(msg_key(&m.channel, m.id), C(m.clone())));
@@ -1647,7 +1647,7 @@ async fn post_plan_fund(channel: String, text: String, plan: String, goal_e8s: u
     if !(1_000_000..=100_000_000_000).contains(&goal_e8s) {
         return Err("goals are between 0.01 and 1000 ICP".into());
     }
-    charge_message().await?;
+    charge_message(text.len() + plan.len() + 64).await?;
     post_inner(channel, text, None, None, None, Some(Fund { canister: me, name: plan.clone(), goal_e8s, raised_e8s: 0, donors: vec![], closed: false, plan: Some(plan) }))
 }
 
@@ -1780,20 +1780,72 @@ fn delete_channel(name: String) -> Result<(), String> {
 /// Post to a channel (members with a current ICP check). Markdown, 2000 characters at most.
 #[update]
 async fn post(channel: String, text: String, reply_to: Option<u64>) -> Result<Message, String> {
-    charge_message().await?;
+    charge_message(text.len()).await?;
     post_inner(channel, text, reply_to, None, None, None)
 }
-/// Every new chat message costs `MESSAGE_FEE_E8S` (twice the ledger fee), pulled from the member's
-/// allowance for the registry; edits, reactions, votes and replies to polls are free. Spam has a price.
-const MESSAGE_FEE_E8S: u64 = 2 * ICP_FEE;
-async fn charge_message() -> Result<(), String> {
+/// Every new chat message is paid for by one of the member's notebooks: exactly what the registry
+/// spends receiving, running and storing it. Edits, reactions and votes are free.
+async fn charge_message(bytes: usize) -> Result<(), String> {
     let me = msg_caller();
     member_ok(me)?;
-    charge(me, MESSAGE_FEE_E8S).await
+    bill_notebook(me, post_cost(bytes as u64, MESSAGE_DAYS)).await
 }
+/// Cycles a chat message of `bytes` costs.
 #[query]
-fn message_fee() -> u64 {
-    MESSAGE_FEE_E8S
+fn message_cycles(bytes: u64) -> u64 {
+    post_cost(bytes, MESSAGE_DAYS)
+}
+
+/// What a new message costs the registry in cycles at 13-node application-subnet prices: the
+/// ingress update (5M base, 1.2M reception, 2K per byte), ~20M instructions at 0.4 cycles each, the
+/// round trip to the paying notebook (~0.6M), and storing it with ~300 bytes of record overhead
+/// for `days` at 127K cycles per GiB per second.
+// ponytail: fixed prices and a flat instruction estimate; read performance_counter and the subnet size if they drift
+fn post_cost(bytes: u64, days: u64) -> u64 {
+    let stored = (bytes as u128 + 300) * 127_000 * days as u128 * 86_400 / (1u128 << 30);
+    (5_000_000 + 1_200_000 + 2_000 * bytes as u128 + 8_000_000 + 600_000 + stored) as u64
+}
+
+thread_local! {
+    /// Cycles each notebook has sent with `accept_fee` and not yet spent on a post.
+    static FEE_CREDIT: RefCell<std::collections::HashMap<Principal, u128>> = RefCell::new(Default::default());
+}
+
+/// A notebook pays a fee: the cycles attached to this call are kept and credited to it. Only the
+/// registry's notebooks may pay; anyone else's cycles are left unaccepted and go back.
+#[update]
+fn accept_fee() {
+    let nb = msg_caller();
+    if notebook(nb).is_none() {
+        return;
+    }
+    let got = ic_cdk::api::msg_cycles_accept(ic_cdk::api::msg_cycles_available());
+    FEE_CREDIT.with_borrow_mut(|c| *c.entry(nb).or_default() += got);
+}
+
+/// Bill one of `me`'s notebooks `cycles`: the first that can spare them (staying well above its
+/// freezing reserve) sends them with `accept_fee`; the registry counts what arrived, so a notebook
+/// whose owner changed its code cannot post for free.
+async fn bill_notebook(me: Principal, cycles: u64) -> Result<(), String> {
+    let mine: Vec<Principal> = NOTEBOOKS.with_borrow(|m| m.iter().filter(|e| e.value().0.owner == me).map(|e| *e.key()).collect());
+    if mine.is_empty() {
+        return Err(NEED_NOTEBOOK.into());
+    }
+    let want = cycles as u128;
+    for nb in mine {
+        let _ = Call::bounded_wait(nb, "pay_registry").with_arg(Nat::from(cycles)).await;
+        let paid = FEE_CREDIT.with_borrow_mut(|c| match c.get_mut(&nb) {
+            Some(have) if *have >= want => {
+                *have -= want;
+                true
+            }
+            _ => false,
+        });
+        if paid {
+            return Ok(());
+        }
+    }
+    Err("your notebooks are too low on cycles to pay for this; top one up in Manage".into())
 }
 
 /// Share a note in chat: `text` is the comment (may be empty), the gist is a snapshot of the note.
@@ -1813,7 +1865,7 @@ async fn post_gist(channel: String, text: String, title: String, body: String, n
     if NOTEBOOKS.with_borrow(|m| !m.contains_key(&notebook)) {
         return Err("unknown notebook".into());
     }
-    charge_message().await?;
+    charge_message(text.len() + title.len() + body.len() + path.len()).await?;
     post_inner(channel, text, None, None, Some(Gist { title, text: body, notebook, path }), None)
 }
 
@@ -1829,7 +1881,7 @@ async fn post_fund(channel: String, text: String, canister: Principal, goal_e8s:
         return Err("#developers raises for AI plans; raise for a notebook in another channel".into());
     }
     let name = NOTEBOOKS.with_borrow(|m| m.get(&canister).map(|c| c.0.name)).ok_or("unknown notebook")?;
-    charge_message().await?;
+    charge_message(text.len() + name.len() + 64).await?;
     post_inner(channel, text, None, None, None, Some(Fund { canister, name, goal_e8s, raised_e8s: 0, donors: vec![], closed: false, plan: None }))
 }
 
@@ -1902,7 +1954,7 @@ async fn post_poll(channel: String, question: String, options: Vec<String>) -> R
     for o in &options {
         clean(o)?;
     }
-    charge_message().await?;
+    charge_message(question.len() + options.iter().map(|o| o.len() + 8).sum::<usize>()).await?;
     post_inner(channel, question, None, Some(Poll { options, votes: vec![] }), None, None)
 }
 
@@ -2566,5 +2618,20 @@ mod watch_tests {
         assert!(!watch_overdue(&w(0, Some(24), Some(20 * h), 100 * h, false), 30 * h));
         assert!(watch_overdue(&w(0, None, None, 100 * h, false), 101 * h));
         assert!(!watch_overdue(&w(0, None, None, 100 * h, true), 500 * h));
+    }
+}
+
+#[cfg(test)]
+mod cost_tests {
+    use super::*;
+    #[test]
+    fn a_message_costs_what_it_takes_and_never_more_than_a_notebook_will_pay() {
+        let short = post_cost(200, MESSAGE_DAYS);
+        assert!((10_000_000..30_000_000).contains(&short), "{short}");
+        assert!(post_cost(2_000, MESSAGE_DAYS) > short);
+        assert!(post_cost(200, POST_DAYS) < post_cost(200, MESSAGE_DAYS));
+        // the largest board post: 160-char title, 10,000-char body, 8,000-char note, 4 bytes a char
+        let worst = post_cost(4 * (160 + 10_000 + 120 + 8_000), POST_DAYS);
+        assert!(worst < 1_000_000_000, "{worst} exceeds the notebook's MAX_FEE");
     }
 }

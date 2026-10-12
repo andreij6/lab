@@ -234,7 +234,7 @@ const S = {
   pomodoro: undefined as { end: number; phase: "work" | "break" } | undefined,
   taskOwner: "" as string,
   clipperKey: undefined as string | undefined,
-  community: undefined as { channel: string; channels: Channel[]; messages: Message[]; online: Online[]; member?: Member; balance?: bigint; loading: boolean; draft: string; wallet?: string; replyTo?: Message; unread: Record<string, number>; showOnline: boolean; showChannels: boolean; picker?: { mid?: bigint }; editing?: bigint; pins?: Message[]; showPins?: boolean; fee?: bigint; error?: string; github?: string; repo?: string; firstUnseen?: bigint; atBottom?: boolean; newCount?: number; gistSlide?: Map<bigint, number> } | undefined,
+  community: undefined as { channel: string; channels: Channel[]; messages: Message[]; online: Online[]; member?: Member; balance?: bigint; loading: boolean; draft: string; replyTo?: Message; unread: Record<string, number>; showOnline: boolean; showChannels: boolean; picker?: { mid?: bigint }; editing?: bigint; pins?: Message[]; showPins?: boolean; fee?: bigint; error?: string; github?: string; repo?: string; firstUnseen?: bigint; atBottom?: boolean; newCount?: number; gistSlide?: Map<bigint, number> } | undefined,
   show: undefined as { slides: string[]; i: number; self?: string; dead?: boolean } | undefined,
   mentions: 0, // @mentions of me in the community since I last looked
   org: { q: "", selected: new Set<string>(), triage: false, triageIdx: 0 } as { q: string; sort?: { key: string; dir: number }; selected: Set<string>; triage: boolean; triageIdx: number },
@@ -1455,11 +1455,10 @@ async function loadCommunity(channel?: string) {
   S.community = c;
   render();
   try {
-    const [chs, mem, wallet, gh, repo, fee] = await Promise.all([registry().channels(), registry().my_membership(), registry().my_wallet().catch(() => null), registry().my_github(), registry().github_repo(), registry().message_fee().catch(() => 20_000n)]);
+    const [chs, mem, gh, repo, fee] = await Promise.all([registry().channels(), registry().my_membership(), registry().my_github(), registry().github_repo(), registry().message_cycles(200n).catch(() => 16_000_000n)]);
     c.fee = fee;
     c.channels = chs;
     c.member = mem ?? undefined;
-    c.wallet = wallet?.toText();
     c.github = gh ?? undefined;
     c.repo = repo;
     if (!chs.some((x) => x.name === c.channel)) c.channel = "general";
@@ -1518,31 +1517,13 @@ async function refreshUnread() {
 const verifiedNow = (m?: Member) => !!m && (S.notebooks?.length ?? 1) > 0;
 function channelsHtml(): string {
   const c = S.community!;
-  // setup until you have a handle and (with OISY) a connected wallet; after that the panel goes away
-  const needsWallet = useOisy && !c.wallet;
-  const setup = !c.member || needsWallet || !verifiedNow(c.member);
-  const wallet = !setup ? "" : `<div class="wallet setup"><div class="pane-title">Get set up to chat</div>
-      ${!c.member ? `<div class="small muted">Anyone with a notebook can join. Pick a handle others see.</div><div class="row tight nudge"><button type="button" class="btn btn-primary" data-action="chat-join">${icon("check")}Join</button></div>`
-        : !verifiedNow(c.member) ? `<div class="small muted">You need a notebook to chat: create one first.</div>`
-        : `<div class="small muted">Chatting as <b>@${esc(c.member.handle)}</b>. Connect OISY to pay for messages (${icp(c.fee ?? 20_000n)} ICP each) and to receive rain.</div><div class="row tight nudge"><button type="button" class="btn btn-primary" data-action="chat-connect">${icon("bolt")}Connect OISY</button></div><div class="small faint">One approval covers about 100 messages.</div>`}
-      ${!useOisy && c.member ? `<div class="small faint mono">Locally, ${esc(shortPrincipal(S.principal))} pays · ${c.balance === undefined ? "…" : `${icp(c.balance)} ICP`}</div>` : ""}
-    </div>`;
-  return `<div class="pane-head"><span class="pane-title" style="padding:0">Channels</span>${c.member && !setup ? `<button type="button" class="btn btn-ghost icon-btn" data-action="chat-join" title="Your handle: @${esc(c.member.handle)}" aria-label="Change your handle">${icon("edit")}</button>` : ""}${S.isAdmin ? `<button type="button" class="btn btn-ghost icon-btn" data-action="chat-new-channel" title="New channel" aria-label="New channel">${icon("plus")}</button>` : ""}</div>
-    <div class="chans">${c.channels.map((ch) => `<button type="button" class="chan ${ch.name === c.channel ? "on" : ""}" data-action="chat-channel" data-channel="${esc(ch.name)}" title="${esc(ch.topic)}"><span class="hash">#</span>${esc(ch.name)}${ch.gate ? `<span class="gate-ico" title="Contributors only">${icon("lock")}</span>` : ""}${c.unread[ch.name] ? `<span class="unread">${c.unread[ch.name]}</span>` : ""}${S.isAdmin && ch.name !== "general" ? `<span class="chan-del" data-action="chat-del-channel" data-channel="${esc(ch.name)}" title="Delete channel">${icon("x")}</span>` : ""}</button>`).join("")}</div>
-    ${wallet}`;
+  return `<div class="pane-head"><span class="pane-title" style="padding:0">Channels</span>${c.member ? `<button type="button" class="btn btn-ghost icon-btn" data-action="chat-join" title="Your handle: @${esc(c.member.handle)}" aria-label="Change your handle">${icon("edit")}</button>` : ""}${S.isAdmin ? `<button type="button" class="btn btn-ghost icon-btn" data-action="chat-new-channel" title="New channel" aria-label="New channel">${icon("plus")}</button>` : ""}</div>
+    <div class="chans">${c.channels.map((ch) => `<button type="button" class="chan ${ch.name === c.channel ? "on" : ""}" data-action="chat-channel" data-channel="${esc(ch.name)}" title="${esc(ch.topic)}"><span class="hash">#</span>${esc(ch.name)}${ch.gate ? `<span class="gate-ico" title="Contributors only">${icon("lock")}</span>` : ""}${c.unread[ch.name] ? `<span class="unread">${c.unread[ch.name]}</span>` : ""}${S.isAdmin && ch.name !== "general" ? `<span class="chan-del" data-action="chat-del-channel" data-channel="${esc(ch.name)}" title="Delete channel">${icon("x")}</span>` : ""}</button>`).join("")}</div>`;
 }
-/** New chat messages cost the registry's message fee from the member's allowance. The first refusal
- *  approves enough for about 100 messages (one OISY popup), then retries, so posting stays one step. */
-const CHAT_ALLOWANCE_E8S = 2_000_000n;
-async function paidPost<T extends { __kind__: "Ok" } | { __kind__: "Err"; Err: string }>(call: () => Promise<T>): Promise<T> {
-  const r = await call();
-  if (r.__kind__ === "Err" && /payment refused|allowance/i.test(r.Err)) {
-    toast("Approving ICP for your messages (about 100 of them)…", "info");
-    await approvePayment(Principal.fromText(REGISTRY), CHAT_ALLOWANCE_E8S + ICP_FEE);
-    return call();
-  }
-  return r;
-}
+/** New chat messages are paid for by one of the member's notebooks, in cycles, inside the call. */
+const paidPost = <T,>(call: () => Promise<T>): Promise<T> => call();
+/** Small cycle amounts read as millions; larger ones in TC. */
+const cyc = (n: bigint) => (n < 1_000_000_000n ? `${(Number(n) / 1e6).toFixed(1)}M cycles` : tc(n));
 /** Chat text: bold, italics, code and @mentions only; everything else is plain text (no links, no images). */
 const SHORTCODES: Record<string, string> = { smile: "😄", grin: "😁", joy: "😂", wink: "😉", heart: "❤️", "+1": "👍", thumbsup: "👍", "-1": "👎", clap: "👏", fire: "🔥", rocket: "🚀", eyes: "👀", tada: "🎉", thinking: "🤔", pray: "🙏", wave: "👋", ok: "👌", check: "✅", x: "❌", star: "⭐", bulb: "💡", warning: "⚠️", coffee: "☕", bug: "🐛", sparkles: "✨", "100": "💯", sob: "😭", sunglasses: "😎", muscle: "💪", brain: "🧠", books: "📚", memo: "📝", money: "💰", rain: "☔", zap: "⚡", pin: "📌" };
 const expandShortcodes = (t: string) => t.replace(/(^|[\s(])(?::([a-z0-9_+-]+):)(?=$|[\s).,!?])/gi, (m, p: string, n: string) => (SHORTCODES[n.toLowerCase()] ? `${p}${SHORTCODES[n.toLowerCase()]}` : m));
@@ -1623,8 +1604,8 @@ function chatHtmlC(): string {
     <button type="button" class="btn jump" data-action="chat-jump" data-jump hidden>${icon("down")}<span class="n">Jump to latest</span></button>
     ${ch?.gate === "github" && !c.github && verifiedNow(c.member) ? `<div class="gate"><b>#${esc(c.channel)} is for contributors${c.repo ? ` to ${esc(c.repo)}` : ""}.</b> ${c.repo ? `Put your principal <code>${esc(S.principal)}</code><button type="button" class="btn btn-ghost icon-btn" data-action="copy-principal" aria-label="Copy principal">${icon("copy")}</button> in your GitHub bio, then link your login.` : "An admin has not set the repository yet."}${c.repo ? `<button type="button" class="btn btn-primary" data-action="link-github">${icon("link")}Link GitHub</button>` : ""}</div>` : ""}
     <form class="composer" data-form="chat-post">${c.editing !== undefined ? `<div class="replying">${icon("edit")}Editing your message<button type="button" class="btn btn-ghost icon-btn" data-action="chat-edit-cancel" aria-label="Cancel edit">${icon("x")}</button></div>` : ""}${c.replyTo ? `<div class="replying">${icon("links")}Replying to <b>@${esc(c.replyTo.handle)}</b>: ${esc(c.replyTo.text.slice(0, 80))}<button type="button" class="btn btn-ghost icon-btn" data-action="chat-reply-cancel" aria-label="Cancel reply">${icon("x")}</button></div>` : ""}
-      <div class="compose-box ${can ? "" : "off"}"><button type="button" class="btn btn-ghost icon-btn" data-action="chat-plus" title="Poll, gist or fundraiser" aria-label="More" ${can ? "" : "disabled"}>${icon("plus")}</button><textarea name="chattext" rows="1" placeholder="${can ? `Message #${esc(c.channel)}` : ch?.gate === "github" && verifiedNow(c.member) ? `Link your GitHub to post in #${esc(c.channel)}` : c.member ? "Renew your ICP check to post" : "Add ICP to your wallet and join to post"}" ${can ? "" : "disabled"} aria-label="Message" title="↵ to send, ⇧↵ for a new line">${esc(c.draft)}</textarea><button type="button" class="btn btn-ghost icon-btn emoji-btn" data-action="chat-emoji" title="Emoji" aria-label="Emoji" ${can ? "" : "disabled"}>☺</button></div>
-      ${can ? `<div class="compose-hint small muted">${icon("bolt")}Each new message costs <b>${icp(c.fee ?? 20_000n)} ICP</b> from your ${useOisy ? "OISY wallet" : "wallet"}${!useOisy && c.balance !== undefined ? ` · ${icp(c.balance)} ICP left` : ""} · edits, reactions and votes are free</div>` : ""}
+      ${!c.member ? `<div class="compose-box"><button type="button" class="btn btn-ghost join-chat" data-action="chat-join">${icon("check")}Pick a handle to chat</button></div>` : `<div class="compose-box ${can ? "" : "off"}"><button type="button" class="btn btn-ghost icon-btn" data-action="chat-plus" title="Poll, gist or fundraiser" aria-label="More" ${can ? "" : "disabled"}>${icon("plus")}</button><textarea name="chattext" rows="1" placeholder="${can ? `Message #${esc(c.channel)}` : ch?.gate === "github" && verifiedNow(c.member) ? `Link your GitHub to post in #${esc(c.channel)}` : "Create a notebook to chat"}" ${can ? "" : "disabled"} aria-label="Message" title="↵ to send, ⇧↵ for a new line">${esc(c.draft)}</textarea><button type="button" class="btn btn-ghost icon-btn emoji-btn" data-action="chat-emoji" title="Emoji" aria-label="Emoji" ${can ? "" : "disabled"}>☺</button></div>`}
+      ${can ? `<div class="compose-hint small muted">${icon("bolt")}Your notebook pays what each new message costs Lab: about <b>${cyc(c.fee ?? 16_000_000n)}</b> · edits, reactions and votes are free</div>` : ""}
       ${c.picker ? `<div class="pop-scrim" data-action="chat-pick-close"></div><div class="emoji-pop" role="dialog" aria-label="Emoji">${c.picker.mid !== undefined ? `<div class="small muted" style="padding:4px 6px">React to <b>@${esc(c.messages.find((m) => m.id === c.picker!.mid)?.handle ?? "")}</b></div>` : ""}<div class="emoji-grid">${CHAT_EMOJI.map((e) => `<button type="button" class="emoji" data-action="chat-pick" data-emoji="${e}" aria-label="${e}">${e}</button>`).join("")}</div></div>` : ""}
     </form>`;
 }
@@ -1650,7 +1631,7 @@ async function loadBoard(topic?: string, openId?: bigint) {
   S.community = undefined; clearInterval(chatTimer);
   render();
   try {
-    const [chs, mem, fee, gh] = await Promise.all([registry().channels(), registry().my_membership(), registry().post_fee(), registry().my_github()]);
+    const [chs, mem, fee, gh] = await Promise.all([registry().channels(), registry().my_membership(), registry().post_cycles(1000n), registry().my_github()]);
     b.channels = chs; b.member = mem ?? undefined; b.fee = fee; b.github = gh ?? undefined;
     b.posts = await registry().posts(b.topic ?? null);
     if (openId !== undefined) { b.open = (await registry().get_post(openId)) ?? undefined; b.comments = b.open ? await registry().post_comments(openId) : []; if (!b.open) toast("That post is gone.", "info"); }
@@ -1679,7 +1660,7 @@ function boardPage(): string {
   const sorted = [...b.posts].sort((x, y) => (b.sort === "new" ? Number(y.created_at - x.created_at) : b.sort === "top" ? score(y) - score(x) : hot(y) - hot(x)));
   const side = `<div class="pane-head"><span class="pane-title" style="padding:0">Topics</span></div>
     <div class="chans"><button type="button" class="chan ${!b.topic ? "on" : ""}" data-action="board-topic" data-topic=""><span class="hash">∗</span>all</button>${b.channels.map((c) => `<button type="button" class="chan ${c.name === b.topic ? "on" : ""}" data-action="board-topic" data-topic="${esc(c.name)}" title="${esc(c.topic)}"><span class="hash">#</span>${esc(c.name)}${c.gate ? `<span class="gate-ico">${icon("lock")}</span>` : ""}</button>`).join("")}</div>
-    <div class="wallet"><div class="pane-title">Posting</div><div class="small muted">A post costs ${icp(b.fee)} ICP from your ${useOisy ? "OISY wallet" : "wallet"}: about what storing it for 60 days costs in cycles, rounded up to twice the transfer minimum. Comments and votes are free for members.</div>${can ? `<div class="nudge"><button type="button" class="btn btn-primary" data-action="board-new" ${gated ? "disabled" : ""}>${icon("plus")}New post</button></div>` : `<div class="small muted nudge">${b.member ? "You need a notebook to post: create one first." : "Join the community (anyone with a notebook can) to post, comment and vote."}</div>`}</div>`;
+    <div class="wallet"><div class="pane-title">Posting</div><div class="small muted">Your notebook pays what a post costs Lab to keep for 60 days, in cycles: about ${cyc(b.fee)} for a short one. Comments and votes are free for members.</div>${can ? `<div class="nudge"><button type="button" class="btn btn-primary" data-action="board-new" ${gated ? "disabled" : ""}>${icon("plus")}New post</button></div>` : `<div class="small muted nudge">${b.member ? "You need a notebook to post: create one first." : "Join the community (anyone with a notebook can) to post, comment and vote."}</div>`}</div>`;
   const main = b.open ? (() => { const p = b.open!; const mine = p.author.toText() === S.principal; return `<div class="chat-head"><a href="#/board" class="btn btn-ghost" data-action="nav" title="Back to the list">${icon("chevron")}<span class="small lbl">Posts</span></a><span class="small muted">#${esc(p.topic)}</span><span class="right-actions">${can ? `<button type="button" class="btn btn-ghost" data-action="board-share" data-id="${p.id}" title="Drop a card into a chat channel (0.0002 ICP, like any message)">${icon("chat")}<span class="small lbl">Discuss in chat · 0.0002 ICP</span></button>` : ""}${mine || S.isAdmin ? `<button type="button" class="btn btn-ghost" data-action="board-del" data-id="${p.id}">${icon("trash")}</button>` : ""}</span></div>
     <div class="post-view"><div class="prow"><div class="prow-votes">${voteArrows("post", p, `data-id="${p.id}"`, can)}</div><div class="prow-main"><h2 class="ptitle">${esc(p.title)}</h2><div class="small muted">@${esc(p.handle)} · ${when(p.created_at)} · ${p.comments} comment${p.comments === 1 ? "" : "s"} · gone a week after the last comment</div>${p.body ? `<div class="mtext pbody">${chatText(p.body)}</div>` : ""}${p.gist ? `<div class="gist"><div class="gist-head">${icon("file")}<b>${esc(p.gist.title)}</b><span class="small muted">${esc(p.gist.path)}</span><button type="button" class="btn btn-ghost" data-action="gist-open" data-nb="${p.gist.notebook.toText()}" data-path="${esc(p.gist.path)}">${icon("out")}Open</button></div><div class="gist-body md">${gistMd(p.gist.text)}</div></div>` : ""}</div></div>
       ${can ? `<form class="pc-form top" data-form="board-comment" data-post="${p.id}"><textarea class="input" name="ptext" rows="2" placeholder="Add a comment…" required></textarea><div class="row tight"><button type="submit" class="btn btn-primary">${icon("send")}Comment</button></div></form>` : ""}
@@ -1701,7 +1682,7 @@ function boardPage(): string {
 type PostPrefill = { notebook?: string; path?: string; text?: string; title?: string; body?: string; topic?: string };
 /** Make sure the board state exists (pinning works from anywhere), then run the new-post flow. */
 async function pinToBoard(pre: PostPrefill) {
-  if (!S.board) S.board = { sort: "hot", posts: [], comments: [], channels: await registry().channels(), member: (await registry().my_membership()) ?? undefined, fee: await registry().post_fee(), loading: false, showSide: true, showAside: true };
+  if (!S.board) S.board = { sort: "hot", posts: [], comments: [], channels: await registry().channels(), member: (await registry().my_membership()) ?? undefined, fee: await registry().post_cycles(1000n), loading: false, showSide: true, showAside: true };
   if (!verifiedNow(S.board.member)) return toast("Join the community (anyone with a notebook can) to pin things to the board.", "info");
   await newPost(pre);
 }
@@ -1720,10 +1701,9 @@ async function newPost(pre?: PostPrefill) {
   const suggested = pre?.title ?? (pre?.path ? `Thoughts on “${title2(pre.path)}”?` : "");
   const title = await ask({ title: `New post in #${topic}`, label: "Title", placeholder: "A clear question or statement", value: suggested, ok: "Next" });
   if (!title?.trim()) return;
-  const body = await ask({ title: title.trim(), body: `Posting costs ${icp(b.fee)} ICP from your wallet. Plain text: bold, italics, code and @mentions; no links or images.`, label: "Text (optional)", multiline: true, placeholder: "Say more…", value: pre?.body ?? "", ok: `Pay ${icp(b.fee)} ICP and post` });
+  const body = await ask({ title: title.trim(), body: `Your notebook pays about ${cyc(b.fee)} in cycles to post this. Plain text: bold, italics, code and @mentions; no links or images.`, label: "Text (optional)", multiline: true, placeholder: "Say more…", value: pre?.body ?? "", ok: `Pay ${icp(b.fee)} ICP and post` });
   if (body === null) return;
   try {
-    await approvePayment(Principal.fromText(REGISTRY), b.fee + ICP_FEE);
     const gist = pre?.path && pre.notebook ? { title: title2(pre.path), text: (pre.text ?? "").slice(0, 8000), notebook: Principal.fromText(pre.notebook), path: pre.path } : null;
     const r = await registry().create_post(topic, title.trim(), body, gist);
     if (r.__kind__ === "Err") throw new Error(r.Err);
@@ -1864,7 +1844,7 @@ async function makeRain() {
   const count = await ask({ title: "☔ Make it rain", body: `${eligible} ${eligible === 1 ? "person has" : "people have"} chatted in the last 30 minutes. Pick how many of them get a share, chosen at random, and the total ICP to split. Each transfer costs the ledger fee.`, label: "How many people (1 to 10)", value: String(Math.min(5, eligible)), ok: "Next" });
   if (count === null) return;
   const n = Math.max(1, Math.min(10, Number(count) || 1));
-  const amt = await ask({ title: `Rain on ${Math.min(n, eligible)} ${Math.min(n, eligible) === 1 ? "person" : "people"}`, label: "Total ICP", value: "0.1", body: `Paid from ${payLabel()}; the registry splits it and sends each share straight to their wallet.`, ok: "Rain" });
+  const amt = await ask({ title: `Rain on ${Math.min(n, eligible)} ${Math.min(n, eligible) === 1 ? "person" : "people"}`, label: "Total ICP", value: "0.1", body: useOisy ? "Your OISY wallet opens to approve the total; the registry splits it and sends each share straight to their wallet." : `Paid from ${payLabel()}; the registry splits it and sends each share straight to their wallet.`, ok: useOisy ? "Approve in OISY" : "Rain" });
   if (amt === null) return;
   const total = BigInt(Math.round(Number(amt) * 1e8));
   await act("rain", async () => {
@@ -1936,7 +1916,7 @@ setInterval(() => void checkMentions(), 20_000);
 setTimeout(() => void checkMentions(), 2500);
 async function joinCommunity() {
   const c = S.community!;
-  const handle = await ask({ title: c.member ? "Your handle" : "Join the community", label: "Handle", value: c.member?.handle ?? "", placeholder: "ada", body: `Anyone who owns a notebook can chat. New messages cost ${icp(c.fee ?? 20_000n)} ICP each${useOisy ? ", paid from your OISY wallet" : ""}; reactions, votes and edits are free.`, ok: c.member ? "Save" : "Join" });
+  const handle = await ask({ title: c.member ? "Your handle" : "Join the community", label: "Handle", value: c.member?.handle ?? "", placeholder: "ada", body: `Anyone who owns a notebook can chat. Each new message is paid by your notebook, in cycles: what it costs Lab to store it, about ${cyc(c.fee ?? 16_000_000n)}. Reactions, votes and edits are free.`, ok: c.member ? "Save" : "Join" });
   if (!handle?.trim()) return;
   try {
     const r = await registry().join_community(handle.trim());
@@ -4594,10 +4574,6 @@ async function approvePayment(spender: Principal, amountE8s: bigint, token?: Tok
       const w = await registry().set_wallet(Principal.fromText(owner));
       if (w.__kind__ === "Ok") store("nb-wallet-set", `${S.principal}:${owner}`);
     }
-    if (S.community && S.community.wallet !== owner) {
-      S.community.wallet = owner;
-      renderChannels();
-    }
     return Principal.fromText(owner);
   }
   const agent = HttpAgent.createSync({ identity: S.identity, rootKey: env.IC_ROOT_KEY });
@@ -5588,17 +5564,6 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
     case "chat-join": return joinCommunity();
     case "rain": return makeRain();
     case "wallet-add": return addIcp();
-    case "chat-connect": {
-      const c = S.community;
-      if (!c) return;
-      try {
-        const owner = await approvePayment(Principal.fromText(REGISTRY), CHAT_ALLOWANCE_E8S + ICP_FEE);
-        c.wallet = owner.toText();
-        toast("OISY connected: messages are paid from it and rain lands in it.", "ok");
-        renderChannels();
-      } catch (e) { toast(errMsg(e), "error"); }
-      return;
-    }
     case "wallet-refresh": { const b = await icpBalance().catch(() => undefined); if (S.community && b !== undefined) { S.community.balance = b; renderChannels(); } return; }
     case "chat-reply": { const c = S.community!; c.replyTo = c.messages.find((m) => m.id === BigInt(el.dataset.mid!)); render(); scrollChat(); return document.querySelector<HTMLTextAreaElement>("[name=chattext]")?.focus(); }
     case "chat-reply-cancel": { S.community!.replyTo = undefined; render(); return scrollChat(); }

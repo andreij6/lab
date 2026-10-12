@@ -265,6 +265,10 @@ service : (Init) -> {
   my_role : (text) -> (opt Role) query;
   // Attestations on a note with whether each still matches the current content (anyone who can read it).
   note_attestations : (text) -> (Result_15) query;
+  // Pay the registry what one of the owner's chat messages or board posts costs it in cycles. The
+  // cycles ride on a call to the registry's `accept_fee`, so the registry counts what arrived rather
+  // than trusting this reply. Registry only.
+  pay_registry : (nat) -> (Result_8);
   // "I am looking at this note": kept two minutes, so a group sees who is here.
   ping : (text) -> (Result_16);
   // Everyone's mark on a note, for the group (anyone who can read the note).

@@ -852,6 +852,31 @@ fn transfer_owner(new_owner: Principal) -> Result<(), NotebookError> {
     Ok(())
 }
 
+/// The most one community fee may be (a long board post is ~0.03 B cycles), and what a notebook keeps
+/// above its freezing reserve after paying: chatting never freezes anyone's notes.
+const MAX_FEE: u128 = 1_000_000_000;
+const PAY_FLOOR: u128 = 100_000_000_000;
+
+/// Pay the registry what one of the owner's chat messages or board posts costs it in cycles. The
+/// cycles ride on a call to the registry's `accept_fee`, so the registry counts what arrived rather
+/// than trusting this reply. Registry only.
+#[update]
+async fn pay_registry(cycles: Nat) -> Result<(), NotebookError> {
+    let reg = config().registry;
+    if msg_caller() != reg {
+        return Err(NotebookError::Unauthorized);
+    }
+    let c: u128 = cycles.0.try_into().map_err(|_| NotebookError::Invalid("fee too large".into()))?;
+    if c > MAX_FEE {
+        return Err(NotebookError::Invalid("fee too large".into()));
+    }
+    if ic_cdk::api::canister_liquid_cycle_balance() < c + PAY_FLOOR {
+        return Err(NotebookError::Invalid("this notebook is too low on cycles; top it up".into()));
+    }
+    Call::bounded_wait(reg, "accept_fee").with_cycles(c).await.map_err(|e| NotebookError::Invalid(format!("accept_fee: {e}")))?;
+    Ok(())
+}
+
 /// Kept back when draining: the replica reserves ~37B for the deposit call and its reply.
 // ponytail: a flat 0.05 TC margin; read the shortfall out of InsufficientLiquidCycleBalance and retry if it matters
 const DRAIN_KEEP: u128 = 50_000_000_000;
