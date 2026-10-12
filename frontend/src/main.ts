@@ -2530,7 +2530,7 @@ function chatFolders(): Set<string> {
 }
 function chatHtml(): string {
   const msgs = S.chat.messages.length
-    ? S.chat.messages.map((m) => `<div class="msg ${m.role}">${m.role === "you" ? `<div class="bubble">${esc(m.text)}</div>` : `<div class="bubble md">${citeLinks(renderMd(m.text), m.picks ?? [])}${m.model ? `<div class="answered-by small faint">${icon("bot")}${esc(LLM_LOCAL ? "Local Ollama (stand-in)" : LLM_MODELS.find((x) => x.id === m.model)?.label.split(" · ")[0] ?? m.model)}${m.fallback ? ` · ${esc(m.fallback)}` : ""}</div>` : m.fallback ? `<div class="answered-by small faint">${esc(m.fallback)}</div>` : ""}</div>${m.picks?.length ? `<div class="sources">${m.picks.map((p) => `<button type="button" class="src" data-action="open" data-path="${esc(p.path)}" title="${esc(p.why.join("; "))}">${icon("file")}${esc(title(p.path))}</button>`).join("")}</div>` : ""}`}</div>`).join("")
+    ? S.chat.messages.map((m, mi) => `<div class="msg ${m.role}">${m.role === "you" ? `<div class="bubble">${esc(m.text)}</div>` : `<div class="bubble md">${beyond(citeLinks(renderMd(m.text), m.picks ?? []))}${m.model ? `<div class="answer-tools"><button type="button" class="btn btn-ghost" data-action="chat-save" data-i="${mi}" title="Save this answer as a note, citations as links">${icon("plus")}Save as note</button></div>` : ""}${m.model ? `<div class="answered-by small faint">${icon("bot")}${esc(LLM_LOCAL ? "Local Ollama (stand-in)" : LLM_MODELS.find((x) => x.id === m.model)?.label.split(" · ")[0] ?? m.model)}${m.fallback ? ` · ${esc(m.fallback)}` : ""}</div>` : m.fallback ? `<div class="answered-by small faint">${esc(m.fallback)}</div>` : ""}</div>${m.picks?.length ? `<div class="sources">${m.picks.map((p) => `<button type="button" class="src" data-action="open" data-path="${esc(p.path)}" title="${esc(p.why.join("; "))}">${icon("file")}${esc(title(p.path))}</button>`).join("")}</div>` : ""}`}</div>`).join("")
     : `<div class="chat-empty">${icon("chat")}<h3>Ask your notes</h3><p class="muted small">Type a question in plain language. The notebook picks the notes that look relevant from the folders ticked on the right and answers from them.</p></div>`;
   return `<section class="main chat" data-chat>
     <div class="chat-log">${msgs}${S.chat.busy ? `<div class="msg notes"><div class="bubble muted thinking"><span class="spin"></span>${esc(S.chat.stage || "Reading your notes…")}</div></div>` : ""}</div>
@@ -2547,8 +2547,33 @@ function chatAside(): string {
     <div class="chat-folders">${rows}</div>
     ${last ? `<div class="pane-title">Notes used last</div>${last.picks!.map((p) => `<div class="bl" data-action="open" data-path="${esc(p.path)}"><div class="t">${icon("file")}${esc(stem(p.path))}</div><div class="ctx">${esc(p.why.join(" · "))}</div></div>`).join("")}` : ""}
     <div class="pane-title">Model</div><div style="padding:0 8px"><select class="input" name="chatmodel" aria-label="Language model">${LLM_MODELS.map((x) => `<option value="${x.id}" ${S.chat.model === x.id ? "selected" : ""}>${esc(x.label)}</option>`).join("")}</select>${LLM_LOCAL ? `<p class="small muted nudge">Local development: every model name is answered by your Ollama through the stand-in canister.</p>` : ""}</div>
-    <div class="pane-title">How it works</div><div class="empty-side">1. A quick System 1 pass in your browser scores every note in the ticked folders on title, tags and word overlap and keeps the best few. 2. Their excerpts go to the Internet Computer's LLM canister, which answers only from them and cites each claim with a number you can click. Paid models are charged to this notebook's cycles; if one cannot answer, the best free model does. Excerpts leave your notebook for the LLM workers, so keep secrets out of the ticked folders.</div>
+    <div class="pane-title">How it works</div><div class="empty-side">1. A quick System 1 pass in your browser scores every note in the ticked folders on title, tags and word overlap and keeps the best few. 2. Their excerpts go to the Internet Computer's LLM canister, which answers from them first and cites each claim with a number you can click; whatever the notes do not cover it answers from its own knowledge, labelled "Beyond your notes". Save any answer as a note in the folder you pick. Paid models are charged to this notebook's cycles; if one cannot answer, the best free model does. Excerpts leave your notebook for the LLM workers, so keep secrets out of the ticked folders.</div>
     ${S.chat.messages.length ? `<div style="padding:8px"><button type="button" class="btn btn-ghost" data-action="chat-clear">${icon("trash")}Clear chat</button></div>` : ""}`;
+}
+/** The part the model answered from its own knowledge gets a visible label. */
+const beyond = (html: string) => html.replace(/(<p>)?(<strong>)?Beyond your notes:?(<\/strong>)?:?/i, (_m, p?: string) => `${p ?? ""}<span class="beyond" title="Not from your notes: the model's own knowledge, so check it">${icon("globe")}Beyond your notes</span> `);
+/** A chat answer as a note: citations become wiki links, the sources are listed, front matter says where it came from. */
+async function saveAnswer(i: number) {
+  const m = S.chat.messages[i];
+  if (!m) return;
+  const q = [...S.chat.messages.slice(0, i)].reverse().find((x) => x.role === "you")?.text ?? "Answer";
+  const folders = ["", ...S.folders.filter((f) => f !== AGENT_ROOT && !f.startsWith(`${AGENT_ROOT}/`))];
+  const folder = await ask({ title: "Save the answer as a note", label: "Folder", choices: folders.map((f) => ({ value: f, label: f || "Top level" })), value: store("nb-chat-save-folder") ?? "", ok: "Next" });
+  if (folder === null) return;
+  store("nb-chat-save-folder", folder);
+  const suggested = q.replace(/[\\/:*?"<>|#^[\]]/g, " ").replace(/\s+/g, " ").trim().slice(0, 70) || "Answer";
+  const name = await ask({ title: "Name the note", label: "Name", value: suggested, ok: "Save" });
+  if (!name?.trim()) return;
+  const picks = m.picks ?? [];
+  const body = m.text.replace(CITE, (whole, ks: string) => { const links = ks.split(/\s*,\s*/).map((k) => picks[Number(k) - 1]).filter(Boolean).map((p) => `[[${stem(p.path)}]]`); return links.length ? ` (${links.join(", ")})` : whole; });
+  const used = cited(m.text, picks.length).map((k) => picks[k - 1]);
+  const oneLine = (t: string) => t.replace(/\s+/g, " ").trim();
+  const content = `---\nsource: chat\nquestion: ${oneLine(q)}\nmodel: ${m.model ? (LLM_LOCAL ? "local Ollama" : m.model) : "notes only"}\ndate: ${new Date().toISOString().slice(0, 10)}\n---\n# ${name.trim()}\n\n> ${oneLine(q)}\n\n${body.trim()}\n${used.length ? `\n## Sources\n\n${used.map((p) => `- [[${stem(p.path)}]]`).join("\n")}\n` : ""}`;
+  const path = `${folder ? `${folder}/` : ""}${name.trim()}.md`;
+  if (note(path)) return toast("A note with that name is already in that folder.", "error");
+  S.tab = "notes";
+  await newNote(path, folder, undefined, content);
+  toast(`Saved as ${path}.`, "ok");
 }
 /** Wrap each [n] the model wrote around a link to source n. */
 function citeLinks(html: string, picks: Pick[]): string {
@@ -2566,19 +2591,17 @@ async function askNotes() {
   render();
   const notes = S.notes.map((n) => ({ ...n, content: S.drafts.get(n.path)?.text ?? n.content }));
   const picks = decide(q, notes, S.idx, { folders: chatFolders(), limit: 6 });
-  if (!picks.length) {
-    S.chat.messages.push({ role: "notes", text: answer(q, picks), picks });
-  } else {
-    const per = Math.min(2000, Math.floor(7600 / picks.length));
+  {
+    const per = picks.length ? Math.min(2000, Math.floor(7600 / picks.length)) : 0;
     const sources = picks.map((p) => ({ path: p.path, excerpt: excerpt(notes.find((n) => n.path === p.path)?.content ?? "", q, per) }));
     const model = S.chat.model;
-    S.chat.stage = `Asking ${LLM_LOCAL ? "your local Ollama" : LLM_MODELS.find((x) => x.id === model)?.label.split(" · ")[0] ?? model} with ${picks.length} note${picks.length === 1 ? "" : "s"}…`;
+    S.chat.stage = `Asking ${LLM_LOCAL ? "your local Ollama" : LLM_MODELS.find((x) => x.id === model)?.label.split(" · ")[0] ?? model} ${picks.length ? `with ${picks.length} note${picks.length === 1 ? "" : "s"}` : "(no notes matched, so from its own knowledge)"}…`;
     render();
     try {
       const r = unwrap(await nb().ask(Principal.fromText(LLM_CANISTER), model, q, sources));
       const used = cited(r.text, picks.length);
       // cited notes first, in the order the model used them, so [n] still points at the right note
-      S.chat.messages.push({ role: "notes", text: r.text, picks, model: r.model, fallback: r.model !== model ? `${LLM_MODELS.find((x) => x.id === model)?.label.split(" · ")[0] ?? model} was unavailable` : used.length ? "" : "no citations given" });
+      S.chat.messages.push({ role: "notes", text: r.text, picks, model: r.model, fallback: r.model !== model ? `${LLM_MODELS.find((x) => x.id === model)?.label.split(" · ")[0] ?? model} was unavailable` : used.length || !picks.length || /beyond your notes/i.test(r.text) ? "" : "no citations given" });
     } catch (e) {
       S.chat.messages.push({ role: "notes", text: answer(q, picks), picks, fallback: errMsg(e) });
     }
@@ -4500,6 +4523,7 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
       S.chat.excluded = el.dataset.all === "1" ? new Set() : new Set(chatFolders());
       store(`nb-chat-off-${S.notebook!.canister.toText()}`, JSON.stringify([...S.chat.excluded]));
       return render();
+    case "chat-save": return saveAnswer(Number(el.dataset.i));
     case "chat-clear":
       S.chat.messages = [];
       return render();

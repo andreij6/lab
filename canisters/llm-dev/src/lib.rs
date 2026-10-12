@@ -50,7 +50,8 @@ async fn v1_chat(req: Request) -> Response {
             ChatMessage::Tool { content, .. } => serde_json::json!({"role": "tool", "content": content}),
         })
         .collect();
-    let body = serde_json::json!({"model": model(), "messages": messages, "stream": false, "options": {"num_predict": 800}});
+    // thinking models (gemma4, qwen3) would spend the whole token budget reasoning; the real canister returns answers only
+    let body = serde_json::json!({"model": model(), "messages": messages, "stream": false, "think": false, "options": {"num_predict": 1000}});
     let r = mgmt::HttpRequest::new("http://localhost:11434/api/chat")
         .with_method(mgmt::HttpMethod::POST)
         .with_header("Content-Type", "application/json")

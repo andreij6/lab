@@ -177,6 +177,7 @@ if [ -n "$LLM" ]; then
   expect "an empty question is refused" "1-1000 characters" notebook ask "(principal \"$LLM\", \"qwen3:32b\", \"  \", $ASKSRC)"
   expect "too many notes are refused" "at most 10 notes" notebook ask "(principal \"$LLM\", \"qwen3:32b\", \"q\", vec { $(for i in 1 2 3 4 5 6 7 8 9 10 11; do printf 'record { path = "a.md"; excerpt = "x" };'; done) })"
   if curl -s -m 2 localhost:11434/api/tags >/dev/null; then
+    expect "with no matching notes it answers from its own knowledge" '"text" =' notebook ask "(principal \"$LLM\", \"qwen3:32b\", \"What is 2 + 2? Answer with the number.\", vec {})"
     expect "the notebook answers from its notes, citing them" '[1]' notebook ask "(principal \"$LLM\", \"qwen3:32b\", \"What ideas are in my notes? Cite the note.\", $ASKSRC)"
   else echo "  skip: Ollama is not running, so the live answer is not checked"; fi
 fi

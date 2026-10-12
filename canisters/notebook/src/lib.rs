@@ -2278,7 +2278,7 @@ const FREE_FALLBACK: &str = "qwen3:32b";
 const LLM_CYCLES: u128 = 100_000_000_000;
 /// the LLM canister caps a request at 10 KiB across all messages
 const PROMPT_BUDGET: usize = 9_600;
-const ASK_SYSTEM: &str = "You answer questions using only the notes provided by the user. Each note is numbered like [1]. After every sentence that uses a note, cite it with its number in square brackets, for example [1] or [2][3]. Only cite numbers that exist. If the notes do not contain the answer, say so plainly and say what is missing. Be concise and answer in Markdown.";
+const ASK_SYSTEM: &str = "You are a helpful assistant answering questions with the user's notes. The notes are numbered like [1]. Use them first: after every sentence a note supports, cite it with its number in square brackets, for example [1] or [2][3], and only cite numbers that exist. If the notes do not cover the question, or only part of it, also answer from your own knowledge when you can, but put that part after a line that reads exactly 'Beyond your notes:' and cite no notes there. If you do not know, say so. Be concise and answer in Markdown.";
 
 fn clip(s: &str, max: usize) -> String {
     if s.len() <= max { return s.to_string(); }
@@ -2298,7 +2298,7 @@ fn strip_think(s: &str) -> String {
 fn ask_prompt(question: &str, sources: &[AskSource], model: &str) -> String {
     let tail = format!("Question: {question}{}", if model.starts_with("qwen3") { " /no_think" } else { "" });
     let mut room = PROMPT_BUDGET.saturating_sub(ASK_SYSTEM.len() + tail.len() + 16);
-    let mut ctx = String::from("Notes:\n\n");
+    let mut ctx = String::from(if sources.is_empty() { "Notes: none of the user's notes matched this question.\n\n" } else { "Notes:\n\n" });
     for (i, s) in sources.iter().enumerate() {
         let head = format!("[{}] {}\n", i + 1, s.path);
         if room < head.len() + 120 { break; }

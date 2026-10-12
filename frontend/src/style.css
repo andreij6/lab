@@ -553,6 +553,8 @@ abbr.gl { text-decoration: underline dotted var(--accent-2); text-underline-offs
 @keyframes busy-slide { from { background-position: -40% 0; } to { background-position: 140% 0; } } @keyframes busy-spin { to { transform: rotate(360deg); } }
 @media (max-width: 760px) { #busy .busy-pill { bottom: calc(76px + env(safe-area-inset-bottom)); } }
 .cite { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 4px; margin: 0 1px; border: 0; border-radius: 5px; background: var(--accent-dim); color: var(--accent-2); font-size: .7rem; font-weight: 700; vertical-align: 2px; cursor: pointer; } .cite:hover { background: var(--accent); color: #fff; }
+.beyond { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--fg); font-size: .75rem; font-weight: 600; } .beyond .ico { width: 12px; height: 12px; }
+.answer-tools { display: flex; gap: 4px; margin-top: 8px; } .answer-tools .btn { padding: 3px 8px; font-size: .8rem; }
 .answered-by { display: flex; align-items: center; gap: 4px; margin-top: 8px; } .answered-by .ico { width: 12px; height: 12px; } .bubble.thinking { display: inline-flex; align-items: center; gap: 8px; } .bubble.thinking .spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--line-2); border-top-color: var(--accent); animation: busy-spin .8s linear infinite; }
 .msgrow.me-mention { background: color-mix(in srgb, var(--accent) 10%, transparent); border-left: 2px solid var(--accent); }
 /* spreadsheets */
