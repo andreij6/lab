@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=https://github.com/dfinity/icp-cli/raw/refs/tags/v1.6.0/docs/schemas/icp-yaml-schema.json
+# Markdown notebooks on ICP: every notebook is its own canister, spawned by the registry and owned by
+# the person who created it. Build/deploy with icp-cli (`icp`), never dfx.
+canisters:
+  # Spawns and upgrades notebook canisters; embeds the notebook wasm (scripts/build.sh).
+  - name: registry
+    build:
+      steps:
+        - type: script
+          command: ./scripts/build.sh
+  - frontend
+
+networks:
+  - name: local
+    mode: managed
+    gateway:
+      port: 0  # OS-assigned: read the URL from `icp network status --json`
+    # NNS = ICP ledger + CMC locally, so notebook top-ups convert ICP to cycles end to end; implies II
+    nns: true
+
+environments:
+  - name: local
+    network: local
+    canisters: [registry, frontend]
+  - name: ic
+    network: ic
+    canisters: [registry, frontend]

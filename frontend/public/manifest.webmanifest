@@ -1,0 +1,25 @@
+{
+  "name": "Lab",
+  "short_name": "Lab",
+  "description": "Markdown notes in a canister you own.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#121316",
+  "theme_color": "#121316",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Quick capture",
+      "short_name": "Capture",
+      "description": "A blank note in your Inbox",
+      "url": "/#/capture"
+    }
+  ]
+}

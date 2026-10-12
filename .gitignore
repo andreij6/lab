@@ -1,0 +1,9 @@
+target/
+.icp/
+frontend/node_modules/
+frontend/dist/
+frontend/src/bindings/
+.DS_Store
+*.pem
+.env
+.env.*

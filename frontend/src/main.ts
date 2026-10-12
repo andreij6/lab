@@ -1,0 +1,5711 @@
+import "@fontsource-variable/inter";
+import "@fontsource-variable/jetbrains-mono";
+import "./style.css";
+import { AuthClient } from "@icp-sdk/auth/client";
+import { Actor, HttpAgent, type Identity } from "@icp-sdk/core/agent";
+import { safeGetCanisterEnv } from "@icp-sdk/core/agent/canister-env";
+import { IDL } from "@icp-sdk/core/candid";
+import { Ed25519KeyIdentity } from "@icp-sdk/core/identity";
+import { createActor as registryActor, type Rain, type Channel, type Member, type Message, type Post, type PostComment, type Online, type Attestation, type ListingView, type Token, type Health, type Bug, type BugStatus, type Registry, type Notebook as NotebookRec } from "./bindings/registry";
+import { createActor as notebookActor, type AttestationView, type Attempt, Role, type DepositState, type AgentKey, type AutoTopUp, type Comment, type Info, type Note, type Revision, type Share, type TopUp, type Notebook as NotebookApi, type NotebookError } from "./bindings/notebook";
+import type { SnapshotInfo } from "./bindings/registry";
+import { Principal } from "@icp-sdk/core/principal";
+import { continueList, indentLines, toggleTask } from "./editor";
+import { canvasSvg, mountCanvasPanZoom } from "./canvasview";
+import { createEditor, type Editor } from "./cm";
+import { diffLines } from "./diff";
+import { NEW_DRAWING, isExcalidraw, mountEditor, toSvg, unmountEditors } from "./excalidraw";
+import { dailyPath, fillTemplate } from "./templates";
+import { ForceGraph } from "./graph";
+import { answer, decide, type Pick } from "./chat";
+import { NEW_BOARD, isKanban, moveCard, parseBoard, serializeBoard, type Board } from "./kanban";
+import { NEW_CARDS, NEW_CHOICE, graded, parseCards, parseChoice, quizKind, shuffled } from "./quiz";
+import { countByDay, dayKey, gridWeeks, level, streak } from "./activity";
+import { cardKey, isDue, review as srsReview, type Rating, type Sched } from "./srs";
+import { align, isLeanNote, leanCode, parseLean, statementCard, unmentionedHyps } from "./lean";
+import { NEW_IPYNB, addCell as nbAddCell, isNotebookPath, moveCell as nbMoveCell, parseNotebook, serializeNotebook, type Cell as NbCell, type Notebook as Nb, type Output as NbOutput } from "./ipynb";
+import { pythonLoaded, restartPython, runPython } from "./pyodide";
+import { isSlides, splitSlides, SLIDES_TEMPLATE } from "./slides";
+import { NEW_WORKBOOK, PALETTES, addChart, chartSvg, colName, evaluate, fmt, isSheetPath, newSheet, parseCsv, parseRef, parseWorkbook, serializeWorkbook, sheetCsv, toCsv, type Chart, type ChartType, type Workbook } from "./sheet";
+import DOMPurify from "dompurify";
+import { MEETING_TEMPLATE, actionCards, decisions, isMeeting, isOverdue, markdownToDocx, meetingSummary, parseIcs, parseMeeting, parseTasks, people, reminders, setCell, sortTable, sortTasks, toggleTaskLine, tsvToTable, weeklyReview } from "./work";
+import { ankiTsv, cardsFromNote, cite, explain, glossary, goalProgress, questionsFor, sources, summarise } from "./study";
+import { isAttachment, renderDiagrams, renderMarkdown } from "./markdown";
+import { section, backlinkContext, base, buildIndex, dir, frontmatter, fuzzy, graphData, headings, resolve, search, setFrontmatter, stem, tree, untitled, type Folder, type Index } from "./notes";
+import { unzip } from "./unzip";
+import { approveWithOisy, transferWithOisy } from "./oisy";
+import { cacheGet, cacheSet, clearQueue, queueWrite, queued, type Queued } from "./offline";
+import { registerSW } from "virtual:pwa-register";
+import { THEMES, applyTheme, loadThemeState, saveThemeState, type ThemeState } from "./themes";
+import { zip } from "./zip";
+
+// ---------- ledger (just enough for a signed-in top-up) ----------
+
+const ICP_LEDGER = "ryjl3-tyaaa-aaaaa-aaaba-cai";
+const ICP_FEE = 10_000n;
+const AccountIdl = IDL.Record({ owner: IDL.Principal, subaccount: IDL.Opt(IDL.Vec(IDL.Nat8)) });
+const ledgerIdl: IDL.InterfaceFactory = ({ IDL: I }) =>
+  I.Service({
+    icrc2_approve: I.Func(
+      [I.Record({ fee: I.Opt(I.Nat), memo: I.Opt(I.Vec(I.Nat8)), from_subaccount: I.Opt(I.Vec(I.Nat8)), created_at_time: I.Opt(I.Nat64), amount: I.Nat, expected_allowance: I.Opt(I.Nat), expires_at: I.Opt(I.Nat64), spender: AccountIdl })],
+      [I.Variant({ Ok: I.Nat, Err: I.Reserved })],
+      [],
+    ),
+    icrc1_balance_of: I.Func([AccountIdl], [I.Nat], ["query"]),
+  });
+type Ledger = { icrc2_approve: (a: Record<string, unknown>) => Promise<{ Ok: bigint } | { Err: unknown }>; icrc1_balance_of: (a: { owner: Principal; subaccount: [] }) => Promise<bigint> };
+async function icpBalance(): Promise<bigint> {
+  const agent = HttpAgent.createSync({ identity: S.identity, rootKey: env.IC_ROOT_KEY });
+  const ledger = Actor.createActor<Ledger>(ledgerIdl, { agent, canisterId: ICP_LEDGER });
+  return ledger.icrc1_balance_of({ owner: S.identity!.getPrincipal(), subaccount: [] });
+}
+
+// ---------- environment ----------
+
+type Env = { "PUBLIC_CANISTER_ID:registry"?: string; IC_ROOT_KEY?: Uint8Array };
+const env: Env = (safeGetCanisterEnv() as Env | undefined) ?? {};
+const REGISTRY = env["PUBLIC_CANISTER_ID:registry"] ?? "";
+const isLocal = /(^|\.)localhost$|^127\.0\.0\.1$/.test(location.hostname);
+const port = location.port || "80";
+// Locally, sign-in uses a browser-held dev key unless ?ii is in the URL (local II needs a passkey).
+const devMode = isLocal && !new URLSearchParams(location.search).has("ii");
+const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
+// Payments go through the user's OISY wallet. OISY lives on mainnet, so on the local network the
+// browser-held dev identity pays from the local ledger instead (add ?oisy to force OISY locally).
+const useOisy = !isLocal || new URLSearchParams(location.search).has("oisy");
+/// A notebook canister's own origin on the gateway: where agents POST and public notes are served.
+const apiUrl = (canister: string) => (isLocal ? `http://${canister}.localhost:${port}` : `https://${canister}.icp0.io`);
+const AGENT_ROOT = "Agents";
+const isAgentPath = (p: string) => p === AGENT_ROOT || p.startsWith(`${AGENT_ROOT}/`);
+const MOD = isMac ? "⌘" : "Ctrl";
+const mobileQuery = matchMedia("(max-width: 760px)");
+
+const auth = new AuthClient(
+  isLocal
+    ? { identityProvider: { authorizeUrl: `http://id.ai.localhost:${port}/authorize`, canisterId: "rdmx6-jaaaa-aaaaa-aaadq-cai" }, agentOptions: { rootKey: env.IC_ROOT_KEY } }
+    : {},
+);
+
+function store(k: string, v?: string | null): string | null {
+  try {
+    if (v === undefined) return localStorage.getItem(k);
+    if (v === null) localStorage.removeItem(k);
+    else localStorage.setItem(k, v);
+  } catch {
+    /* storage blocked */
+  }
+  return null;
+}
+
+const DEV_KEY = "nb-dev-identity";
+const DEV_ON = "nb-dev-signed-in";
+let devId: Ed25519KeyIdentity | undefined;
+function devIdentity(create: boolean): Ed25519KeyIdentity | undefined {
+  if (!devId) {
+    // keep the dev key from the earlier "vaults-" build so local notebooks stay reachable
+    const raw = store(DEV_KEY) ?? store("vaults-dev-identity");
+    if (raw && (create || store(DEV_ON) === "1" || store("vaults-dev-signed-in") === "1")) devId = Ed25519KeyIdentity.fromJSON(raw);
+    else if (create) devId = Ed25519KeyIdentity.generate();
+    if (devId && create) {
+      store(DEV_KEY, JSON.stringify(devId.toJSON()));
+      store(DEV_ON, "1");
+    }
+  }
+  return devId;
+}
+async function currentIdentity(): Promise<Identity | undefined> {
+  if (devMode) return devIdentity(false);
+  return auth.isAuthenticated() ? auth.getIdentity() : undefined;
+}
+
+const registry = (): Registry => registryActor(REGISTRY, { agentOptions: { identity: S.identity, rootKey: env.IC_ROOT_KEY } });
+const notebookOf = (id: string): NotebookApi => notebookActor(id, { agentOptions: { identity: S.identity, rootKey: env.IC_ROOT_KEY } });
+const nb = (): NotebookApi => notebookOf(S.notebook!.canister.toText());
+
+// ---------- state ----------
+
+type Tab = "notes" | "chat" | "graph" | "manage" | "study" | "work";
+type Settings = { bookmarks: string[]; srs: Record<string, Record<string, Sched>>; deckStats: Record<string, { reviews: number; good: number }>; study: Record<string, number>; goals: { notesPerWeek?: number; cardsPerDay?: number } };
+const parseSettings = (j: Partial<Settings> | undefined): Settings => ({ bookmarks: Array.isArray(j?.bookmarks) ? j!.bookmarks : [], srs: j?.srs ?? {}, deckStats: j?.deckStats ?? {}, study: j?.study ?? {}, goals: j?.goals ?? {} });
+type ManageTab = "finance" | "notebook" | "sharing" | "agents" | "market";
+const MANAGE_TABS: [ManageTab, string, string][] = [["finance", "Cycles & money", "bolt"], ["notebook", "Notebook", "book"], ["sharing", "Sharing", "share"], ["agents", "Agents", "bot"], ["market", "Market", "tag"]];
+type View = "edit" | "split" | "preview";
+type MobilePane = "files" | "note" | "links";
+/** A pane holds tabs (note paths); several panes sit side by side. */
+type Pane = { id: number; tabs: string[]; active?: string; view: View; study?: boolean };
+type Draft = { text: string; dirty: boolean; saving: boolean };
+type ChatMsg = { role: "you" | "notes"; text: string; picks?: Pick[] };
+let paneSeq = 1;
+const newPane = (view?: View): Pane => ({ id: paneSeq++, tabs: [], view: view ?? ((store("nb-view") as View | null) ?? "split") });
+
+const S = {
+  identity: undefined as Identity | undefined,
+  principal: "",
+  signin: { busy: false, error: "" },
+  notebooks: undefined as NotebookRec[] | undefined,
+  notebookInfo: new Map<string, Info>(),
+  /** cycles health per notebook from the registry; answers even when the notebook is frozen */
+  health: new Map<string, Health>(),
+  /** notes created per day across every notebook, for the activity grid */
+  activity: undefined as Map<string, number> | undefined,
+  /** cards-a-day goal, when any notebook has one: the grid shades against it */
+  activityGoal: 0,
+  /** payment tokens the registry accepts (ICP, TCYCLES, ck tokens) */
+  tokens: [] as Token[],
+  payToken: (store("nb-pay-token") ?? "ICP") as string,
+  attest: undefined as Attestation | undefined,
+  tokenId: undefined as bigint | undefined,
+  deposits: undefined as DepositState | undefined,
+  manageTab: (store("nb-manage-tab") ?? "finance") as ManageTab,
+  marketFee: 250,
+  listing: undefined as ListingView | undefined,
+  market: undefined as { listings: ListingView[]; bought: Set<string>; loading: boolean; decksOnly?: boolean } | undefined,
+  /** the open notebook is frozen: the file list is the cached copy and nothing can be saved */
+  frozen: false,
+  sideOpen: store("nb-side") !== "0",
+  asideMode: "links" as "links" | "comments",
+  asideOpen: store("nb-aside") !== "0",
+  newNotebook: "",
+  newDesc: "",
+  notebook: undefined as NotebookRec | undefined,
+  notes: undefined as Note[] | undefined,
+  folders: [] as string[],
+  idx: buildIndex([]) as Index,
+  panes: [newPane()] as Pane[],
+  focused: 1,
+  drafts: new Map<string, Draft>(),
+  query: "",
+  tag: "",
+  collapsed: new Set<string>(JSON.parse(store("nb-collapsed") ?? "[]") as string[]),
+  tab: "notes" as Tab,
+  chat: { input: "", busy: false, messages: [] as ChatMsg[], excluded: new Set<string>() },
+  mobile: mobileQuery.matches,
+  mobilePane: "files" as MobilePane,
+  graphGhosts: store("nb-graph-ghosts") === "1",
+  localDepth: Number(store("nb-local-depth") ?? 1),
+  theme: loadThemeState() as ThemeState,
+  info: undefined as Info | undefined,
+  topups: [] as TopUp[],
+  agentKeys: [] as AgentKey[],
+  shares: [] as Share[],
+  issued: undefined as { name: string; key: string } | undefined,
+  newAgent: "",
+  shared: undefined as { canister: string; path: string; note?: Note; name?: string; error?: string; loading: boolean; files?: { path: string; size: bigint; modified: bigint }[]; role?: string; comments?: Comment[]; dirty?: boolean; here?: string[]; progress?: [Principal, number][]; myProgress?: number } | undefined,
+  isAdmin: false,
+  admin: undefined as { bugs: Bug[]; filter: string; kind?: string; open?: bigint; loading: boolean; repo?: string } | undefined,
+  settings: parseSettings(undefined) as Settings,
+  /** per pane: study mode shows one section at a time */
+  studyIdx: new Map<number, number>(),
+  pomodoro: undefined as { end: number; phase: "work" | "break" } | undefined,
+  taskOwner: "" as string,
+  clipperKey: undefined as string | undefined,
+  community: undefined as { channel: string; channels: Channel[]; messages: Message[]; online: Online[]; member?: Member; balance?: bigint; min: bigint; loading: boolean; draft: string; replyTo?: Message; unread: Record<string, number>; showOnline: boolean; showChannels: boolean; picker?: { mid?: bigint }; editing?: bigint; pins?: Message[]; showPins?: boolean; error?: string; github?: string; repo?: string; firstUnseen?: bigint; atBottom?: boolean; newCount?: number; gistSlide?: Map<bigint, number> } | undefined,
+  show: undefined as { slides: string[]; i: number; self?: string; dead?: boolean } | undefined,
+  mentions: 0, // @mentions of me in the community since I last looked
+  board: undefined as { topic?: string; sort: "hot" | "new" | "top"; posts: Post[]; open?: Post; comments: PostComment[]; channels: Channel[]; member?: Member; fee: bigint; loading: boolean; replyTo?: bigint; github?: string; showSide: boolean; showAside: boolean } | undefined,
+  /** projects per notebook for the list page footer */
+  projectsByNotebook: new Map<string, { active: number; done: number }>(),
+  attempts: [] as Attempt[],
+  groupProgress: new Map<string, [Principal, number][]>(),
+  /** attestations per note, with whether each still matches the content */
+  noteAttest: new Map<string, AttestationView[]>(),
+  /** due cards per notebook on the list page, and the goal shading source */
+  dueByNotebook: new Map<string, number>(),
+  recent: [] as string[],
+  propsOpen: store("nb-props") === "1",
+  serverHits: undefined as { path: string; snippet: string }[] | undefined,
+  comments: [] as Comment[],
+  published: null as string | null,
+  autoTopup: undefined as AutoTopUp | undefined,
+  snapshots: undefined as SnapshotInfo[] | undefined,
+  price: 0n,
+  oisyAccount: store("nb-oisy") ?? "",
+  offline: !navigator.onLine,
+  fromCache: false,
+  pendingWrites: 0,
+  graphStyle: { colorBy: (store("nb-graph-color") ?? "none") as "none" | "folder" | "tag", hideAttachments: store("nb-graph-noattach") === "1", query: "", orphans: false },
+  topupAmount: "0.5",
+  error: "",
+  busy: "",
+  copied: "",
+};
+applyTheme(S.theme);
+
+const pane = (id = S.focused): Pane => S.panes.find((p) => p.id === id) ?? S.panes[0];
+const cur = (): string | undefined => pane().active;
+const draftOf = (path: string): Draft => {
+  let d = S.drafts.get(path);
+  if (!d) {
+    d = { text: note(path)?.content ?? (S.shared?.path === path ? S.shared.note?.content ?? "" : ""), dirty: false, saving: false };
+    S.drafts.set(path, d);
+  }
+  return d;
+};
+
+// ---------- formatting ----------
+
+const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+const when = (ns: bigint) => new Date(Number(ns / 1_000_000n)).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+const ago = (ns: bigint) => {
+  const s = Math.max(0, (Date.now() - Number(ns / 1_000_000n)) / 1000);
+  return s < 60 ? "just now" : s < 3600 ? `${Math.round(s / 60)} min ago` : s < 86_400 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86_400)} d ago`;
+};
+const tc = (n: bigint) => `${(Number(n) / 1e12).toFixed(n < 100_000_000_000n ? 3 : 2)} TC`;
+const kb = (n: bigint | number) => (Number(n) < 1024 ? `${n} B` : Number(n) < 1 << 20 ? `${(Number(n) / 1024).toFixed(1)} KB` : `${(Number(n) / (1 << 20)).toFixed(2)} MB`);
+function icp(e8s: bigint): string {
+  const s = `${e8s / 100_000_000n}.${(e8s % 100_000_000n).toString().padStart(8, "0")}`;
+  return s.replace(/0+$/, "").replace(/\.$/, "");
+}
+const shortHex = (h: string) => `${h.slice(0, 10)}…${h.slice(-8)}`;
+const shortPrincipal = (p: string) => {
+  const g = p.split("-");
+  return g.length > 5 ? `${g.slice(0, 2).join("-")}…-${g.slice(-1)}` : p;
+};
+const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e)).replace(/\.$/, "");
+function describe(e: NotebookError): string {
+  switch (e.__kind__) {
+    case "Unauthorized":
+      return "only the notebook's owner can do that";
+    case "NotFound":
+      return "no such file or folder";
+    case "Exists":
+      return "something with that name already exists";
+    case "Invalid":
+      return e.Invalid;
+  }
+}
+function unwrap<T>(r: { __kind__: "Ok"; Ok: T } | { __kind__: "Err"; Err: NotebookError }): T {
+  if (r.__kind__ === "Err") throw new Error(describe(r.Err));
+  return r.Ok;
+}
+async function copy(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const t = Object.assign(document.createElement("textarea"), { value: text });
+    document.body.append(t);
+    t.select();
+    document.execCommand("copy");
+    t.remove();
+  }
+}
+const paths = () => (S.notes ?? []).map((n) => n.path);
+const note = (p: string) => S.notes?.find((n) => n.path === p);
+const words = (s: string) => (s.trim() ? s.trim().split(/\s+/).length : 0);
+const lowCycles = (i?: Info) => (i ? Number(i.cycles) < 3e11 : false);
+const title = (p: string) => (p.endsWith(".md") ? base(p) : p.split("/").pop()!);
+
+const ICONS: Record<string, string> = {
+  file: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/>',
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  "folder-open": '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v2H5"/><path d="M5 11h17l-2 8H5a2 2 0 0 1-2-2V7"/>',
+  chevron: '<path d="M9 6l6 6-6 6"/>',
+  down: '<path d="M6 9l6 6 6-6"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  graph: '<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="8" r="2.5"/><circle cx="10" cy="18" r="2.5"/><path d="M8.3 6.6l7.2 1M7.2 8.3l2 7.3M16.3 10.1l-4.8 6"/>',
+  bolt: '<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>',
+  notes: '<path d="M4 6h16M4 12h16M4 18h10"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
+  palette: '<circle cx="12" cy="12" r="9"/><circle cx="8" cy="10" r="1.2"/><circle cx="12" cy="7.5" r="1.2"/><circle cx="16" cy="10" r="1.2"/><path d="M12 21a3 3 0 0 1 0-6h1.5a2 2 0 0 0 0-4"/>',
+  trash: '<path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/>',
+  edit: '<path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/>',
+  move: '<path d="M5 12h14M13 6l6 6-6 6"/>',
+  tag: '<path d="M20 12l-8 8-9-9V4h7z"/><circle cx="7.5" cy="7.5" r="1"/>',
+  eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  columns: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/>',
+  split: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16M15 12h4M17 10l2 2-2 2"/>',
+  x: '<path d="M6 6l12 12M18 6 6 18"/>',
+  book: '<path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 19a2 2 0 0 1 2-2h13"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
+  refresh: '<path d="M21 12a9 9 0 1 1-3-6.7M21 3v6h-6"/>',
+  fit: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
+  shield: '<path d="M12 2l8 3v6c0 5-3.5 9-8 11-4.5-2-8-6-8-11V5z"/><path d="M9 12l2 2 4-4"/>',
+  out: '<path d="M7 17L17 7M8 7h9v9"/>',
+  download: '<path d="M12 3v12M7 10l5 5 5-5M4 21h16"/>',
+  more: '<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>',
+  links: '<path d="M19 12H5M11 18l-6-6 6-6"/>',
+  image: '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.5"/><path d="M21 16l-5-5-8 8"/>',
+  upload: '<path d="M12 16V4M7 9l5-5 5 5M4 20h16"/>',
+  list: '<path d="M4 6h2M9 6h11M4 12h2M9 12h11M4 18h2M9 18h11"/>',
+  check: '<path d="M5 12l5 5L20 7"/>',
+  lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  bot: '<rect x="4" y="8" width="16" height="12" rx="3"/><circle cx="9" cy="14" r="1.5"/><circle cx="15" cy="14" r="1.5"/><path d="M12 8V4M8 4h8"/>',
+  share: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+  help: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1 1-1 1.7M12 17h.01"/>',
+  star: '<path d="M12 3l2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3 6.4 20.2l1.1-6.2L3 9.6l6.2-.9z"/>',
+  calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
+  history: '<path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5M12 7v5l3 2"/>',
+  camera: '<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>',
+  template: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/>',
+  board: '<rect x="3" y="4" width="18" height="16" rx="2"/><rect x="6" y="7" width="5" height="4"/><rect x="13" y="12" width="5" height="4"/><path d="M11 9h2v5"/>',
+  command: '<path d="M9 6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3z"/>',
+  updown: '<path d="M8 9l4-4 4 4M8 15l4 4 4-4"/>',
+  chat: '<path d="M21 12a8 8 0 0 1-11.6 7.1L4 21l1.9-5.4A8 8 0 1 1 21 12z"/><path d="M8 12h8M8 9h5"/>',
+  send: '<path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/>',
+  briefcase: '<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M3 12h18"/>',
+  mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
+  bell: '<path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4zM10 20a2 2 0 0 0 4 0"/>',
+  person: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  "panel-left": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>',
+  "panel-right": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/>',
+  bug: '<rect x="8" y="6" width="8" height="14" rx="4"/><path d="M12 6V3M6 10H3M21 10h-3M6 20l-2 2M18 20l2 2M6 15H3M21 15h-3"/>',
+};
+const icon = (n: string, cls = "") => `<svg class="ico ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n] ?? ""}</svg>`;
+
+const attachments = new Map<string, string>();
+const fetching = new Set<string>();
+/** Attachments are fetched one by one when a preview first needs them, then cached for the session. */
+function attachment(path: string): string | undefined {
+  const d = attachments.get(path);
+  if (d !== undefined || fetching.has(path) || !S.notebook) return d;
+  fetching.add(path);
+  nb().read(path).then((r) => {
+    fetching.delete(path);
+    if (r.__kind__ === "Ok") {
+      attachments.set(path, r.Ok.content);
+      refreshPreviews();
+    }
+  }).catch(() => fetching.delete(path));
+  return undefined;
+}
+const resolveLink = (t: string) => resolve(t, paths(), S.idx.aliases);
+/** Links pane of a person note: every line that mentions them, with the note it is in. */
+function mentionsHtml(c: string): string {
+  const text = draftOf(c).text;
+  if ((frontmatter(text).data.type ?? "").trim().toLowerCase() !== "person") return "";
+  const name = headings(text)[0]?.text ?? title(c);
+  const person = people(workNotes()).find((p) => p.name.toLowerCase() === name.toLowerCase());
+  const ms = (person?.mentions ?? []).filter((m) => m.path !== c);
+  const open = sortTasks(parseTasks(workNotes()).filter((t) => t.owner?.toLowerCase() === name.toLowerCase() && !t.done), new Date());
+  return `<div class="pane-title">Mentions <span class="count">${ms.length}</span></div>${ms.length ? ms.slice(0, 30).map((m) => `<div class="bl" data-action="open" data-path="${esc(m.path)}"><div class="t">${icon("file")}${esc(stem(m.path))}</div><div class="ctx">${esc(m.line).replace(new RegExp(`@${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "i"), (x) => `<mark>${x}</mark>`)}</div></div>`).join("") : `<div class="empty-side">Write @${esc(name)} in any note and it shows up here.</div>`}
+    ${open.length ? `<div class="pane-title">Their open tasks <span class="count">${open.length}</span></div>${open.slice(0, 20).map((t) => `<div class="bl" data-action="open" data-path="${esc(t.path)}"><div class="t ${isOverdue(t, new Date()) ? "danger" : ""}">${icon("check")}${esc(t.text)}</div></div>`).join("")}` : ""}`;
+}
+
+/** Links pane: how a prose note lines up with its Lean note, what the prose never mentions, and who vouched for what. */
+function alignmentHtml(c: string): string {
+  const text = draftOf(c).text;
+  const lean = isLeanNote(text) ? c : leanFor(c);
+  if (!lean) return "";
+  const leanText = draftOf(lean).text;
+  const decls = parseLean(leanCode(leanText));
+  const prose = lean === c ? undefined : text;
+  const al = prose !== undefined ? align(prose, decls) : undefined;
+  const refs = prose !== undefined ? [...prose.matchAll(/!\[\[[^\]#|]+#thm:([^\]|]+)/g)].map((m) => m[1].trim()) : [];
+  const ledger = decls.filter((d) => refs.includes(d.name) || (!refs.length && (d.kind === "theorem" || d.kind === "lemma"))).map((d) => ({ d, missing: unmentionedHyps(d, prose ?? d.doc) }));
+  const attest = [...(S.noteAttest.get(c) ?? []), ...(lean !== c ? S.noteAttest.get(lean) ?? [] : [])].sort((a, b) => Number(b.attestation.at - a.attestation.at));
+  const who = (a: AttestationView) => a.attestation.agent ? `agent ${esc(a.attestation.agent)}` : a.attestation.by.toText() === S.principal ? "you" : shortPrincipal(a.attestation.by.toText());
+  const can = !S.frozen && !S.fromCache;
+  return `<div class="pane-title">Formal alignment${al ? ` <span class="count">${Math.round(al.coverage * 100)}%</span>` : ""}</div>
+    <div class="align">
+      <div class="small muted">${lean === c ? "This is the Lean note." : `Lean: <a href="#" data-action="open" data-path="${esc(lean)}">${esc(title(lean))}</a>`}${decls.some((d) => d.flags.length) ? ` · <span class="danger">${decls.flatMap((d) => d.flags).length} flag${decls.flatMap((d) => d.flags).length === 1 ? "" : "s"}: ${esc([...new Set(decls.flatMap((d) => d.flags))].join(", "))}</span>` : ""}</div>
+      ${al ? `${al.backed.map((b) => `<div class="al-row ok" title="${esc(b.text)}">${icon("check")}<span>^${esc(b.id)}</span><code>${b.lemmas.map(esc).join(", ")}</code></div>`).join("")}${al.informalOnly.map((b) => `<div class="al-row warn" title="${esc(b.text)}">${icon("bolt")}<span>^${esc(b.id)}</span><span class="small">prose only: no lemma tagged <code>-- step: ^${esc(b.id)}</code></span></div>`).join("")}${al.formalOnly.map((d) => `<div class="al-row faint">${icon("file")}<code>${esc(d.name)}</code><span class="small">formal only: no prose step cites it</span></div>`).join("")}${!al.backed.length && !al.informalOnly.length ? `<div class="small faint">End prose steps with <code>^step-1</code> and tag lemmas with <code>-- step: ^step-1</code> to line them up.</div>` : ""}` : ""}
+      ${ledger.some((l) => l.missing.length) ? `<div class="pane-sub">Hypotheses the prose never mentions</div>${ledger.filter((l) => l.missing.length).map((l) => `<div class="al-row bad">${icon("bolt")}<code>${esc(l.d.name)}</code><span class="small">${l.missing.map((h) => `<code>${esc(h.name)} : ${esc(h.type)}</code>`).join(" ")}</span></div>`).join("")}` : ledger.length ? `<div class="al-row ok">${icon("check")}<span class="small">Every hypothesis of ${ledger.length === 1 ? "the theorem" : `${ledger.length} theorems`} is mentioned in the prose.</span></div>` : ""}
+      <div class="pane-sub">Attestations</div>
+      ${attest.length ? attest.slice(0, 8).map((a) => `<div class="al-row ${a.fresh ? (/^(pass|same|ok)$/.test(a.attestation.verdict) ? "ok" : "bad") : "stale"}" title="${esc(a.attestation.detail)}">${icon(a.fresh ? "check" : "history")}<span>${esc(a.attestation.kind)}: <b>${esc(a.attestation.verdict)}</b></span><span class="small muted">${who(a)} · ${ago(a.attestation.at)}${a.fresh ? "" : " · stale"}${a.attestation.path === lean && lean !== c ? " · on the Lean" : ""}</span></div>`).join("") : `<div class="small faint">Nothing attested yet. A checker agent posts <code>check</code>; a reader posts <code>compare</code>.</div>`}
+      ${can ? `<div class="row tight nudge">${prose !== undefined ? `<span class="small muted">English vs Lean:</span><button type="button" class="btn btn-ghost" data-action="attest-note" data-path="${esc(c)}" data-kind="compare" data-verdict="same" data-lean="${esc(lean)}">${icon("check")}Same</button><button type="button" class="btn btn-ghost" data-action="attest-note" data-path="${esc(c)}" data-kind="compare" data-verdict="weaker" data-lean="${esc(lean)}">Weaker</button><button type="button" class="btn btn-ghost" data-action="attest-note" data-path="${esc(c)}" data-kind="compare" data-verdict="different" data-lean="${esc(lean)}">Different</button>` : `<span class="small muted">Checked it yourself?</span><button type="button" class="btn btn-ghost" data-action="attest-note" data-path="${esc(c)}" data-kind="check" data-verdict="pass">${icon("check")}Passes</button><button type="button" class="btn btn-ghost" data-action="attest-note" data-path="${esc(c)}" data-kind="check" data-verdict="fail">Fails</button>`}</div>` : ""}
+    </div>`;
+}
+
+/** Markdown to safe HTML with everything Obsidian adds; see markdown.ts. */
+function renderMd(content: string, self?: string): string {
+  return renderMarkdown(content, { self, resolve: resolveLink, note: (p) => (S.drafts.get(p)?.text ?? note(p)?.content), attachment, claimBadge: (lean, name) => claimBadge(self, lean, name) });
+}
+/** What stands behind a theorem embed: the Lean checked (on the Lean note) and the English compared (on this note), both unchanged since. */
+function claimStatus(prose: string | undefined, lean: string): { cls: string; label: string; title: string } {
+  const latest = (path: string, kind: string) => (S.noteAttest.get(path) ?? []).filter((a) => a.attestation.kind === kind).sort((a, b) => Number(b.attestation.at - a.attestation.at))[0];
+  const check = latest(lean, "check");
+  const cmp = prose ? latest(prose, "compare") : undefined;
+  if (check && !check.fresh) return { cls: "stale", label: "needs re-check", title: "The Lean changed after it was last checked." };
+  if (cmp && !cmp.fresh) return { cls: "stale", label: "needs review", title: "The prose or the Lean changed after the last comparison." };
+  if (check?.attestation.verdict === "fail") return { cls: "bad", label: "Lean fails", title: check.attestation.detail || "The checker reported a failure." };
+  if (cmp && cmp.attestation.verdict !== "same") return { cls: "bad", label: `English ≠ Lean (${cmp.attestation.verdict})`, title: cmp.attestation.detail || "A reviewer found the statements differ." };
+  if (check?.attestation.verdict === "pass" && cmp?.attestation.verdict === "same") return { cls: "ok", label: "verified", title: `Lean checked by ${check.attestation.agent ?? shortPrincipal(check.attestation.by.toText())}; statement compared by ${cmp.attestation.agent ?? shortPrincipal(cmp.attestation.by.toText())}.` };
+  if (check?.attestation.verdict === "pass") return { cls: "warn", label: "Lean checked, not compared", title: "The code compiles, but nobody has confirmed it says what the English says." };
+  if (cmp?.attestation.verdict === "same") return { cls: "warn", label: "compared, Lean unchecked", title: "The statements agree, but the Lean has not been checked." };
+  return { cls: "none", label: "unverified", title: "No checker or reviewer has attested to this claim." };
+}
+function claimBadge(prose: string | undefined, lean: string, name: string): string {
+  let st = claimStatus(prose, lean);
+  // a declaration with sorry, admit or an axiom is never verified, whatever the attestations say
+  const d = parseLean(leanCode(S.drafts.get(lean)?.text ?? note(lean)?.content ?? "")).find((x) => x.name === name);
+  const bad = d?.flags.filter((f) => /^(sorry|admit|axiom)$/.test(f)) ?? [];
+  if (bad.length && st.cls !== "bad") st = { cls: "bad", label: `incomplete (${bad.join(", ")})`, title: `The Lean uses ${bad.join(" and ")}; the proof is not complete.` };
+  return `<span class="claim ${st.cls}" title="${esc(st.title)}">${st.cls === "ok" ? icon("check") : st.cls === "none" ? "" : icon("bolt")}${esc(st.label)}</span>`;
+}
+async function loadAttestations(path: string) {
+  try {
+    const r = await nb().note_attestations(path);
+    if (r.__kind__ === "Ok") S.noteAttest.set(path, r.Ok);
+  } catch { /* none */ }
+}
+/** The Lean note a prose note binds to: `lean: [[Name]]` in its properties. */
+function leanFor(path: string): string | undefined {
+  const raw = frontmatter(draftOf(path).text).data.lean;
+  if (!raw) return undefined;
+  return resolveLink(raw.replace(/^\[\[|\]\]$/g, "").split("|")[0].trim());
+}
+/** Underline glossary terms in reading view with their definition on hover. */
+function decorateGlossary(root: ParentNode) {
+  if (!S.notes) return;
+  const g = glossary(S.notes).slice(0, 150);
+  if (!g.length) return;
+  const re = new RegExp(`\\b(${g.map((e) => e.term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\b`, "i");
+  const defs = new Map(g.map((e) => [e.term.toLowerCase(), e.definition]));
+  root.querySelectorAll<HTMLElement>(".preview:not([data-gl]), .shared-note:not([data-gl])").forEach((pv) => {
+    pv.dataset.gl = "1";
+    const walker = document.createTreeWalker(pv, NodeFilter.SHOW_TEXT, { acceptNode: (n) => (n.parentElement?.closest("code, pre, a, abbr, .qz, .kb, h1, h2, h3") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT) });
+    const nodes: Text[] = [];
+    let n: Node | null;
+    while ((n = walker.nextNode())) nodes.push(n as Text);
+    const done = new Set<string>();
+    for (const t of nodes) {
+      const m = re.exec(t.data);
+      if (!m || done.has(m[1].toLowerCase())) continue;
+      done.add(m[1].toLowerCase());
+      const abbr = document.createElement("abbr");
+      abbr.className = "gl";
+      abbr.title = defs.get(m[1].toLowerCase()) ?? "";
+      abbr.textContent = m[1];
+      const after = t.splitText(m.index!);
+      after.data = after.data.slice(m[1].length);
+      t.parentNode!.insertBefore(abbr, after);
+    }
+  });
+}
+/** Reading view tables: click a header to sort the source table, double-click a cell to edit it. */
+function decorateTables(root: ParentNode) {
+  root.querySelectorAll<HTMLElement>(".preview[data-preview-path]").forEach((pv) => {
+    const path = pv.dataset.previewPath!;
+    pv.querySelectorAll<HTMLTableElement>("table:not([data-tbl])").forEach((tbl, ti) => {
+      tbl.dataset.tbl = String(ti);
+      tbl.querySelectorAll("thead th").forEach((th, ci) => { th.setAttribute("data-action", "sort-table"); th.setAttribute("data-path", path); th.setAttribute("data-table", String(ti)); th.setAttribute("data-col", String(ci)); th.setAttribute("title", "Click to sort; again to reverse"); th.addEventListener("click", () => th.setAttribute("data-desc", th.getAttribute("data-desc") === "1" ? "0" : "1")); });
+      tbl.querySelectorAll("tbody tr").forEach((tr, ri) => tr.querySelectorAll("td").forEach((td, ci) => { td.dataset.cell = `${ti}:${ri}:${ci}`; td.dataset.path = path; td.title = "Double-click to edit"; }));
+    });
+  });
+}
+function afterRender(root: ParentNode = document) {
+  const dark = S.theme.mode === "dark";
+  void renderDiagrams(root, dark);
+  decorateGlossary(root);
+  decorateTables(root);
+  root.querySelectorAll<HTMLElement>("[data-excalidraw-embed]:not([data-done])").forEach((el) => {
+    el.dataset.done = "1";
+    const path = el.dataset.excalidrawEmbed!;
+    const content = S.drafts.get(path)?.text ?? note(path)?.content;
+    if (content === undefined) return;
+    toSvg(content, dark).then((svg) => {
+      svg.removeAttribute("width");
+      svg.removeAttribute("height");
+      el.replaceChildren(svg);
+    }).catch((e) => (el.textContent = `drawing failed to render: ${errMsg(e)}`));
+  });
+  root.querySelectorAll<HTMLElement>(".excalidraw-host[data-excalidraw]:not([data-mounted])").forEach((host) => {
+    host.dataset.mounted = "1";
+    const path = host.dataset.excalidraw!;
+    void mountEditor(host, draftOf(path).text, path, dark, (next) => onDraftInput(path, next));
+  });
+}
+function refreshPreviews() {
+  document.querySelectorAll<HTMLElement>("[data-preview-path]").forEach((pv) => {
+    const path = pv.dataset.previewPath!;
+    pv.innerHTML = previewHtml(path, draftOf(path).text);
+    afterRender(pv);
+  });
+}
+/** One section at a time: the note split at its headings, with previous / next and a position. */
+function studySections(text: string): { heading: string; body: string }[] {
+  const body = frontmatter(text).body;
+  const parts: { heading: string; body: string }[] = [];
+  let curH = "";
+  let buf: string[] = [];
+  for (const line of body.split("\n")) {
+    const h = /^(#{1,3})\s+(.*)$/.exec(line);
+    if (h) { if (buf.join("").trim() || curH) parts.push({ heading: curH, body: buf.join("\n") }); curH = h[2]; buf = [line]; }
+    else buf.push(line);
+  }
+  if (buf.join("").trim() || curH) parts.push({ heading: curH, body: buf.join("\n") });
+  return parts.length ? parts : [{ heading: "", body }];
+}
+function studyHtml(p: Pane, path: string, text: string): string {
+  const secs = studySections(text);
+  const i = Math.min(S.studyIdx.get(p.id) ?? 0, secs.length - 1);
+  const sec = secs[i];
+  return `<div class="study-nav"><button type="button" class="btn btn-ghost" data-action="study-prev" data-pane="${p.id}" ${i === 0 ? "disabled" : ""}>${icon("links")}Previous</button><span class="small muted">${i + 1} of ${secs.length}${sec.heading ? ` · ${esc(sec.heading)}` : ""}</span><button type="button" class="btn btn-primary" data-action="study-next" data-pane="${p.id}" ${i >= secs.length - 1 ? "disabled" : ""}>Next${icon("move")}</button></div>
+    <div class="study-section">${renderMd(sec.body, path)}</div>
+    <div class="study-nav bottom">${i >= secs.length - 1 ? `<button type="button" class="btn" data-action="study-mode" data-pane="${p.id}">${icon("check")}Done, back to the whole note</button><button type="button" class="btn btn-ghost" data-action="study-cards" data-path="${esc(path)}">${icon("check")}Make flashcards from it</button>` : `<button type="button" class="btn btn-primary" data-action="study-next" data-pane="${p.id}">Next section${icon("move")}</button>`}</div>`;
+}
+const POMO = { work: 25 * 60, break: 5 * 60 };
+function pomodoroHtml(): string {
+  const p = S.pomodoro;
+  const left = p ? Math.max(0, Math.round((p.end - Date.now()) / 1000)) : POMO.work;
+  const mm = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
+  return `<button type="button" class="btn btn-ghost pomo ${p ? p.phase : ""}" data-action="pomodoro" title="${p ? (p.phase === "work" ? "Focus: click to stop" : "Break: click to stop") : "Start a 25-minute focus timer"}"><span class="pomo-time">${mm}</span>${p ? (p.phase === "work" ? "focus" : "break") : "focus"}</button>`;
+}
+setInterval(() => {
+  const p = S.pomodoro;
+  if (!p) return;
+  const left = Math.max(0, Math.round((p.end - Date.now()) / 1000));
+  document.querySelectorAll<HTMLElement>(".pomo-time").forEach((e) => (e.textContent = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`));
+  if (left <= 0) {
+    const next = p.phase === "work" ? "break" : "work";
+    S.pomodoro = { end: Date.now() + POMO[next] * 1000, phase: next };
+    toast(next === "break" ? "Focus block done. Five-minute break." : "Break over. Back to it.", "ok");
+    document.querySelectorAll<HTMLElement>(".pomo").forEach((e) => { e.classList.remove("work", "break"); e.classList.add(next); e.lastChild!.textContent = next === "work" ? "focus" : "break"; });
+  }
+}, 1000);
+function previewHtml(path: string, text: string): string {
+  if (isAttachment(path)) return renderMarkdown(`![[${path}]]`, { self: path, resolve: resolveLink, note: () => undefined, attachment });
+  if (path.endsWith(".md") && isLeanNote(text)) return `${formalCard(path, text)}${renderMd(text, path)}`;
+  return path.endsWith(".md") ? renderMd(text, path) : `<pre>${esc(text)}</pre>`;
+}
+/** The declarations of a Lean note: English beside Lean, hypotheses, flags, step tags, and the checker's verdict. */
+function formalCard(path: string, text: string): string {
+  const decls = parseLean(leanCode(text));
+  if (!decls.length) return `<div class="formal"><div class="pane-title">Formal</div><p class="small muted">No declarations found in the <code>lean</code> blocks yet.</p></div>`;
+  const check = (S.noteAttest.get(path) ?? []).filter((a) => a.attestation.kind === "check").sort((a, b) => Number(b.attestation.at - a.attestation.at))[0];
+  const verdict = check ? `<span class="claim ${check.fresh ? (check.attestation.verdict === "pass" ? "ok" : "bad") : "stale"}" title="${esc(check.attestation.detail)}">${check.fresh ? (check.attestation.verdict === "pass" ? `${icon("check")}checked by ${esc(check.attestation.agent ?? shortPrincipal(check.attestation.by.toText()))} ${ago(check.attestation.at)}` : `${icon("bolt")}check failed`) : `${icon("bolt")}changed since the last check`}</span>` : `<span class="claim none">not checked yet</span>`;
+  return `<div class="formal"><div class="pane-title">Formal <span class="count">${decls.length}</span> ${verdict}</div>
+    ${decls.map((d) => { const c = statementCard(d); return `<div class="thm" data-thm="${esc(d.name)}"><div class="thm-head"><code>${esc(d.kind)} ${esc(d.name)}</code>${d.steps.length ? `<span class="small muted">↔ ${d.steps.map((x) => `^${esc(x)}`).join(", ")}</span>` : `<span class="small faint">no step tag</span>`}${d.flags.map((f) => `<span class="pill low" title="Treat with care">${esc(f)}</span>`).join("")}</div><div class="thm-en md">${d.doc ? renderMd(d.doc, path) : `<span class="muted small">${esc(c.english)}</span>`}</div><pre class="thm-lean"><code>${esc(c.lean)}</code></pre>${d.hyps.filter((h) => !h.implicit).length ? `<div class="small muted">Hypotheses: ${d.hyps.filter((h) => !h.implicit).map((h) => `<code>${esc(h.name)} : ${esc(h.type)}</code>`).join(" ")}</div>` : ""}</div>`; }).join("")}
+    <p class="small faint">Embed a statement in prose with <code>![[${esc(title(path))}#thm:${esc(decls[0].name)}]]</code>; tag a lemma with <code>-- step: ^id</code> to bind it to a prose step ending in <code>^id</code>.</p></div>`;
+}
+
+// ---------- overlays: toasts, dialogs, context menu, quick switcher ----------
+
+function toast(msg: string, kind: "info" | "ok" | "error" = "info") {
+  let host = document.getElementById("toasts");
+  if (!host) {
+    host = Object.assign(document.createElement("div"), { id: "toasts" });
+    document.body.append(host);
+  }
+  const el = document.createElement("div");
+  el.className = `toast ${kind}`;
+  el.setAttribute("role", kind === "error" ? "alert" : "status");
+  el.textContent = msg;
+  host.append(el);
+  setTimeout(() => el.remove(), kind === "error" ? 6000 : 3200);
+}
+
+type Ask = { title: string; body?: string; label?: string; value?: string; placeholder?: string; ok?: string; danger?: boolean; choices?: { value: string; label: string }[]; multiline?: boolean };
+/** A small modal: text field, textarea or choice list, resolved with the value or null. Replaces prompt()/confirm(). */
+function ask(o: Ask): Promise<string | null> {
+  return new Promise((res) => {
+    const scrim = document.createElement("div");
+    scrim.className = "scrim";
+    const hasInput = o.choices || o.multiline || o.label !== undefined || o.value !== undefined || o.placeholder !== undefined;
+    const field = o.choices
+      ? `<select class="input" name="v">${o.choices.map((c) => `<option value="${esc(c.value)}" ${c.value === o.value ? "selected" : ""}>${esc(c.label)}</option>`).join("")}</select>`
+      : o.multiline
+        ? `<textarea class="input code" name="v" rows="12" placeholder="${esc(o.placeholder ?? "")}" spellcheck="false">${esc(o.value ?? "")}</textarea>`
+        : `<input class="input" name="v" value="${esc(o.value ?? "")}" placeholder="${esc(o.placeholder ?? "")}" autocomplete="off" spellcheck="false">`;
+    scrim.innerHTML = `<form class="modal ${o.multiline ? "wide" : ""}" role="dialog" aria-modal="true" aria-labelledby="dlg-t">
+      <h2 id="dlg-t">${esc(o.title)}</h2>
+      ${o.body ? `<p class="muted">${esc(o.body)}</p>` : ""}
+      ${hasInput ? `<label class="field"><span class="label">${esc(o.label ?? "")}</span>${field}</label>` : ""}
+      <div class="actions"><button type="button" class="btn" data-x="cancel">Cancel</button><button type="submit" class="btn ${o.danger ? "btn-danger" : "btn-primary"}">${esc(o.ok ?? "OK")}</button></div>
+    </form>`;
+    const done = (v: string | null) => {
+      scrim.remove();
+      document.removeEventListener("keydown", onKey);
+      res(v);
+    };
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && done(null);
+    scrim.addEventListener("click", (e) => e.target === scrim && done(null));
+    scrim.querySelector("[data-x=cancel]")!.addEventListener("click", () => done(null));
+    scrim.querySelector("form")!.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const f = scrim.querySelector<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("[name=v]");
+      done(f ? f.value : "");
+    });
+    document.addEventListener("keydown", onKey);
+    document.body.append(scrim);
+    const f = scrim.querySelector<HTMLInputElement>("input[name=v]");
+    if (f) {
+      f.focus();
+      const dot = f.value.lastIndexOf(".");
+      f.setSelectionRange(0, dot > 0 ? dot : f.value.length);
+    } else scrim.querySelector<HTMLElement>("textarea, select, button[type=submit]")?.focus();
+  });
+}
+const confirmDialog = (title: string, body: string, ok = "Delete") => ask({ title, body, ok, danger: true }).then((v) => v !== null);
+
+type MenuItem = { label: string; icon: string; action: () => void; danger?: boolean; checked?: boolean } | "-";
+function contextMenu(x: number, y: number, head: string, items: MenuItem[]) {
+  closeMenu();
+  const m = document.createElement("div");
+  m.className = "ctx-menu";
+  m.setAttribute("role", "menu");
+  m.innerHTML = `<div class="head">${esc(head)}</div>` + items.map((it, i) => (it === "-" ? "<hr>" : `<button type="button" role="menuitem" class="${it.danger ? "danger" : ""}" data-i="${i}">${icon(it.icon)}${esc(it.label)}${it.checked ? icon("check", "right") : ""}</button>`)).join("");
+  m.addEventListener("click", (e) => {
+    const b = (e.target as HTMLElement).closest<HTMLElement>("button[data-i]");
+    if (!b) return;
+    const it = items[Number(b.dataset.i)];
+    closeMenu();
+    if (it !== "-") it.action();
+  });
+  document.body.append(m);
+  const r = m.getBoundingClientRect();
+  m.style.left = `${Math.max(4, Math.min(x, innerWidth - r.width - 8))}px`;
+  m.style.top = `${Math.max(4, Math.min(y, innerHeight - r.height - 8))}px`;
+  m.querySelector<HTMLElement>("button")?.focus();
+}
+function closeMenu() {
+  document.querySelector(".ctx-menu")?.remove();
+}
+
+/** Quick switcher (⌘K / ⌘O / ⌘P): fuzzy-open a note, or create the typed name. */
+function openPalette(initial = "") {
+  if (!S.notes) return;
+  closePalette();
+  const scrim = document.createElement("div");
+  scrim.className = "scrim";
+  scrim.id = "palette";
+  let sel = 0;
+  let items: { path?: string; create?: string; command?: string }[] = [];
+  const render = (q: string) => {
+    if (q.startsWith(">")) {
+      const cq = q.slice(1).trim().toLowerCase();
+      const cmds = COMMANDS.filter((c) => !cq || c.label.toLowerCase().includes(cq));
+      items = cmds.map((c) => ({ command: c.label }));
+      sel = Math.min(sel, Math.max(0, items.length - 1));
+      scrim.querySelector(".list")!.innerHTML = cmds.length ? cmds.map((c, i) => `<div class="opt" role="option" aria-selected="${i === sel}" data-i="${i}">${icon("command")}<span>${esc(c.label)}</span>${c.kbd ? `<span class="path">${esc(c.kbd)}</span>` : ""}</div>`).join("") : `<div class="opt muted">No command matches.</div>`;
+      return;
+    }
+    const hits = q.trim() ? fuzzy(q, paths()) : [...S.recent.filter((p) => note(p)), ...paths().filter((p) => !S.recent.includes(p))].slice(0, 12);
+    items = hits.map((p) => ({ path: p }));
+    const exact = hits.some((p) => stem(p).toLowerCase() === q.trim().toLowerCase() || base(p).toLowerCase() === q.trim().toLowerCase());
+    if (q.trim() && !exact) items.push({ create: q.trim() });
+    sel = Math.min(sel, Math.max(0, items.length - 1));
+    scrim.querySelector(".list")!.innerHTML = items.length
+      ? items.map((it, i) => `<div class="opt" role="option" aria-selected="${i === sel}" data-i="${i}">${it.path ? `${icon("file")}<span>${esc(title(it.path))}</span><span class="path">${esc(dir(it.path))}</span>` : `${icon("plus")}<span>Create <b>${esc(it.create!)}</b></span><span class="path">new note</span>`}</div>`).join("")
+      : `<div class="opt muted">No notes yet. Type a name to create one.</div>`;
+    scrim.querySelector<HTMLElement>(`.opt[data-i="${sel}"]`)?.scrollIntoView({ block: "nearest" });
+  };
+  const go = async (newTab: boolean) => {
+    const it = items[sel];
+    closePalette();
+    if (!it) return;
+    if (it.path) await open(it.path, { newTab });
+    else if (it.create) await newNote(it.create);
+    else if (it.command) COMMANDS.find((c) => c.label === it.command)?.run();
+  };
+  scrim.innerHTML = `<div class="palette" role="dialog" aria-modal="true" aria-label="Open or create a note">
+      <label class="search">${icon("search")}<input name="pq" placeholder="Open or create a note… type > for commands" autocomplete="off" spellcheck="false" aria-label="Note name"></label>
+      <div class="list" role="listbox"></div>
+      <div class="foot"><span><span class="kbd">↑↓</span> move</span><span><span class="kbd">↵</span> open</span><span><span class="kbd">${MOD}↵</span> new tab</span><span><span class="kbd">esc</span> close</span></div>
+    </div>`;
+  const input = scrim.querySelector<HTMLInputElement>("input")!;
+  input.addEventListener("input", () => render(input.value));
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown") { sel = Math.min(items.length - 1, sel + 1); render(input.value); e.preventDefault(); }
+    else if (e.key === "ArrowUp") { sel = Math.max(0, sel - 1); render(input.value); e.preventDefault(); }
+    else if (e.key === "Enter") { e.preventDefault(); void go(e.metaKey || e.ctrlKey); }
+    else if (e.key === "Escape") closePalette();
+  });
+  scrim.querySelector(".list")!.addEventListener("click", (e) => {
+    const o = (e.target as HTMLElement).closest<HTMLElement>(".opt[data-i]");
+    if (o) { sel = Number(o.dataset.i); void go((e as MouseEvent).metaKey || (e as MouseEvent).ctrlKey); }
+  });
+  scrim.addEventListener("click", (e) => e.target === scrim && closePalette());
+  document.body.append(scrim);
+  input.value = initial;
+  render(initial);
+  input.focus();
+}
+const closePalette = () => document.getElementById("palette")?.remove();
+
+/** Every action, for the command palette (⌘⇧P or `>` in the switcher). */
+const COMMANDS: { label: string; kbd?: string; run: () => void }[] = [
+  { label: "New note", kbd: `${MOD}N`, run: () => void newNote() },
+  { label: "New drawing (Excalidraw)", run: () => void newDrawing() },
+  { label: "New kanban board", run: () => void newBoard() },
+  { label: "New Python notebook (Jupyter)", run: () => void newPyNotebook() },
+  { label: "New spreadsheet", run: () => void newSheetNote() },
+  { label: "Open a random note", run: () => { const ps = paths().filter((p) => p.endsWith(".md") && p !== cur()); if (ps.length) void open(ps[Math.floor(Math.random() * ps.length)]); } },
+  { label: "New dashboard", run: () => void newDashNote() },
+  { label: "New flashcard deck", run: () => void newQuiz("cards") },
+  { label: "New multiple-choice quiz", run: () => void newQuiz("choice") },
+  { label: "Highlight selection", kbd: `${MOD}⇧H`, run: () => toggleHighlight() },
+  { label: "New folder", run: () => void newFolder("") },
+  { label: "New note from template", run: () => void newFromTemplate() },
+  { label: "Open today's note", kbd: `${MOD}⇧D`, run: () => void openDaily() },
+  { label: "Toggle edit / split / reading", kbd: `${MOD}E`, run: () => cycleView(S.focused) },
+  { label: "Split right", kbd: `${MOD}\\`, run: () => splitRight(S.focused) },
+  { label: "Close tab", kbd: `${MOD}W`, run: () => { const c = cur(); if (c) closeTab(S.focused, c); } },
+  { label: "Toggle properties editor", run: () => { S.propsOpen = !S.propsOpen; store("nb-props", S.propsOpen ? "1" : "0"); render(); } },
+  { label: "Bookmark this note", run: () => { const c = cur(); if (c) void toggleBookmark(c); } },
+  { label: "Version history", run: () => { const c = cur(); if (c) void historyDialog(c); } },
+  { label: "Share this note", run: () => { const c = cur(); if (c) void shareDialog(c); } },
+  { label: "Search notes", kbd: `${MOD}K`, run: () => openPalette() },
+  { label: "Show graph", run: () => { S.tab = "graph"; render(); } },
+  { label: "Toggle file pane", kbd: `${MOD}⇧[`, run: () => toggleSide("side") },
+  { label: "Toggle right pane", kbd: `${MOD}⇧]`, run: () => toggleSide("aside") },
+  { label: "Study: due cards, glossary, goals", run: () => { S.tab = "study"; render(); } },
+  { label: "Work: tasks, projects, meetings, people", run: () => { S.tab = "work"; render(); } },
+  { label: "Quick capture", kbd: `${MOD}⇧N`, run: () => void quickCapture() },
+  { label: "New meeting", run: () => void newMeeting() },
+  { label: "Weekly review", run: () => void onAction("weekly-review", document.body, new MouseEvent("click")) },
+  { label: "Chat with your notes", run: () => { S.tab = "chat"; render(); document.querySelector<HTMLTextAreaElement>("[name=chatq]")?.focus(); } },
+  { label: "Show notes", run: () => { S.tab = "notes"; render(); } },
+  { label: "Manage notebook", run: () => { S.tab = "manage"; render(); } },
+  { label: "Download notebook (.zip)", run: () => void downloadNotebook() },
+  { label: "Import Obsidian vault", run: importDialog },
+  { label: "Toggle dark / light", run: () => { S.theme = { ...S.theme, mode: S.theme.mode === "dark" ? "light" : "dark" }; saveThemeState(S.theme); applyTheme(S.theme); render(); } },
+  { label: "Help and support", run: () => void helpDialog() },
+  { label: "All notebooks", run: () => { location.hash = "#/"; } },
+];
+
+function themeMenu(x: number, y: number) {
+  const t = S.theme;
+  const setT = (patch: Partial<ThemeState>) => {
+    S.theme = { ...S.theme, ...patch };
+    saveThemeState(S.theme);
+    applyTheme(S.theme);
+    render();
+  };
+  contextMenu(x, y, "Appearance", [
+    { label: t.mode === "dark" ? "Switch to light" : "Switch to dark", icon: t.mode === "dark" ? "sun" : "moon", action: () => setT({ mode: t.mode === "dark" ? "light" : "dark" }) },
+    "-",
+    ...Object.entries(THEMES).map(([id, th]) => ({ label: th.name, icon: "palette", checked: t.theme === id, action: () => setT({ theme: id }) })),
+    "-",
+    { label: t.custom ? "Edit custom CSS…" : "Paste an Obsidian theme…", icon: "edit", action: () => void ask({ title: "Custom theme CSS", body: "Paste the variable blocks of an Obsidian theme (.theme-dark / .theme-light with --background-primary, --text-normal, --interactive-accent, …). It is applied on top of the selected theme and kept in this browser.", label: "CSS", value: t.custom, multiline: true, placeholder: ".theme-dark {\n  --background-primary: #1e1e1e;\n  --text-normal: #dcddde;\n  --interactive-accent: #7f6df2;\n}", ok: "Apply" }).then((v) => v !== null && setT({ custom: v })) },
+    ...(t.custom ? [{ label: "Remove custom CSS", icon: "x", danger: true, action: () => setT({ custom: "" }) } as MenuItem] : []),
+  ]);
+}
+
+// ---------- render ----------
+
+const app = document.getElementById("app")!;
+const graphPos = new Map<string, { x: number; y: number }>();
+const miniPos = new Map<string, { x: number; y: number }>();
+let graph: ForceGraph | undefined;
+let mini: ForceGraph | undefined;
+
+/** The row under the top bar that holds the two pane toggles, so they sit in the same place on every screen. */
+function panebar(left: { on: boolean; what: string; action: string; off?: boolean }, right: { on: boolean; what: string; action: string; off?: boolean }, middle = ""): string {
+  const b = (x: typeof left, side: "left" | "right") => `<button type="button" class="btn btn-ghost icon-btn ${x.on || x.off ? "" : "accent"}" data-action="${x.action}" title="${x.off ? `No ${x.what} on this view` : `${x.on ? "Hide" : "Show"} ${x.what} (${MOD}⇧${side === "left" ? "[" : "]"})`}" aria-label="Toggle ${x.what}" aria-pressed="${x.on}" ${x.off ? "disabled" : ""}>${icon(side === "left" ? "panel-left" : "panel-right")}</button>`;
+  return S.mobile ? "" : `<div class="panebar">${b(left, "left")}<span class="panebar-mid">${middle}</span>${b(right, "right")}</div>`;
+}
+const brand = () => `<a class="brand" href="#/" data-action="nav" title="Lab: organize your thoughts, get feedback, build a knowledge base"><span class="mark"></span>Lab</a>`;
+/** Phones: every top bar collapses its secondary actions into one ⋯ menu. */
+const moreBtn = () => `<button type="button" class="btn btn-ghost icon-btn" data-action="more-menu" title="More" aria-label="More">${icon("more")}</button>`;
+function moreMenu(el: HTMLElement) {
+  const r = el.getBoundingClientRect();
+  const go = (hash: string) => () => { location.hash = hash; };
+  const items: MenuItem[] = [];
+  if (S.notebook && !S.market && !S.admin) items.push({ label: "Search or open a note", icon: "search", action: () => openPalette() });
+  if (S.notebook && (S.market || S.admin || S.community)) items.push({ label: `Back to “${S.notebook.name}”`, icon: "book", action: go(`#/notebook/${S.notebook.canister.toText()}`) });
+  if (S.notebook || S.market || S.admin || S.community) items.push({ label: "Your notebooks", icon: "list", action: go("#/") });
+  if (!S.community) items.push({ label: "Community chat", icon: "person", action: go("#/community") });
+  if (!S.market) items.push({ label: "Notebook market", icon: "tag", action: go("#/market") });
+  if (S.isAdmin && !S.admin) items.push({ label: "Admin · bug reports", icon: "bug", action: go("#/admin") });
+  items.push("-", { label: "Help and support", icon: "help", action: () => void onAction("help", el, new MouseEvent("click")) }, { label: "Appearance", icon: "palette", action: () => void onAction("theme-menu", el, new MouseEvent("click")) }, "-", { label: "Sign out", icon: "out", action: () => void onAction("sign-out", el, new MouseEvent("click")) });
+  contextMenu(Math.max(8, r.right - 220), r.bottom + 4, "", items);
+}
+/** Where a page sits in the app: back to the open notebook and to the list (desktop; phones use the ⋯ menu). */
+const pageNav = () => S.mobile ? "" : `${S.notebook ? `<a class="btn btn-ghost" href="#/notebook/${S.notebook.canister.toText()}" data-action="nav">${icon("links")}<span class="lbl">Back to “${esc(S.notebook.name)}”</span></a>` : ""}<a class="btn btn-ghost" href="#/" data-action="nav">${icon("list")}<span class="lbl">Your notebooks</span></a>`;
+const themeBtn = () => S.mobile ? moreBtn() : `${S.community ? "" : `<a class="btn btn-ghost" href="#/community" data-action="nav" title="Community chat">${icon("person")}<span class="lbl">Community</span></a>`}${S.board ? "" : `<a class="btn btn-ghost" href="#/board" data-action="nav" title="Posts and discussion">${icon("list")}<span class="lbl">Board</span></a>`}${S.market ? "" : `<a class="btn btn-ghost" href="#/market" data-action="nav" title="Notebooks for sale">${icon("tag")}<span class="lbl">Market</span></a>`}${S.isAdmin ? `<a class="btn btn-ghost" href="#/admin" data-action="nav" title="Reports and ideas">${icon("bug")}<span class="lbl">Admin</span></a>` : ""}<button type="button" class="btn btn-ghost icon-btn" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="btn btn-ghost icon-btn" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon(S.theme.mode === "dark" ? "moon" : "sun")}</button>`;
+const account = () => `<footer class="account">${icon("shield")}<span>Signed in as <code class="principal" title="${S.principal}">${shortPrincipal(S.principal)}</code></span><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="copy-principal">${S.copied === "principal" ? "Copied" : "Copy principal"}</button><button type="button" class="btn btn-ghost" data-action="sign-out">Sign out</button></span></footer>`;
+
+function landing(): string {
+  const msg = S.signin.busy ? `<span class="muted small">Signing in with ${devMode ? "a local development identity" : "Internet Identity"}…</span>` : S.signin.error ? `<span class="error small" role="alert">Sign-in failed: ${esc(S.signin.error)}.</span>` : `<span class="muted small">${devMode ? "Local network: a browser-held development key. Add ?ii for Internet Identity." : "Internet Identity. No email, no password, nothing to leak."}</span>`;
+  return `<div class="page">
+    <header class="topbar">${brand()}<span class="right"><span class="kicker">On the Internet Computer</span>${themeBtn()}</span></header>
+    <section class="hero">
+      <h1>Organize your thoughts. Get feedback. Build a knowledge base.</h1>
+      <p class="lede">A notebook is a folder of markdown files: <code>[[links]]</code>, backlinks, tags, a knowledge graph. Here every notebook is its own canister on the Internet Computer. You sign in with Internet Identity, you are its controller, and you keep it running with cycles. Nobody else can read it, not even the registry that created it.</p>
+      <div class="features">
+        <div class="feature">${icon("book")}<b>One canister per notebook</b><p>Spawned for you, controlled by you. Download it as a zip any time; it is yours on-chain.</p></div>
+        <div class="feature">${icon("graph")}<b>Links that think</b><p>[[Wiki links]], backlinks with context, tags, search and a force-directed graph of how your notes connect.</p></div>
+        <div class="feature">${icon("bolt")}<b>Keep it running</b><p>See the cycles left, send ICP from any wallet or top up in one click. Links are rewritten when you rename.</p></div>
+      </div>
+      <div class="cta"><button type="button" class="btn btn-primary btn-lg" data-action="sign-in" ${S.signin.busy ? "disabled" : ""}>${S.signin.busy ? "Signing in…" : S.signin.error ? "Retry sign in" : "Sign in"} ${icon("out")}</button>${msg}</div>
+    </section>
+  </div>`;
+}
+
+const EMOJI_HINTS: [RegExp, string][] = [
+  [/research|science|lab|experiment/i, "🔬"], [/cook|recipe|kitchen|food/i, "🍳"], [/code|dev|software|program|engineering/i, "💻"], [/math|algebra|calculus|statistic/i, "📐"],
+  [/history|ancient|war|empire/i, "🏛️"], [/music|song|guitar|piano/i, "🎵"], [/art|design|draw|paint/i, "🎨"], [/travel|trip|journey|map/i, "🧭"], [/health|medic|doctor|anatomy|biology/i, "🧬"],
+  [/finance|money|crypto|icp|invest|budget/i, "💰"], [/law|legal|contract/i, "⚖️"], [/language|spanish|french|german|japanese|english|vocab/i, "🗣️"], [/physics|space|astro|rocket/i, "🚀"],
+  [/book|read|library|literature|novel/i, "📚"], [/garden|plant|farm/i, "🌱"], [/game|chess|play/i, "🎲"], [/journal|diary|daily|log/i, "📓"], [/work|job|career|meeting/i, "💼"], [/idea|brain|think/i, "💡"],
+  [/school|class|course|exam|study|learn/i, "🎓"], [/photo|camera|film|movie/i, "🎬"], [/fitness|gym|run|sport/i, "🏃"], [/chem/i, "⚗️"], [/philosoph|ethic/i, "🧠"], [/geo|earth|climate|nature/i, "🌍"],
+];
+const EMOJI_POOL = ["📘", "📗", "📙", "📕", "📒", "🗂️", "🧪", "🔭", "🧩", "🪄", "🌿", "🍀", "🌊", "🔥", "⭐", "🎯", "🛠️", "🧭", "🏔️", "🪐", "🦉", "🐝", "🍎", "🎻", "🏗️", "🧵", "🪞", "🗝️"];
+/** A fitting emoji for a notebook with none set: by keyword, else by hash; never one another notebook already shows. */
+function emojiFor(name: string, taken: Set<string>): string {
+  const pick = EMOJI_HINTS.find(([re]) => re.test(name))?.[1];
+  if (pick && !taken.has(pick)) return pick;
+  let h = 0;
+  for (const ch of name) h = (h * 31 + ch.codePointAt(0)!) >>> 0;
+  for (let i = 0; i < EMOJI_POOL.length; i++) { const e = EMOJI_POOL[(h + i) % EMOJI_POOL.length]; if (!taken.has(e)) return e; }
+  return pick ?? "📘";
+}
+function notebookEmoji(v: NotebookRec): string {
+  if (v.emoji) return v.emoji;
+  const taken = new Set((S.notebooks ?? []).map((x) => x.emoji).filter((e): e is string => !!e));
+  for (const x of S.notebooks ?? []) {
+    if (x.canister.toText() === v.canister.toText()) break;
+    if (!x.emoji) taken.add(emojiFor(x.name, taken));
+  }
+  return emojiFor(v.name, taken);
+}
+function notebooksPage(): string {
+  const cards = S.notebooks === undefined
+    ? `<p class="muted">Loading your notebooks…</p>`
+    : `<div class="nb-grid">${S.notebooks.map((v) => {
+        const h = S.health.get(v.canister.toText());
+        return `<button type="button" class="nb-card ${h?.frozen ? "frozen" : ""}" data-action="open-notebook" data-id="${v.canister.toText()}">
+          <span class="nb-emoji" aria-hidden="true">${esc(notebookEmoji(v))}</span>
+          <span class="name">${esc(v.name)}${h?.frozen ? `<span class="pill low">${icon("bolt")}Frozen</span>` : ""}</span>
+          <span class="small ${v.description ? "" : "faint"} nb-desc">${esc(v.description ?? "No description yet; add one in Manage → Notebook.")}</span>
+          ${h?.frozen ? `<span class="small danger">Frozen: unreachable until topped up; deleted in about ${String(h.days_left)} days.</span>` : ""}
+        </button>`;
+      }).join("")}
+      <form class="nb-card new" data-form="create-notebook">
+        <span class="name">${icon("plus")}New notebook</span>
+        <span class="small muted">Spawns a canister with you as owner and controller.${S.price > 0n ? ` Costs ${icp(S.price)} ICP, paid ${useOisy ? "from your OISY wallet (a popup asks you to approve it)" : "from your local account"}.` : ""}</span>
+        <div class="row tight"><input class="input" name="newNotebook" value="${esc(S.newNotebook)}" placeholder="Name" required aria-label="Notebook name"><input class="input" name="newDesc" value="${esc(S.newDesc)}" placeholder="What it is for (optional)" aria-label="Description" style="flex:1 1 100%"><button type="submit" class="btn btn-primary" ${S.busy ? "disabled" : ""}>${S.busy === "create" ? "Spawning…" : "Create"}</button></div>
+        ${S.error ? `<span class="small error" role="alert">${esc(S.error)}.</span>` : ""}
+      </form></div>`;
+  return `<div class="page ${S.mobile ? "" : "has-activity"}">
+    <header class="topbar">${brand()}<span class="right"><span class="kicker">Your notebooks</span>${themeBtn()}</span></header>
+    <section class="card"><h2>Notebooks you own</h2><p class="muted small">Each one is its own canister that you control. Open one to write, or Manage to keep it running.</p>${cards}${account()}</section>
+  </div>${activityGrid()}`;
+}
+
+// --- workspace: shell
+
+function shell(body: string): string {
+  const i = S.info;
+  const low = lowCycles(i);
+  const seg = `<nav class="segmented" role="tablist" aria-label="View">
+      <button type="button" role="tab" class="tab" aria-selected="${S.tab === "notes"}" data-action="tab" data-tab="notes">${icon("notes")}<span class="lbl">Notes</span></button>
+      <button type="button" role="tab" class="tab" aria-selected="${S.tab === "chat"}" data-action="tab" data-tab="chat">${icon("chat")}<span class="lbl">Chat</span></button>
+      <button type="button" role="tab" class="tab" aria-selected="${S.tab === "graph"}" data-action="tab" data-tab="graph">${icon("graph")}<span class="lbl">Graph</span></button>
+      <button type="button" role="tab" class="tab" aria-selected="${S.tab === "study"}" data-action="tab" data-tab="study">${icon("check")}<span class="lbl">Study</span></button>
+      <button type="button" role="tab" class="tab" aria-selected="${S.tab === "work"}" data-action="tab" data-tab="work">${icon("briefcase")}<span class="lbl">Work</span></button>
+      <button type="button" role="tab" class="tab" aria-selected="${S.tab === "manage"}" data-action="tab" data-tab="manage">${icon("bolt")}<span class="lbl">Manage</span>${i ? `<span class="pill ${low ? "low" : ""}">${tc(i.cycles)}</span>` : ""}</button>
+    </nav>`;
+  const mobileNav = S.mobile && (S.tab === "notes" || S.tab === "chat")
+    ? `<nav class="mobilebar" aria-label="Panes">
+        <button type="button" class="mtab" aria-selected="${S.mobilePane === "files"}" data-action="mpane" data-pane="files">${icon("folder")}Files</button>
+        <button type="button" class="mtab" aria-selected="${S.mobilePane === "note"}" data-action="mpane" data-pane="note">${icon(S.tab === "chat" ? "chat" : "file")}${S.tab === "chat" ? "Chat" : "Note"}</button>
+        <button type="button" class="mtab" aria-selected="${S.mobilePane === "links"}" data-action="mpane" data-pane="links">${icon(S.tab === "chat" ? "folder" : "links")}${S.tab === "chat" ? "Sources" : "Links"}</button>
+        <button type="button" class="mtab" data-action="palette">${icon("search")}Find</button>
+      </nav>`
+    : "";
+  const alert = S.frozen
+    ? `<div class="alert-bar">${icon("bolt")}This notebook is frozen: it cannot answer until it is topped up. ${S.notes?.length ? "You are seeing the last copy saved on this device." : ""} <button type="button" class="btn btn-ghost" data-action="freeze-modal">Top up</button></div>`
+    : S.offline || S.fromCache
+    ? `<div class="alert-bar">${icon("bolt")}You are offline${S.pendingWrites ? `; ${S.pendingWrites} change${S.pendingWrites === 1 ? "" : "s"} waiting to sync` : ""}.</div>`
+    : low && S.tab !== "manage"
+      ? `<div class="alert-bar">${icon("bolt")}Low on cycles: ${tc(i!.cycles)} left. <button type="button" class="btn btn-ghost" data-action="tab" data-tab="manage">Top up</button></div>`
+      : S.pendingWrites ? `<div class="alert-bar">${icon("refresh")}${S.pendingWrites} offline change${S.pendingWrites === 1 ? "" : "s"} waiting. <button type="button" class="btn btn-ghost" data-action="sync">Sync now</button></div>` : "";
+  return shellBody(body, i, low, alert, mobileNav, seg);
+}
+/** The vertical icon bar: sections of the open notebook on top, the app-wide places at the bottom. From a page without a notebook, a section opens the last notebook. */
+function ribbonHtml(i?: Info, low = false): string {
+  if (S.mobile) return "";
+  const inNb = !!S.notebook && !S.community && !S.market && !S.admin;
+  const rb = (tab: Tab, label: string, ic: string, extra = "") => `<button type="button" class="rb ${inNb && S.tab === tab ? "on" : ""}" data-action="ribbon-tab" data-tab="${tab}" title="${label}" aria-label="${label}" aria-pressed="${inNb && S.tab === tab}">${icon(ic)}${extra}</button>`;
+  return `<nav class="ribbon" aria-label="Sections">
+      <div class="rb-group">${rb("notes", "Notes", "notes")}${rb("chat", "Chat with your notes", "chat")}${rb("graph", "Knowledge graph", "graph")}${rb("study", `Study${dueTotal() ? ` · ${dueTotal()} cards due` : ""}`, "check", dueTotal() ? `<i class="rb-count">${dueTotal()}</i>` : "")}${rb("work", `Work${overdueCount() ? ` · ${overdueCount()} overdue` : ""}`, "briefcase", overdueCount() ? `<i class="rb-count danger">${overdueCount()}</i>` : "")}</div>
+      <div class="rb-group bottom">${rb("manage", `Manage${i ? ` · ${tc(i.cycles)}` : ""}`, "bolt", low ? `<i class="rb-dot"></i>` : "")}<a class="rb ${S.community ? "on" : ""}" href="#/community" data-action="nav" title="Community${S.mentions ? ` · ${S.mentions} new mention${S.mentions === 1 ? "" : "s"}` : ""}" aria-label="Community">${icon("person")}${S.mentions ? `<i class="rb-badge">${S.mentions > 9 ? "9+" : S.mentions}</i>` : ""}</a><a class="rb ${S.board ? "on" : ""}" href="#/board" data-action="nav" title="Board: posts and discussion" aria-label="Board">${icon("list")}</a><a class="rb ${S.market ? "on" : ""}" href="#/market" data-action="nav" title="Notebook market" aria-label="Notebook market">${icon("tag")}</a>${S.isAdmin ? `<a class="rb ${S.admin ? "on" : ""}" href="#/admin" data-action="nav" title="Reports and ideas" aria-label="Reports and ideas">${icon("bug")}</a>` : ""}<button type="button" class="rb" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="rb" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button><button type="button" class="rb" data-action="sign-out" title="Sign out" aria-label="Sign out">${icon("out")}</button></div>
+    </nav>`;
+}
+function shellBody(body: string, i: Info | undefined, low: boolean, alert: string, mobileNav: string, seg: string): string {
+  const ribbon = ribbonHtml(i, low);
+  return `<div class="shell ${S.mobile ? "is-mobile" : ""}">${ribbon}<div class="shell-main">
+    ${alert}
+    <header class="wsbar">${brand()}${S.mobile ? seg : `<span class="crumb"><b>${esc(S.notebook!.name)}</b><span class="faint">/</span><span>${S.tab === "notes" ? (cur() ? esc(title(cur()!)) : "Notes") : S.tab === "chat" ? "Chat" : S.tab === "graph" ? "Graph" : S.tab === "study" ? "Study" : S.tab === "work" ? "Work" : "Manage"}</span></span>`}
+      <span class="right">${S.mobile ? "" : `<button type="button" class="btn btn-ghost" data-action="palette" title="Open or create a note (${MOD}K)">${icon("search")}<span class="kbd">${MOD}K</span></button>`}${S.mobile ? moreBtn() : ""}</span>
+    </header>
+    ${panebar({ on: S.sideOpen, what: "the file pane", action: "side-toggle", off: S.tab === "graph" || S.tab === "manage" || S.tab === "study" || S.tab === "work" }, { on: S.asideOpen, what: "the right pane", action: "aside-toggle", off: S.tab === "graph" || S.tab === "manage" || S.tab === "study" || S.tab === "work" })}
+    ${body}
+    ${mobileNav}
+  </div></div>`;
+}
+
+// --- workspace: files pane
+
+/** The share that covers `path`: its own, or one inherited from a folder above or the whole notebook. */
+function shareFor(path: string): { share: Share; direct: boolean } | undefined {
+  let best: { share: Share; direct: boolean } | undefined;
+  for (const sh of S.shares) {
+    if (sh.path === path) return { share: sh, direct: true };
+    if (sh.path === "" || path.startsWith(`${sh.path}/`)) if (!best || sh.path.length > best.share.path.length) best = { share: sh, direct: false };
+  }
+  return best;
+}
+function shareBadge(path: string): string {
+  const f = shareFor(path);
+  if (!f) return "";
+  const cnt = (n: number, w: string) => (n ? `${n} ${w}${n === 1 ? "" : "s"}` : "");
+  const who = f.share.public ? `public: anyone with the link can ${(f.share.public_role ?? "Comment").toLowerCase()}` : [cnt(f.share.principals.length, "viewer"), cnt((f.share.commenters ?? []).length, "commenter"), cnt((f.share.editors ?? []).length, "editor")].filter(Boolean).join(", ");
+  const via = f.direct ? "" : f.share.path === "" ? " (whole notebook)" : ` (via /${f.share.path})`;
+  return `<span class="share-ind ${f.share.public ? "pub" : ""} ${f.direct ? "" : "inherited"}" title="Shared, ${who}${via}">${icon(f.share.public ? "globe" : "share")}</span>`;
+}
+
+function folderHtml(f: Folder, depth: number): string {
+  const rows: string[] = [];
+  const more = (kind: string, p: string) => `<button type="button" class="row-more" data-action="row-menu" data-kind="${kind}" data-path="${esc(p)}" aria-label="Actions">${icon("more")}</button>`;
+  for (const sub of f.folders) {
+    const open = !S.collapsed.has(sub.path);
+    const count = countFiles(sub);
+    const agentRoot = sub.path === AGENT_ROOT;
+    rows.push(`<div class="tree-row folder ${open ? "open" : ""} ${agentRoot ? "agent-folder" : ""}" style="--d:${depth}" data-action="fold" data-path="${esc(sub.path)}" data-kind="folder" draggable="${!isAgentPath(sub.path)}" title="${agentRoot ? "Written by agents only; you can read, link and delete" : esc(sub.path)}">${depth ? `<span class="guide" style="--d:${depth - 1}"></span>` : ""}${icon("chevron", "chev")}${icon(agentRoot ? "lock" : open ? "folder-open" : "folder", "folder-ico")}<span class="name">${esc(sub.name)}</span>${shareBadge(sub.path)}<span class="cnt">${count || ""}</span>${more("folder", sub.path)}</div>`);
+    if (open) rows.push(folderHtml(sub, depth + 1));
+  }
+  const openTabs = new Set(S.panes.flatMap((p) => p.tabs));
+  for (const p of f.files) rows.push(`<div class="tree-row file ${p === cur() ? "active" : openTabs.has(p) ? "open-tab" : ""}" style="--d:${depth}" data-action="open" data-path="${esc(p)}" data-kind="file" title="${esc(p)}" draggable="true">${depth ? `<span class="guide" style="--d:${depth - 1}"></span>` : ""}<span class="chev-gap"></span>${icon(note(p)?.agent ? "bot" : isAttachment(p) ? "image" : isExcalidraw(p) ? "edit" : isNotebookPath(p) ? "command" : isSheetPath(p) ? "columns" : isDashPath(p) ? "graph" : "file")}<span class="name">${esc(title(p))}</span>${note(p)?.agent ? `<span class="agent-chip" title="written by ${esc(note(p)!.agent!)}">${esc(note(p)!.agent!)}</span>` : ""}${shareBadge(p)}${unreadComments(p) ? `<span class="unread" title="${unreadComments(p)} new comment${unreadComments(p) === 1 ? "" : "s"}">${icon("chat")}${unreadComments(p)}</span>` : ""}${draftOf(p).dirty ? `<span class="dot-dirty" title="Unsaved"></span>` : ""}${more("file", p)}</div>`);
+  return rows.join("");
+}
+const countFiles = (f: Folder): number => f.files.length + f.folders.reduce((n, s) => n + countFiles(s), 0);
+
+function side(): string {
+  if (!S.notes) return `<div class="empty-side">Loading the notebook…</div>`;
+  let body: string;
+  const bm = S.settings.bookmarks.filter((p) => note(p));
+  const bookmarks = bm.length && !S.query.trim() && !S.tag ? `<div class="pane-title">Bookmarks</div>${bm.map((p) => `<div class="bm-row" data-action="open" data-path="${esc(p)}">${icon("star")}<span class="name">${esc(title(p))}</span></div>`).join("")}<div class="pane-title">Files</div>` : "";
+  if (S.query.trim()) {
+    const hits = S.serverHits ?? search(S.notes, S.query);
+    body = hits.length
+      ? hits.map((h) => `<div class="tree-row file ${h.path === cur() ? "active" : ""}" data-action="open" data-path="${esc(h.path)}" data-kind="file">${icon("file")}<span class="name">${esc(stem(h.path))}</span></div>${h.snippet ? `<div class="snippet">${esc(h.snippet)}</div>` : ""}`).join("")
+      : `<div class="empty-side">No matches for “${esc(S.query)}”.</div>`;
+  } else if (S.tag) {
+    const ps = [...(S.idx.tags.get(S.tag) ?? [])];
+    body = `<div class="row tight" style="padding:4px 8px"><span class="tag-chip active">#${esc(S.tag)}<span class="cnt">${ps.length}</span></span><button type="button" class="btn btn-ghost icon-btn" data-action="tag" data-tag="" aria-label="Clear tag filter">${icon("x")}</button></div>${ps.map((p) => `<div class="tree-row file ${p === cur() ? "active" : ""}" data-action="open" data-path="${esc(p)}" data-kind="file">${icon("file")}<span class="name">${esc(stem(p))}</span></div>`).join("")}`;
+  } else {
+    body = S.notes.length || S.folders.length ? folderHtml(tree(paths(), S.folders), 0) : `<div class="empty-side">Empty notebook. Create a note, or right-click here for a folder.</div>`;
+  }
+  const tags = [...S.idx.tags.entries()].sort((a, b) => b[1].size - a[1].size || a[0].localeCompare(b[0]));
+  return `<div class="pane-head"><button type="button" class="btn btn-ghost icon-btn" data-action="today" title="Today's note (${MOD}⇧D)" aria-label="Today's note">${icon("calendar")}</button><button type="button" class="btn btn-ghost icon-btn" data-action="root-menu" title="Notebook actions" aria-label="Notebook actions">${icon("more")}</button><button type="button" class="btn btn-primary icon-btn" data-action="new" title="New note (${MOD}N)" aria-label="New note">${icon("plus")}</button></div>
+    ${bookmarks}<div class="tree" data-tree>${body}</div>
+    ${tags.length ? `<div class="pane-title">Tags</div><div class="tags">${tags.map(([t, ps]) => `<button type="button" class="tag-chip ${S.tag === t ? "active" : ""}" data-action="tag" data-tag="${esc(t)}">#${esc(t)}<span class="cnt">${ps.size}</span></button>`).join("")}</div>` : ""}
+    <div class="side-foot"><button type="button" class="nb-switch" data-action="nb-menu" title="Switch notebook"><span class="updown">${icon("updown")}</span><b>${esc(S.notebook!.name)}</b>${shareBadge("")}</button><span class="right-actions"><button type="button" class="btn btn-ghost icon-btn" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="btn btn-ghost icon-btn" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button></span></div>`;
+}
+
+// --- workspace: links pane
+
+const seenKey = () => `nb-seen-${S.notebook?.canister.toText() ?? ""}`;
+const seenComments = (): Record<string, string> => { try { return JSON.parse(store(seenKey()) ?? "{}") as Record<string, string>; } catch { return {}; } };
+/** Comments on `path` by other people that this device has not opened in the Comments tab yet. */
+function unreadComments(path: string): number {
+  const last = BigInt(seenComments()[path] ?? "0");
+  return S.comments.filter((x) => x.path === path && x.id > last && x.author.toText() !== S.principal).length;
+}
+function markCommentsSeen(path: string) {
+  const ids = S.comments.filter((x) => x.path === path).map((x) => x.id);
+  if (!ids.length) return;
+  const seen = seenComments();
+  seen[path] = ids.reduce((a, b) => (a > b ? a : b)).toString();
+  store(seenKey(), JSON.stringify(seen));
+}
+const threadsOf = (list: Comment[], path: string) => {
+  const mine = list.filter((x) => x.path === path).sort((a, b) => Number(a.at - b.at));
+  return mine.filter((x) => x.parent === undefined || x.parent === null).map((top) => ({ top, replies: mine.filter((x) => x.parent === top.id) }));
+};
+/** Threaded comments for a note: top-level comments with their replies, a reply box per thread, delete for your own. */
+function threadsHtml(list: Comment[], path: string, opts: { canComment: boolean; owner: boolean }): string {
+  const ths = threadsOf(list, path);
+  const one = (x: Comment, reply: boolean) => `<div class="comment ${reply ? "reply" : ""}"><div class="who">${x.author.toText() === S.principal ? "You" : shortPrincipal(x.author.toText())} · ${ago(x.at)}${opts.owner || x.author.toText() === S.principal ? `<button type="button" class="btn btn-ghost icon-btn" data-action="del-comment" data-id="${x.id}" aria-label="Delete">${icon("x")}</button>` : ""}</div>${esc(x.text)}</div>`;
+  const body = ths.length
+    ? ths.map((t) => `<div class="thread">${one(t.top, false)}${t.replies.map((r) => one(r, true)).join("")}${opts.canComment ? `<form class="comment-form reply-form" data-form="reply" data-parent="${t.top.id}"><input class="input" name="ctext" placeholder="Reply…" maxlength="2000" required><button type="submit" class="btn btn-ghost icon-btn" aria-label="Send reply">${icon("send")}</button></form>` : ""}</div>`).join("")
+    : `<div class="empty-side">No comments on this note yet.</div>`;
+  return `${opts.canComment ? `<form class="comment-form" data-form="note-comment" data-path="${esc(path)}"><input class="input" name="ctext" placeholder="Start a new thread…" maxlength="2000" required><button type="submit" class="btn btn-primary icon-btn" aria-label="Send">${icon("send")}</button></form>` : ""}${body}`;
+}
+function asideTabs(c: string): string {
+  const n = S.comments.filter((x) => x.path === c).length;
+  return `<div class="aside-tabs" role="tablist"><button type="button" role="tab" class="atab" aria-selected="${S.asideMode === "links"}" data-action="aside-mode" data-mode="links">${icon("links")}Links</button><button type="button" role="tab" class="atab" aria-selected="${S.asideMode === "comments"}" data-action="aside-mode" data-mode="comments">${icon("chat")}Comments${n ? `<span class="count">${n}</span>` : ""}</button></div>`;
+}
+function aside(): string {
+  const c = cur();
+  if (!c) return `<div class="empty-side">Backlinks, outgoing links and a local graph appear here when a note is open.</div>`;
+  if (S.asideMode === "comments") markCommentsSeen(c);
+  if (S.asideMode === "comments") return `${asideTabs(c)}<div class="threads">${threadsHtml(S.comments, c, { canComment: !S.frozen && !S.fromCache, owner: true })}</div>`;
+  const all = paths();
+  const back = [...(S.idx.backlinks.get(c) ?? [])].filter((p) => p !== c);
+  const out = [...(S.idx.links.get(c) ?? [])].filter((p) => p !== c);
+  const un = [...(S.idx.unresolved.get(c) ?? [])];
+  const n = note(c);
+  const ctx = (p: string) => {
+    const line = backlinkContext(note(p)!, c, all);
+    return line ? `<div class="ctx">${esc(line).replace(/\[\[([^\]]+)\]\]/g, (m) => `<mark>${m}</mark>`)}</div>` : "";
+  };
+  const row = (p: string, withCtx: boolean) => `<div class="bl" data-action="open" data-path="${esc(p)}"><div class="t">${icon("file")}${esc(stem(p))}</div>${withCtx ? ctx(p) : ""}</div>`;
+  const hs = headings(draftOf(c).text);
+  const outline = hs.length ? `<div class="pane-title">Outline <span class="count">${hs.length}</span></div><div class="outline">${hs.map((h) => `<div class="ol" style="--d:${h.level - 1}" data-action="heading" data-heading="${esc(h.text)}" data-path="${esc(c)}">${esc(h.text)}</div>`).join("")}</div>` : "";
+  return `${asideTabs(c)}${outline}<div class="pane-title">Local graph</div>
+    <div class="minigraph"><canvas id="mini" aria-label="Notes linked to this one"></canvas><span class="depth"><button type="button" class="btn btn-ghost icon-btn" data-action="depth" title="Depth ${S.localDepth}: click to change" aria-label="Change graph depth"><span class="kbd">${S.localDepth}</span></button></span></div>
+    <div class="pane-title">Backlinks <span class="count">${back.length}</span></div>${back.length ? back.map((p) => row(p, true)).join("") : `<div class="empty-side">No other note links here yet.</div>`}
+    <div class="pane-title">Outgoing links <span class="count">${out.length}</span></div>${out.length ? out.map((p) => row(p, false)).join("") : `<div class="empty-side">No links yet. Type <code>[[</code> to link a note.</div>`}
+    ${un.length ? `<div class="pane-title">Unresolved <span class="count">${un.length}</span></div>${un.map((t) => `<div class="bl" data-action="wiki" data-target="${esc(t)}"><div class="t muted">${icon("plus")}${esc(t)}</div><div class="ctx">Click to create this note.</div></div>`).join("")}` : ""}
+    ${alignmentHtml(c)}
+    ${mentionsHtml(c)}
+    ${shareFor(c) && !shareFor(c)!.share.public ? `<div class="pane-title">Group progress</div><div class="empty-side" data-group-progress="${esc(c)}">${(S.groupProgress.get(c) ?? []).length ? S.groupProgress.get(c)!.map(([who, st]) => `${shortPrincipal(who.toText())}: ${["—", "read", "reviewing", "known"][st]}`).join("<br>") : "No marks yet."}</div>` : ""}
+    ${n ? `<div class="pane-title">About</div><div class="empty-side">Created ${when(n.created)}<br>Modified ${ago(n.modified)}<br>${n.content.length.toLocaleString()} characters</div>` : ""}`;
+}
+
+// --- workspace: panes with tabs
+
+function tabbar(p: Pane): string {
+  const tabs = p.tabs.map((t) => {
+    const d = draftOf(t);
+    return `<div class="tabitem ${t === p.active ? "active" : ""}" role="tab" aria-selected="${t === p.active}" draggable="true" data-action="tab-open" data-pane="${p.id}" data-tab="${esc(t)}" title="${esc(t)}">${icon("file")}<span class="tname">${esc(title(t))}</span>${d.dirty ? `<span class="dot-dirty"></span>` : ""}<button type="button" class="tclose" data-action="tab-close" data-pane="${p.id}" data-tab="${esc(t)}" aria-label="Close ${esc(title(t))}">${icon("x")}</button></div>`;
+  }).join("");
+  return `<div class="tabbar" role="tablist" data-pane="${p.id}" data-tabbar>${tabs}<button type="button" class="btn btn-ghost icon-btn tnew" data-action="tab-new" data-pane="${p.id}" title="New note in a new tab" aria-label="New tab">${icon("plus")}</button><span class="grow"></span><button type="button" class="btn btn-ghost icon-btn" data-action="pane-menu" data-pane="${p.id}" title="Pane options" aria-label="Pane options">${icon("down")}</button></div>`;
+}
+
+function editorBody(p: Pane): string {
+  const c = p.active;
+  if (!c) {
+    return `<div class="empty">${icon("file", "big")}<div><h2>Nothing open</h2><p class="muted">Pick a note on the left, or make a new one.</p></div>
+      <button type="button" class="btn btn-primary" data-action="new">${icon("plus")}New note</button>
+      <div class="hints"><span class="kbd">${MOD}N</span><span>New note</span><span class="kbd">${MOD}K</span><span>Open or create by name</span><span class="kbd">${MOD}E</span><span>Edit / split / reading</span><span class="kbd">${MOD}\\</span><span>Split to the right</span><span class="kbd">${MOD} click</span><span>Open in a new tab</span><span class="kbd">right-click</span><span>Folders, drawings, rename, move, delete</span></div></div>`;
+  }
+  const d = draftOf(c);
+  const viewIcon = p.view === "edit" ? "edit" : p.view === "split" ? "columns" : "eye";
+  const agent = note(c)?.agent;
+  const locked = isAgentPath(c);
+  const share = S.shares.find((x) => x.path === c);
+  const badges = `${locked ? `<span class="pill agent" title="Agents write here; people read, link and delete">${icon("bot")}${esc(agent ?? "agent")}</span>` : ""}${share ? `<button type="button" class="pill ${share.public ? "ok" : ""}" data-action="share" data-path="${esc(c)}" title="Sharing settings">${icon(share.public ? "globe" : "share")}${share.public ? "Public" : `${share.principals.length} reader${share.principals.length === 1 ? "" : "s"}`}</button>` : ""}`;
+  if (isExcalidraw(c, d.text)) {
+    return `<div class="editor-bar"><input class="title" name="title" data-pane="${p.id}" value="${esc(stem(c))}" aria-label="Drawing name" spellcheck="false" autocomplete="off"><span class="right-actions"><span class="small muted">Excalidraw</span><button type="button" class="btn btn-ghost icon-btn" data-action="menu-current" data-pane="${p.id}" title="More" aria-label="Drawing actions">${icon("more")}</button></span></div>
+      <div class="excalidraw-host" data-excalidraw="${esc(c)}"></div>
+      <div class="statusbar"><span data-status-path="${esc(c)}"><i class="dot ${d.saving ? "saving" : d.dirty ? "dirty" : ""}"></i>${d.saving ? "Saving…" : d.dirty ? "Unsaved" : "Saved"}</span><span class="muted">Embed it in a note with <code>![[${esc(stem(c))}]]</code></span></div>`;
+  }
+  if (c.endsWith(".canvas")) {
+    const asJson = p.view === "edit";
+    return `<div class="editor-bar"><input class="title" name="title" data-pane="${p.id}" value="${esc(stem(c))}" aria-label="Canvas name" spellcheck="false" autocomplete="off"><span class="right-actions">${badges}<button type="button" class="btn btn-ghost" data-action="view" data-pane="${p.id}" title="Board or JSON">${icon(asJson ? "edit" : "board")}<span class="small lbl">${asJson ? "JSON" : "Board"}</span></button><button type="button" class="btn btn-ghost icon-btn" data-action="menu-current" data-pane="${p.id}" title="More" aria-label="Canvas actions">${icon("more")}</button></span></div>
+      <div class="path-hint">${esc(c)}</div>
+      ${asJson ? `<div class="editor-panes view-edit"><div class="cm-host" data-cm="${esc(c)}" data-pane="${p.id}"></div></div>` : `<div class="cv-wrap" data-canvas="${esc(c)}">${canvasSvg(d.text)}</div>`}
+      <div class="statusbar"><span data-status-path="${esc(c)}"><i class="dot ${d.saving ? "saving" : d.dirty ? "dirty" : ""}"></i>${d.saving ? "Saving…" : d.dirty ? "Unsaved" : "Saved"}</span><span class="muted">JSON Canvas · drag to pan, wheel to zoom</span></div>`;
+  }
+  if (c.endsWith(".md") && !locked && isKanban(d.text)) {
+    const asSrc = p.view === "edit";
+    return `<div class="editor-bar"><input class="title" name="title" data-pane="${p.id}" value="${esc(title(c))}" aria-label="Board name" spellcheck="false" autocomplete="off"><span class="right-actions">${badges}<button type="button" class="btn btn-ghost" data-action="view" data-pane="${p.id}" title="Board or markdown source (${MOD}E)">${icon(asSrc ? "edit" : "board")}<span class="small lbl">${asSrc ? "Source" : "Board"}</span></button><button type="button" class="btn btn-ghost icon-btn" data-action="menu-current" data-pane="${p.id}" title="More" aria-label="Note actions">${icon("more")}</button></span></div>
+      <div class="path-hint">${esc(c)}</div>
+      ${asSrc ? `<div class="editor-panes view-edit"><div class="cm-host" data-cm="${esc(c)}" data-pane="${p.id}"></div></div>` : `<div class="kb" data-kanban="${esc(c)}">${boardHtml(c, d.text)}</div>`}
+      <div class="statusbar"><span data-status-path="${esc(c)}"><i class="dot ${d.saving ? "saving" : d.dirty ? "dirty" : ""}"></i>${d.saving ? "Saving…" : d.dirty ? "Unsaved" : "Saved"}</span><span class="muted kb-hint">Kanban · drag cards between lanes · double-click a card to edit · Obsidian Kanban format</span></div>`;
+  }
+  if (c.endsWith(".md") && !locked && quizKind(d.text)) {
+    const asSrc = p.view === "edit";
+    const kind = quizKind(d.text)!;
+    return `<div class="editor-bar"><input class="title" name="title" data-pane="${p.id}" value="${esc(title(c))}" aria-label="Quiz name" spellcheck="false" autocomplete="off"><span class="right-actions">${badges}<button type="button" class="btn btn-ghost" data-action="view" data-pane="${p.id}" title="Quiz or markdown source (${MOD}E)">${icon(asSrc ? "edit" : "check")}<span class="small lbl">${asSrc ? "Source" : kind === "cards" ? "Cards" : "Quiz"}</span></button><button type="button" class="btn btn-ghost icon-btn" data-action="menu-current" data-pane="${p.id}" title="More" aria-label="Note actions">${icon("more")}</button></span></div>
+      <div class="path-hint">${esc(c)}</div>
+      ${asSrc ? `<div class="editor-panes view-edit"><div class="cm-host" data-cm="${esc(c)}" data-pane="${p.id}"></div></div>` : `<div class="qz" data-quiz="${esc(c)}">${quizHtml(c, d.text)}</div>`}
+      <div class="statusbar"><span data-status-path="${esc(c)}"><i class="dot ${d.saving ? "saving" : d.dirty ? "dirty" : ""}"></i>${d.saving ? "Saving…" : d.dirty ? "Unsaved" : "Saved"}</span><span class="muted kb-hint">${kind === "cards" ? "Flashcards · tap a card to flip · Spaced Repetition plugin format" : "Multiple choice · pick, then Check"}</span></div>`;
+  }
+  if (isDashPath(c)) {
+    const asSrc = p.view === "edit";
+    return `<div class="editor-bar"><input class="title" name="title" data-pane="${p.id}" value="${esc(stem(c))}" aria-label="Dashboard name" spellcheck="false" autocomplete="off"><span class="right-actions">${badges}${S.mobile || asSrc ? "" : `<button type="button" class="btn btn-ghost" data-action="dash-add" data-path="${esc(c)}" title="Add a chart, a cell value or a Python output">${icon("plus")}<span class="small lbl">Tile</span></button>`}<button type="button" class="btn btn-ghost" data-action="view" data-pane="${p.id}" title="Tiles or JSON source (${MOD}E)">${icon(asSrc ? "edit" : "graph")}<span class="small lbl">${asSrc ? "JSON" : "Tiles"}</span></button><button type="button" class="btn btn-ghost icon-btn" data-action="menu-current" data-pane="${p.id}" title="More" aria-label="Note actions">${icon("more")}</button></span></div>
+      <div class="path-hint">${esc(c)}</div>
+      ${asSrc ? `<div class="editor-panes view-edit"><div class="cm-host" data-cm="${esc(c)}" data-pane="${p.id}"></div></div>` : `<div class="dsh" data-dash="${esc(c)}">${dashHtml(c, d.text)}</div>`}
+      <div class="statusbar"><span data-status-path="${esc(c)}"><i class="dot ${d.saving ? "saving" : d.dirty ? "dirty" : ""}"></i>${d.saving ? "Saving…" : d.dirty ? "Unsaved" : "Saved"}</span><span class="muted kb-hint">Tiles read their sources live; click a source name to open it</span></div>`;
+  }
+  if (isSheetPath(c)) {
+    const asSrc = p.view === "edit";
+    return `<div class="editor-bar"><input class="title" name="title" data-pane="${p.id}" value="${esc(stem(c))}" aria-label="Sheet name" spellcheck="false" autocomplete="off"><span class="right-actions">${badges}${S.mobile || asSrc ? "" : `<label class="btn btn-ghost" title="Import a CSV file as a new sheet">${icon("upload")}<span class="small lbl">CSV</span><input type="file" name="csv" accept=".csv,text/csv" data-path="${esc(c)}" hidden></label><button type="button" class="btn btn-ghost" data-action="sheet-export" data-path="${esc(c)}" title="Download the current sheet as CSV">${icon("download")}</button><button type="button" class="btn btn-ghost" data-action="sheet-chart" data-path="${esc(c)}" title="Add a chart from the current sheet">${icon("graph")}<span class="small lbl">Chart</span></button>`}<button type="button" class="btn btn-ghost" data-action="view" data-pane="${p.id}" title="Grid or JSON source (${MOD}E)">${icon(asSrc ? "edit" : "columns")}<span class="small lbl">${asSrc ? "JSON" : "Grid"}</span></button><button type="button" class="btn btn-ghost icon-btn" data-action="menu-current" data-pane="${p.id}" title="More" aria-label="Note actions">${icon("more")}</button></span></div>
+      <div class="path-hint">${esc(c)}</div>
+      ${asSrc ? `<div class="editor-panes view-edit"><div class="cm-host" data-cm="${esc(c)}" data-pane="${p.id}"></div></div>` : `<div class="shx" data-sheet="${esc(c)}">${sheetHtml(c, d.text)}</div>`}
+      <div class="statusbar"><span data-status-path="${esc(c)}"><i class="dot ${d.saving ? "saving" : d.dirty ? "dirty" : ""}"></i>${d.saving ? "Saving…" : d.dirty ? "Unsaved" : "Saved"}</span><span class="muted kb-hint">Formulas start with = · ↵ moves down, ⇥ right · in Python: <code>sheet("${esc(stem(c))}")</code></span></div>`;
+  }
+  if (isNotebookPath(c)) {
+    const asSrc = p.view === "edit";
+    return `<div class="editor-bar"><input class="title" name="title" data-pane="${p.id}" value="${esc(stem(c))}" aria-label="Notebook name" spellcheck="false" autocomplete="off"><span class="right-actions">${badges}${S.mobile ? "" : `<button type="button" class="btn btn-ghost" data-action="nb-run-all" data-path="${esc(c)}" title="Run every code cell in order">${icon("bolt")}<span class="small lbl">Run all</span></button><button type="button" class="btn btn-ghost icon-btn" data-action="nb-restart" data-path="${esc(c)}" title="Restart Python (clears variables)" aria-label="Restart Python">${icon("refresh")}</button>`}<button type="button" class="btn btn-ghost" data-action="view" data-pane="${p.id}" title="Cells or JSON source (${MOD}E)">${icon(asSrc ? "edit" : "list")}<span class="small lbl">${asSrc ? "JSON" : "Cells"}</span></button><button type="button" class="btn btn-ghost icon-btn" data-action="menu-current" data-pane="${p.id}" title="More" aria-label="Note actions">${icon("more")}</button></span></div>
+      <div class="path-hint">${esc(c)}</div>
+      ${asSrc ? `<div class="editor-panes view-edit"><div class="cm-host" data-cm="${esc(c)}" data-pane="${p.id}"></div></div>` : `<div class="nbk" data-ipynb="${esc(c)}">${notebookHtml(c, d.text)}</div>`}
+      <div class="statusbar"><span data-status-path="${esc(c)}"><i class="dot ${d.saving ? "saving" : d.dirty ? "dirty" : ""}"></i>${d.saving ? "Saving…" : d.dirty ? "Unsaved" : "Saved"}</span><span class="muted kb-hint" data-py-status>${pythonLoaded() ? "Python ready" : "Jupyter notebook · Python loads on the first run (about 10 MB, cached)"}${S.mobile ? " · read-only on phones" : ""}</span></div>`;
+  }
+  if (isAttachment(c)) {
+    return `<div class="editor-bar"><input class="title" name="title" data-pane="${p.id}" value="${esc(stem(c))}" aria-label="File name" spellcheck="false" autocomplete="off"><span class="right-actions"><button type="button" class="btn btn-ghost icon-btn" data-action="menu-current" data-pane="${p.id}" title="More" aria-label="File actions">${icon("more")}</button></span></div>
+      <div class="path-hint">${esc(c)}</div>
+      <div class="editor-panes view-preview"><div class="preview md attach-view" data-preview-path="${esc(c)}">${previewHtml(c, "")}</div></div>`;
+  }
+  return `<div class="editor-bar">
+      <input class="title" name="title" data-pane="${p.id}" value="${esc(title(c))}" aria-label="Note name" spellcheck="false" autocomplete="off" ${locked ? "readonly" : ""}>
+      <span class="right-actions">${badges}
+        ${S.mobile && !locked ? `<label class="btn btn-ghost icon-btn" title="Take or add a photo">${icon("camera")}<input type="file" name="photo" accept="image/*" capture="environment" hidden data-path="${esc(c)}"></label>` : ""}
+        <button type="button" class="btn btn-ghost icon-btn ${S.settings.bookmarks.includes(c) ? "accent" : ""}" data-action="bookmark" data-path="${esc(c)}" title="${S.settings.bookmarks.includes(c) ? "Remove bookmark" : "Bookmark"}" aria-label="Bookmark">${icon("star")}</button>
+        ${c.endsWith(".md") && isMeeting(d.text) ? `<button type="button" class="btn btn-ghost" data-action="follow-up" data-path="${esc(c)}" title="Decisions and actions for mail or chat">${icon("mail")}<span class="small lbl">Follow-up</span></button>` : ""}
+        ${c.endsWith(".md") && isSlides(d.text) ? `<button type="button" class="btn btn-ghost" data-action="present" data-path="${esc(c)}" title="Present full screen (→ next, ← back, Esc leaves)">${icon("columns")}<span class="small lbl">Present</span></button>` : ""}
+        ${c.endsWith(".md") ? `<button type="button" class="btn btn-ghost icon-btn ${p.study ? "accent" : ""}" data-action="study-mode" data-pane="${p.id}" title="Study mode: one section at a time" aria-label="Study mode" aria-pressed="${!!p.study}">${icon("book")}</button>` : ""}
+        <button type="button" class="btn btn-ghost" data-action="view" data-pane="${p.id}" title="Edit, split or reading (${MOD}E)">${icon(viewIcon)}<span class="small lbl">${p.view === "edit" ? "Editing" : p.view === "split" ? "Split" : "Reading"}</span></button>
+        <button type="button" class="btn btn-ghost icon-btn ${(S.asideMode === "comments" && S.asideOpen) || unreadComments(c) ? "accent" : ""}" data-action="comments" title="Comments${unreadComments(c) ? ` · ${unreadComments(c)} new` : ""}" aria-label="Comments">${icon("chat")}${S.comments.filter((x) => x.path === c).length ? `<span class="badge">${S.comments.filter((x) => x.path === c).length}</span>` : ""}</button>
+        <button type="button" class="btn btn-ghost icon-btn" data-action="menu-current" data-pane="${p.id}" title="More" aria-label="Note actions">${icon("more")}</button>
+      </span>
+    </div>
+    <div class="path-hint">${esc(c)}</div>
+    ${c.endsWith(".md") && !locked && p.view !== "preview" ? propsEditor(c, d.text) : ""}
+    <div class="editor-panes view-${p.view}">
+      <div class="cm-host" data-cm="${esc(c)}" data-pane="${p.id}" ${locked ? 'data-readonly="1"' : ""}></div>
+      <div class="preview md ${p.study ? "study" : ""}" data-preview-path="${esc(c)}">${p.study ? studyHtml(p, c, d.text) : previewHtml(c, d.text)}</div>
+    </div>
+    <div class="statusbar"><span data-status-path="${esc(c)}"><i class="dot ${d.saving ? "saving" : d.dirty ? "dirty" : ""}"></i>${d.saving ? "Saving…" : d.dirty ? "Unsaved" : "Saved"}</span><span data-counts-path="${esc(c)}">${words(d.text)} words · ${d.text.length} characters</span>${pomodoroHtml()}</div>`;
+}
+
+/** Front matter as a small form above the editor. */
+function propsEditor(path: string, text: string): string {
+  const { data } = frontmatter(text);
+  const keys = Object.keys(data);
+  if (!S.propsOpen) return `<div class="props-toggle"><button type="button" class="btn btn-ghost small" data-action="props-toggle">${icon("list")}Properties${keys.length ? ` <span class="muted">${keys.length}</span>` : ""}</button></div>`;
+  return `<div class="props-editor" data-props="${esc(path)}">
+    <div class="row tight"><button type="button" class="btn btn-ghost small" data-action="props-toggle">${icon("list")}Properties</button><span class="small muted">front matter · tags, aliases, anything</span></div>
+    ${keys.map((k) => `<div class="prop"><input class="input pkey" name="pkey" data-key="${esc(k)}" value="${esc(k)}" aria-label="Property name"><input class="input" name="pval" data-key="${esc(k)}" value="${esc(data[k])}" aria-label="Property value"><button type="button" class="btn btn-ghost icon-btn" data-action="prop-del" data-key="${esc(k)}" aria-label="Remove">${icon("x")}</button></div>`).join("")}
+    <button type="button" class="btn btn-ghost small addp" data-action="prop-add">${icon("plus")}Add property</button>
+  </div>`;
+}
+function propsFromForm(form: HTMLElement): Record<string, string> {
+  const out: Record<string, string> = {};
+  form.querySelectorAll<HTMLElement>(".prop").forEach((row) => {
+    const k = row.querySelector<HTMLInputElement>("[name=pkey]")!.value.trim();
+    const v = row.querySelector<HTMLInputElement>("[name=pval]")!.value;
+    if (k) out[k] = v;
+  });
+  return out;
+}
+
+const editors = new Map<HTMLElement, Editor>();
+function destroyEditors() {
+  for (const [host, ed] of editors) {
+    ed.destroy();
+    editors.delete(host);
+    void host;
+  }
+}
+function mountEditors(root: ParentNode = document) {
+  root.querySelectorAll<HTMLElement>(".cm-host[data-cm]:not([data-mounted])").forEach((host) => {
+    host.dataset.mounted = "1";
+    const path = host.dataset.cm!;
+    const ed = createEditor(host, {
+      doc: draftOf(path).text,
+      readOnly: host.dataset.readonly === "1",
+      placeholder: path.endsWith(".md") ? "Start writing. [[Link]] other notes, #tag them, - for lists, --- for front matter." : "",
+      onChange: (text) => onDraftInput(path, text, host),
+      onLink: (t) => void follow(t),
+      notes: () => paths().filter((p) => p.endsWith(".md") && !isAttachment(p)).map((p) => stem(p)),
+      tags: () => [...S.idx.tags.keys()],
+    });
+    editors.set(host, ed);
+    host.addEventListener("paste", (ev) => {
+      const files = [...(ev.clipboardData?.files ?? [])].filter((f) => f.type.startsWith("image/"));
+      if (files.length) {
+        ev.preventDefault();
+        void addImages(files, path, ed);
+      }
+    });
+    host.addEventListener("drop", (ev) => {
+      const files = [...(ev.dataTransfer?.files ?? [])].filter((f) => f.type.startsWith("image/"));
+      if (files.length) {
+        ev.preventDefault();
+        void addImages(files, path, ed);
+      }
+    });
+  });
+  root.querySelectorAll<HTMLElement>(".cv-wrap[data-canvas]:not([data-mounted])").forEach((host) => {
+    host.dataset.mounted = "1";
+    mountCanvasPanZoom(host);
+  });
+}
+/** Images pasted, dropped or photographed become attachments and an `![[embed]]` at the cursor. */
+async function addImages(files: File[], notePath: string, ed?: Editor) {
+  for (const f of files) {
+    if (f.size > MAX_ATTACHMENT) {
+      toast(`${f.name || "image"} is over ${Math.round(MAX_ATTACHMENT / 1000)} KB.`, "error");
+      continue;
+    }
+    const ext = (f.type.split("/")[1] ?? "png").replace("jpeg", "jpg").replace("svg+xml", "svg");
+    const name = `Pasted image ${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.${ext}`;
+    const path = `attachments/${name}`;
+    const data = `data:${f.type};base64,${b64(new Uint8Array(await f.arrayBuffer()))}`;
+    try {
+      const m = unwrap(await nb().write(path, data));
+      S.notes!.push({ path, content: "", created: m.created, modified: m.modified });
+      S.notes!.sort((x, y) => x.path.localeCompare(y.path));
+      if (!S.folders.includes("attachments")) S.folders = [...S.folders, "attachments"].sort();
+      attachments.set(path, data);
+      const embed = `![[${name}]]`;
+      if (ed) {
+        const v = ed.view;
+        v.dispatch({ changes: { from: v.state.selection.main.head, insert: `${embed}\n` } });
+      } else onDraftInput(notePath, `${draftOf(notePath).text}\n${embed}\n`);
+      reindex();
+      renderSide();
+      toast(`Added ${name}.`, "ok");
+    } catch (e) {
+      toast(errMsg(e), "error");
+    }
+  }
+}
+
+function panesHtml(): string {
+  const ps = S.mobile ? [pane()] : S.panes;
+  return `<section class="main panes-grid" style="--n:${ps.length}">${ps.map((p) => `<section class="pane ${p.id === S.focused && ps.length > 1 ? "focused" : ""}" data-pane="${p.id}">${tabbar(p)}<div class="pane-body" data-pane="${p.id}">${editorBody(p)}<div class="dropzone" data-dropzone="${p.id}">${icon("split")}Open here, split right</div></div></section>`).join("")}</section>`;
+}
+
+// --- quizzes: flashcards and multiple choice
+
+type QuizState = { i: number; order: number[]; seed: number; flipped: boolean; good: number; again: number; picked: Set<number>; checked: boolean; right: number; mode: "due" | "all"; n: number };
+const isSharedKey = (p: string) => p.startsWith("shared:");
+/** Card schedules: the notebook's settings for your own decks; this device for decks shared with you. */
+function srsFor(path: string): Record<string, Sched> {
+  if (isSharedKey(path)) { try { return JSON.parse(store(`nb-srs-${path}`) ?? "{}") as Record<string, Sched>; } catch { return {}; } }
+  return S.settings.srs[path] ?? {};
+}
+function saveSrs(path: string, m: Record<string, Sched>) {
+  if (isSharedKey(path)) return store(`nb-srs-${path}`, JSON.stringify(m));
+  S.settings.srs[path] = m;
+  scheduleSettingsSave();
+}
+let settingsTimer = 0;
+function scheduleSettingsSave() { clearTimeout(settingsTimer); settingsTimer = window.setTimeout(() => void saveSettings(), 1500); }
+const deckPaths = () => (S.notes ?? []).filter((n) => n.path.endsWith(".md") && quizKind(n.content) === "cards").map((n) => n.path);
+function dueCount(path: string, text = draftOf(path).text): number {
+  const m = srsFor(path);
+  const today = new Date();
+  return parseCards(text).filter((c) => isDue(m[cardKey(c.front)], today)).length;
+}
+const dueTotal = () => (S.notes ? deckPaths().reduce((n, p) => n + dueCount(p, note(p)!.content), 0) : 0);
+function bumpStudy(n = 1) {
+  const k = dayKey(new Date());
+  S.settings.study[k] = (S.settings.study[k] ?? 0) + n;
+  scheduleSettingsSave();
+}
+const quizStates = new Map<string, QuizState>();
+function quizState(path: string, n: number, reset = false, seed = 0, subset?: number[]): QuizState {
+  let st = quizStates.get(path);
+  if (!st || reset || st.n !== n) {
+    const base = subset ?? Array.from({ length: n }, (_, k) => k);
+    const order = seed ? shuffled(base.length, seed).map((k) => base[k]) : base;
+    st = { i: 0, order, seed, flipped: false, good: 0, again: 0, picked: new Set(), checked: false, right: 0, mode: subset ? "due" : "all", n };
+    quizStates.set(path, st);
+  }
+  return st;
+}
+/** Due cards first; an empty due list falls back to the whole deck. */
+function deckSession(path: string, text: string, reset = false, seed = 0, all = false): QuizState {
+  const cards = parseCards(text);
+  const m = srsFor(path);
+  const today = new Date();
+  const due = cards.map((c, k) => (isDue(m[cardKey(c.front)], today) ? k : -1)).filter((k) => k >= 0);
+  const existing = quizStates.get(path);
+  if (existing && !reset && existing.n === cards.length) return existing;
+  return quizState(path, cards.length, true, seed, all || !due.length ? undefined : due);
+}
+function quizHtml(path: string, text: string): string {
+  const kind = quizKind(text);
+  const tools = (n: number) => `<span class="qz-tools"><button type="button" class="btn btn-ghost" data-action="qz-shuffle" data-path="${esc(path)}" title="Shuffle and start over">${icon("refresh")}Shuffle</button><button type="button" class="btn btn-ghost" data-action="qz-restart" data-path="${esc(path)}" title="Start over in order">${icon("history")}Restart</button><span class="small muted">${n} ${kind === "cards" ? "cards" : "questions"}</span></span>`;
+  if (kind === "cards") {
+    const cards = parseCards(text);
+    if (!cards.length) return `<div class="qz-empty">${icon("check")}<h3>No cards yet</h3><p class="muted small">Write <code>Front::Back</code> on a line, or the front, a line with <code>?</code>, then the back. Blank lines separate cards. ${MOD}E shows the source.</p></div>`;
+    const st = deckSession(path, text);
+    const due = dueCount(path, text);
+    const ds = isSharedKey(path) ? undefined : S.settings.deckStats[path];
+    const acc = ds && ds.reviews ? ` · ${Math.round((ds.good / ds.reviews) * 100)}% got it over ${ds.reviews} review${ds.reviews === 1 ? "" : "s"}` : "";
+    const nextDeck = isSharedKey(path) ? undefined : deckPaths().find((d) => d !== path && dueCount(d, note(d)!.content) > 0);
+    if (st.i >= st.order.length) return `<div class="qz-done"><h3>${st.mode === "due" ? "Done for today" : "Deck finished"}</h3><p>${st.good} got it · ${st.again} again${acc}</p><p class="small muted">${due ? `${due} card${due === 1 ? "" : "s"} still due.` : "Nothing more due today; come back tomorrow."}</p><div class="qz-actions">${due ? `<button type="button" class="btn btn-primary" data-action="qz-due" data-path="${esc(path)}">${icon("check")}Review what is due</button>` : ""}<button type="button" class="btn" data-action="qz-all" data-path="${esc(path)}">${icon("refresh")}Study the whole deck</button>${nextDeck ? `<button type="button" class="btn" data-action="open" data-path="${esc(nextDeck)}">${icon("move")}Next deck: ${esc(title(nextDeck))}</button>` : ""}${isSharedKey(path) ? "" : `<button type="button" class="btn btn-ghost" data-action="anki" data-path="${esc(path)}" title="Tab-separated, ready for Anki's importer">${icon("download")}Export for Anki</button>`}</div></div>`;
+    const c = cards[st.order[st.i]];
+    const sched = srsFor(path)[cardKey(c.front)];
+    return `<div class="qz-head"><span class="small muted">${st.mode === "due" ? "Due" : "Card"} ${st.i + 1} of ${st.order.length}${st.mode === "due" ? ` · ${cards.length} in the deck` : due ? ` · ${due} due` : ""}${sched ? ` · seen ${sched.r}×` : " · new"}</span>${tools(cards.length)}</div>
+      <div class="qcard ${st.flipped ? "back" : ""}" data-action="qz-flip" data-path="${esc(path)}" role="button" tabindex="0" title="Tap to flip"><div class="qside md">${renderMd(st.flipped ? c.back : c.front, path)}</div><div class="qlabel">${st.flipped ? "answer" : "question"}</div></div>
+      <div class="qz-actions">${st.flipped ? `<button type="button" class="btn" data-action="qz-rate" data-path="${esc(path)}" data-r="again" title="Forgot it: see it again today">${icon("x")}Again</button><button type="button" class="btn" data-action="qz-rate" data-path="${esc(path)}" data-r="hard" title="Barely: a little later">Hard</button><button type="button" class="btn btn-primary" data-action="qz-rate" data-path="${esc(path)}" data-r="good" title="Knew it">${icon("check")}Good</button><button type="button" class="btn" data-action="qz-rate" data-path="${esc(path)}" data-r="easy" title="Too easy: much later">Easy</button>` : `<button type="button" class="btn btn-primary" data-action="qz-flip" data-path="${esc(path)}">${icon("eye")}Show answer</button>`}</div>`;
+  }
+  const qs = parseChoice(text);
+  if (!qs.length) return `<div class="qz-empty">${icon("check")}<h3>No questions yet</h3><p class="muted small">A <code>###</code> heading per question, task items as options, <code>[x]</code> on the right ones, an optional <code>&gt;</code> quote as the explanation. ${MOD}E shows the source.</p></div>`;
+  const st = quizState(path, qs.length);
+  if (st.i >= qs.length) return `<div class="qz-done"><h3>Quiz finished</h3><p>${st.right} of ${qs.length} right · ${Math.round((st.right / qs.length) * 100)}%</p>${tools(qs.length)}</div>`;
+  const q = qs[st.order[st.i]];
+  const ok = st.checked && graded(q, st.picked);
+  const opts = q.options.map((o, k) => {
+    const cls = st.checked ? (q.correct.includes(k) ? "right" : st.picked.has(k) ? "wrong" : "") : st.picked.has(k) ? "picked" : "";
+    return `<button type="button" class="qopt ${cls}" data-action="qz-pick" data-path="${esc(path)}" data-opt="${k}" ${st.checked ? "disabled" : ""} aria-pressed="${st.picked.has(k)}"><span class="qbox">${st.checked ? (q.correct.includes(k) ? icon("check") : st.picked.has(k) ? icon("x") : "") : st.picked.has(k) ? icon("check") : ""}</span><span class="md">${renderMd(o, path)}</span></button>`;
+  }).join("");
+  return `<div class="qz-head"><span class="small muted">Question ${st.i + 1} of ${qs.length}${q.correct.length > 1 ? " · pick all that apply" : ""}</span>${tools(qs.length)}</div>
+    <div class="qquestion md">${renderMd(q.text, path)}</div>
+    <div class="qopts">${opts}</div>
+    ${st.checked ? `<div class="qresult ${ok ? "ok" : "no"}">${ok ? `${icon("check")}Correct` : `${icon("x")}Not quite`}${q.explanation ? `<div class="small">${esc(q.explanation)}</div>` : ""}</div>` : ""}
+    <div class="qz-actions">${st.checked ? `<button type="button" class="btn btn-primary" data-action="qz-next" data-path="${esc(path)}">${icon("move")}${st.i + 1 < qs.length ? "Next" : "Finish"}</button>` : `<button type="button" class="btn btn-primary" data-action="qz-check" data-path="${esc(path)}" ${st.picked.size ? "" : "disabled"}>${icon("check")}Check</button>`}</div>`;
+}
+/** A finished session on a note shared with you is reported to its owner (the teacher view). */
+async function finishSession(pathKey: string, score: number, total: number) {
+  if (!isSharedKey(pathKey) || !S.shared || !S.identity || !total) return;
+  try { await notebookOf(S.shared.canister).submit_attempt(S.shared.path, score, total); } catch { /* not reported */ }
+}
+function refreshQuiz(path: string) {
+  document.querySelectorAll<HTMLElement>(`.qz[data-quiz="${CSS.escape(path)}"]`).forEach((h) => { h.innerHTML = quizHtml(path, draftOf(path).text); afterRender(h); });
+}
+function newQuiz(kind: "cards" | "choice", folder?: string) {
+  const where = folder ?? (cur() ? dir(cur()!) : "");
+  const have = new Set(paths());
+  const base = kind === "cards" ? "Flashcards" : "Quiz";
+  let name = base;
+  for (let i = 1; have.has(`${where ? `${where}/` : ""}${name}.md`); i++) name = `${base} ${i}`;
+  return newNote(`${where ? `${where}/` : ""}${name}.md`, where, undefined, kind === "cards" ? NEW_CARDS : NEW_CHOICE);
+}
+
+// --- the Community: channels, chat, who is online; posting needs ICP in the in-app wallet
+
+const seenKeyC = () => "nb-chat-seen";
+const chatSeen = (): Record<string, string> => { try { return JSON.parse(store(seenKeyC()) ?? "{}") as Record<string, string>; } catch { return {}; } };
+function markChatSeen(channel: string, id: bigint) { const m = chatSeen(); m[channel] = id.toString(); store(seenKeyC(), JSON.stringify(m)); }
+let chatTimer = 0;
+async function loadCommunity(channel?: string) {
+  const c = S.community ?? { channel: channel ?? store("nb-chat-channel") ?? "general", channels: [], messages: [], online: [], min: 1n, loading: true, draft: "", unread: {}, showOnline: !S.mobile && store("nb-chat-aside") !== "0", showChannels: !S.mobile && store("nb-chat-side") !== "0" };
+  if (channel) { c.channel = channel; c.messages = []; c.replyTo = undefined; store("nb-chat-channel", channel); }
+  S.mentions = 0;
+  c.loading = true;
+  S.community = c;
+  render();
+  try {
+    const [chs, mem, min, gh, repo] = await Promise.all([registry().channels(), registry().my_membership(), registry().chat_min(), registry().my_github(), registry().github_repo()]);
+    c.channels = chs;
+    c.member = mem ?? undefined;
+    c.min = min;
+    c.github = gh ?? undefined;
+    c.repo = repo;
+    if (!chs.some((x) => x.name === c.channel)) c.channel = "general";
+    const on = verifiedNow(c.member) ? await registry().ping_chat(c.channel).then((x) => (x.__kind__ === "Ok" ? x.Ok : [])) : await registry().online();
+    c.online = on;
+    const r = await registry().messages(c.channel, 0n, 100);
+    c.messages = r.__kind__ === "Ok" ? r.Ok : [];
+    c.editing = undefined;
+    c.pins = await registry().pinned(c.channel).then((x) => (x.__kind__ === "Ok" ? x.Ok : [])).catch(() => []);
+    const seen = BigInt(chatSeen()[c.channel] ?? "0");
+    c.firstUnseen = seen ? c.messages.find((m) => m.id > seen && !m.deleted)?.id : undefined;
+    c.newCount = 0;
+    c.atBottom = c.firstUnseen === undefined; // start at the first unseen message; nothing is seen until the reader reaches the bottom
+    void icpBalance().then((b) => { c.balance = b; render(); }).catch(() => {});
+    void refreshUnread();
+  } catch (e) {
+    c.error = errMsg(e);
+  }
+  c.loading = false;
+  render();
+  if (c.firstUnseen !== undefined) { const log = document.querySelector<HTMLElement>("[data-chat-log]"); const d = log?.querySelector<HTMLElement>("[data-newdiv]"); if (log && d) { log.scrollTop = Math.max(0, d.offsetTop - log.offsetTop - 12); } else scrollChat(); } else scrollChat();
+  chatScrolled();
+  clearInterval(chatTimer);
+  chatTimer = window.setInterval(() => void pollCommunity(), 5000);
+}
+async function pollCommunity() {
+  const c = S.community;
+  if (!c || document.hidden) return;
+  try {
+    const last = c.messages.length ? c.messages[c.messages.length - 1].id : 0n;
+    const r = await registry().messages(c.channel, last, 100);
+    const fresh = r.__kind__ === "Ok" ? r.Ok : [];
+    // deletions, votes and reactions rewrite messages in place; refetch the page every 15 s for those
+    const tick = Math.floor(Date.now() / 5000);
+    if (fresh.length) { c.messages.push(...fresh); if (c.atBottom === false) c.newCount = (c.newCount ?? 0) + fresh.filter((m) => m.author.toText() !== S.principal).length; renderChat(); }
+    else if (tick % 3 === 0) { const page = await registry().messages(c.channel, 0n, 100); if (page.__kind__ === "Ok" && JSON.stringify(page.Ok, (_, v) => (typeof v === "bigint" ? v.toString() : v)) !== JSON.stringify(c.messages, (_, v) => (typeof v === "bigint" ? v.toString() : v))) { c.messages = page.Ok; renderChat(); } }
+    if (tick % 6 === 0) {
+      const on = c.member && c.member.verified_until > BigInt(Date.now()) * 1_000_000n ? await registry().ping_chat(c.channel).then((x) => (x.__kind__ === "Ok" ? x.Ok : c.online)) : await registry().online();
+      if (JSON.stringify(on) !== JSON.stringify(c.online)) { c.online = on; renderOnline(); }
+      void refreshUnread();
+    }
+  } catch { /* next tick */ }
+}
+async function refreshUnread() {
+  const c = S.community;
+  if (!c) return;
+  const seen = chatSeen();
+  const counts: Record<string, number> = {};
+  await Promise.all(c.channels.filter((ch) => ch.name !== c.channel).map(async (ch) => {
+    const r = await registry().messages(ch.name, BigInt(seen[ch.name] ?? "0"), 100).catch(() => undefined);
+    if (r?.__kind__ === "Ok" && r.Ok.length) counts[ch.name] = r.Ok.filter((m) => !m.deleted).length;
+  }));
+  if (JSON.stringify(counts) !== JSON.stringify(c.unread)) { c.unread = counts; renderChannels(); }
+}
+const verifiedNow = (m?: Member) => !!m && m.verified_until > BigInt(Date.now()) * 1_000_000n;
+function channelsHtml(): string {
+  const c = S.community!;
+  const wallet = `<div class="wallet">
+      <div class="pane-title">Your wallet</div>
+      <div class="wallet-bal"><b>${c.balance === undefined ? "…" : `${icp(c.balance)} ICP`}</b><button type="button" class="btn btn-ghost icon-btn" data-action="wallet-refresh" title="Refresh" aria-label="Refresh balance">${icon("refresh")}</button></div>
+      <div class="small muted">${verifiedNow(c.member) ? `Chatting as <b>@${esc(c.member!.handle)}</b> · checked ${ago(c.member!.verified_until - 86_400_000_000_000n)}` : c.member ? "Your ICP check has lapsed; renew to post." : c.min <= 10_000n ? "Hold any ICP here, then join, to post." : `Hold at least ${icp(c.min)} ICP here to post.`}</div>
+      <div class="row tight nudge"><button type="button" class="btn btn-primary" data-action="wallet-add" title="${useOisy ? "Opens your OISY wallet to send ICP here; no address to copy" : "Locally: shows the command that funds your development account"}">${icon("bolt")}Add ICP${useOisy ? " from OISY" : ""}</button>${verifiedNow(c.member) ? `<button type="button" class="btn btn-ghost" data-action="chat-join" title="Change your handle or renew the check">${icon("edit")}Handle</button>` : `<button type="button" class="btn" data-action="chat-join">${icon("check")}${c.member ? "Renew" : "Join"}</button>`}</div>
+      ${useOisy ? `<div class="small faint">${S.oisyAccount ? `OISY account ${esc(shortPrincipal(S.oisyAccount))} · ` : ""}rain, donations and posts are paid from this wallet</div>` : `<div class="small faint mono" title="ICP sent to this principal lands in your in-app wallet">${esc(shortPrincipal(S.principal))}<button type="button" class="btn btn-ghost icon-btn" data-action="copy-principal" aria-label="Copy principal">${icon("copy")}</button></div>`}
+    </div>`;
+  return `<div class="pane-head"><span class="pane-title" style="padding:0">Channels</span>${S.isAdmin ? `<button type="button" class="btn btn-ghost icon-btn" data-action="chat-new-channel" title="New channel" aria-label="New channel">${icon("plus")}</button>` : ""}</div>
+    <div class="chans">${c.channels.map((ch) => `<button type="button" class="chan ${ch.name === c.channel ? "on" : ""}" data-action="chat-channel" data-channel="${esc(ch.name)}" title="${esc(ch.topic)}"><span class="hash">#</span>${esc(ch.name)}${ch.gate ? `<span class="gate-ico" title="Contributors only">${icon("lock")}</span>` : ""}${c.unread[ch.name] ? `<span class="unread">${c.unread[ch.name]}</span>` : ""}${S.isAdmin && ch.name !== "general" ? `<span class="chan-del" data-action="chat-del-channel" data-channel="${esc(ch.name)}" title="Delete channel">${icon("x")}</span>` : ""}</button>`).join("")}</div>
+    ${wallet}`;
+}
+/** Chat text: bold, italics, code and @mentions only; everything else is plain text (no links, no images). */
+const SHORTCODES: Record<string, string> = { smile: "😄", grin: "😁", joy: "😂", wink: "😉", heart: "❤️", "+1": "👍", thumbsup: "👍", "-1": "👎", clap: "👏", fire: "🔥", rocket: "🚀", eyes: "👀", tada: "🎉", thinking: "🤔", pray: "🙏", wave: "👋", ok: "👌", check: "✅", x: "❌", star: "⭐", bulb: "💡", warning: "⚠️", coffee: "☕", bug: "🐛", sparkles: "✨", "100": "💯", sob: "😭", sunglasses: "😎", muscle: "💪", brain: "🧠", books: "📚", memo: "📝", money: "💰", rain: "☔", zap: "⚡", pin: "📌" };
+const expandShortcodes = (t: string) => t.replace(/(^|[\s(])(?::([a-z0-9_+-]+):)(?=$|[\s).,!?])/gi, (m, p: string, n: string) => (SHORTCODES[n.toLowerCase()] ? `${p}${SHORTCODES[n.toLowerCase()]}` : m));
+function chatText(t: string): string {
+  return esc(t)
+    .replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>")
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<i>$2</i>")
+    .replace(/`([^`\n]+)`/g, "<code>$1</code>")
+    .replace(/(^|[\s(])@([A-Za-z][\w.-]*[\w])/g, (_, p: string, n: string) => `${p}<span class="mention">@${n}</span>`)
+    .replace(/\n/g, "<br>");
+}
+const CHAT_EMOJI = "😀 😂 🤣 😊 😍 🥰 😎 🤔 🤯 😢 😭 😡 🥳 🤗 🙃 😴 👍 👎 👏 🙌 🙏 💪 🤝 👀 ❤️ 🧡 💛 💚 💙 💜 🔥 ✨ ⭐ 🎉 🎯 🚀 💡 📚 📝 🧠 ✅ ❌ ⚡ ☔ 🌧️ 🌈 ☀️ 🍀 🐝 🦉 🍕 ☕ 🍺 💎 🪙 💰 📈 📉 🔒 🔓 🧪 🔭 🧩 ♾️".split(" ");
+const onlyEmoji = (t: string) => /^(?:\p{Extended_Pictographic}|\p{Emoji_Modifier}|\u200d|\ufe0f|\s)+$/u.test(t);
+function pollHtml(m: Message, can: boolean): string {
+  const p = m.poll!;
+  const total = p.votes.length;
+  return `<div class="poll">${p.options.map((o, i) => {
+    const n = p.votes.filter((v) => v[1] === i).length;
+    const pct = total ? Math.round((100 * n) / total) : 0;
+    const mine = p.votes.some((v) => v[1] === i && v[0].toText() === S.principal);
+    return `<button type="button" class="poll-opt ${mine ? "on" : ""}" data-action="chat-vote" data-mid="${m.id}" data-opt="${i}" ${can ? "" : "disabled"} title="${n} ${n === 1 ? "vote" : "votes"}"><span class="bar" style="width:${pct}%"></span><span class="lbl">${mine ? icon("check") : ""}${esc(o)}</span><span class="pct">${pct}%</span></button>`;
+  }).join("")}<div class="small muted">${total} ${total === 1 ? "vote" : "votes"}${can ? " · pick one; you can change it" : ""}</div></div>`;
+}
+function reactionsHtml(m: Message): string {
+  const rs = m.reactions ?? [];
+  if (!rs.length) return "";
+  return `<div class="reacts">${rs.map((r) => `<button type="button" class="react ${r.by.some((p) => p.toText() === S.principal) ? "on" : ""}" data-action="chat-react" data-mid="${m.id}" data-emoji="${esc(r.emoji)}" title="${r.by.length} ${r.by.length === 1 ? "person" : "people"}">${esc(r.emoji)}<span class="n">${r.by.length}</span></button>`).join("")}<button type="button" class="react add" data-action="chat-emoji" data-mid="${m.id}" title="Add a reaction" aria-label="Add a reaction">+</button></div>`;
+}
+/** A gist is a note snapshot: rendered like a note, but links go dead and images vanish (community rule). */
+const gistMd = (t: string) => renderMd(t).replace(/<a\b[^>]*>/gi, '<span class="dead">').replace(/<\/a>/gi, "</span>").replace(/<(img|video|audio|iframe)\b[^>]*>/gi, "");
+function gistHtml(m: Message): string {
+  const g = m.gist!;
+  const open = `<button type="button" class="btn btn-ghost" data-action="gist-open" data-nb="${g.notebook.toText()}" data-path="${esc(g.path)}" title="Open the live note (if you have access)">${icon("out")}Open</button>`;
+  if (isSlides(g.text)) {
+    const slides = splitSlides(g.text);
+    const i = Math.min(S.community!.gistSlide?.get(m.id) ?? 0, slides.length - 1);
+    return `<div class="gist deck"><div class="gist-head">${icon("columns")}<b>${esc(g.title)}</b><span class="small muted">${slides.length} slides</span><button type="button" class="btn btn-ghost" data-action="gist-present" data-mid="${m.id}" title="Full screen">${icon("columns")}Present</button>${open}</div>
+      <div class="gist-slide md" data-action="gist-slide" data-mid="${m.id}" data-d="1">${gistMd(slides[i] ?? "")}</div>
+      <div class="gist-nav"><button type="button" class="btn btn-ghost icon-btn" data-action="gist-slide" data-mid="${m.id}" data-d="-1" aria-label="Previous slide" ${i === 0 ? "disabled" : ""}>${icon("chevron")}</button><span class="small muted">${i + 1} / ${slides.length}</span><button type="button" class="btn btn-ghost icon-btn flip" data-action="gist-slide" data-mid="${m.id}" data-d="1" aria-label="Next slide" ${i >= slides.length - 1 ? "disabled" : ""}>${icon("chevron")}</button></div></div>`;
+  }
+  return `<div class="gist"><div class="gist-head">${icon("file")}<b>${esc(g.title)}</b><span class="small muted">${esc(g.path)}</span>${open}</div><div class="gist-body md">${gistMd(g.text)}</div>${g.text.length > 500 ? `<button type="button" class="btn btn-ghost gist-more" data-action="gist-more"><span class="more">Show more</span><span class="less">Show less</span></button>` : ""}</div>`;
+}
+function fundHtml(m: Message, can: boolean): string {
+  const f = m.fund!;
+  const pct = Math.min(100, Math.round((100 * Number(f.raised_e8s)) / Number(f.goal_e8s)));
+  const mine = m.author.toText() === S.principal;
+  return `<div class="fund ${f.closed ? "closed" : ""}"><div class="fund-head">${icon("bolt")}<b>${f.plan ? `Help @${esc(m.handle)} get ${esc(f.plan)}` : `Keep “${esc(f.name)}” alive`}</b>${f.closed ? `<span class="pill">closed</span>` : pct >= 100 ? `<span class="pill ok">funded</span>` : ""}</div>
+    <div class="fund-bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><span style="width:${pct}%"></span></div>
+    <div class="small muted"><b>${icp(f.raised_e8s)}</b> of ${icp(f.goal_e8s)} ICP · ${f.donors.length} ${f.donors.length === 1 ? "person" : "people"} chipped in · ${f.plan ? `goes to @${esc(m.handle)}'s wallet to pay for the plan` : "every ICP is minted straight into the notebook's cycles; nobody can withdraw it"}</div>
+    ${f.closed ? "" : `<div class="row tight nudge">${can ? `<button type="button" class="btn btn-primary" data-action="fund-donate" data-mid="${m.id}">${icon("bolt")}Chip in</button>` : ""}${mine || S.isAdmin ? `<button type="button" class="btn btn-ghost" data-action="fund-close" data-mid="${m.id}">Close</button>` : ""}</div>`}</div>`;
+}
+function messageHtml(m: Message, prev?: Message): string {
+  const c = S.community!;
+  const can = verifiedNow(c.member);
+  const mine = m.author.toText() === S.principal;
+  const cont = prev && prev.author.toText() === m.author.toText() && m.at - prev.at < 300_000_000_000n && !m.reply_to;
+  const quoted = m.reply_to !== undefined && m.reply_to !== null ? c.messages.find((x) => x.id === m.reply_to) : undefined;
+  const divider = c.firstUnseen !== undefined && m.id === c.firstUnseen ? `<div class="newdiv" data-newdiv><span>New messages</span></div>` : "";
+  if (m.handle === "rain") return `${divider}<div class="msgrow rainmsg" data-mid="${m.id}"><div class="mtext">${chatText(m.text)}</div><span class="small muted">${when(m.at)}</span></div>`;
+  const me = c.member && !mine && new RegExp(`(^|[^\\w])@${c.member.handle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`, "i").test(m.text);
+  return `${divider}<div class="msgrow ${cont && !divider ? "cont" : ""} ${mine ? "mine" : ""} ${me ? "me-mention" : ""}" data-mid="${m.id}">
+      ${quoted ? `<div class="quote" title="${esc(quoted.text)}">${icon("links")}<b>@${esc(quoted.handle)}</b> ${esc(quoted.deleted ? "(deleted)" : quoted.text.slice(0, 120))}</div>` : ""}
+      ${cont ? "" : `<div class="who"><span class="avatar" style="--h:${[...m.author.toText()].reduce((a, ch) => a + ch.charCodeAt(0), 0) % 360}">${esc(m.handle.slice(0, 2).toUpperCase())}</span><b>${esc(m.handle)}</b><span class="small muted">${when(m.at)}</span>${m.pinned ? `<span class="small muted" title="Pinned">📌</span>` : ""}</div>`}
+      ${m.text || m.deleted ? `<div class="mtext ${!m.poll && onlyEmoji(m.text) ? "jumbo" : ""}">${m.deleted ? `<span class="muted small">(message removed)</span>` : m.poll ? `<b>${chatText(m.text)}</b>` : chatText(m.text)}${m.edited && !m.deleted ? `<span class="small faint" title="Edited ${when(m.edited)}"> (edited)</span>` : ""}</div>` : ""}
+      ${m.post !== undefined && m.post !== null && !m.deleted ? `<a href="#/board/${m.post}" class="post-card" data-action="nav">${icon("list")}<span>Open the post on the board</span>${icon("out")}</a>` : ""}
+      ${m.poll && !m.deleted ? pollHtml(m, can) : ""}${m.gist && !m.deleted ? gistHtml(m) : ""}${m.fund && !m.deleted ? fundHtml(m, can) : ""}${m.deleted ? "" : reactionsHtml(m)}
+      ${m.deleted ? "" : `<span class="mtools">${can ? `<button type="button" class="btn btn-ghost icon-btn" data-action="chat-emoji" data-mid="${m.id}" title="React" aria-label="React">☺</button>` : ""}<button type="button" class="btn btn-ghost icon-btn" data-action="chat-reply" data-mid="${m.id}" title="Reply" aria-label="Reply">${icon("links")}</button>${mine && !m.poll && !m.gist && !m.fund ? `<button type="button" class="btn btn-ghost icon-btn" data-action="chat-edit" data-mid="${m.id}" title="Edit" aria-label="Edit">${icon("edit")}</button>` : ""}${can ? `<button type="button" class="btn btn-ghost icon-btn" data-action="chat-to-board" data-mid="${m.id}" title="Pin to the board" aria-label="Pin to the board">${icon("list")}</button>` : ""}${mine || S.isAdmin ? `<button type="button" class="btn btn-ghost icon-btn" data-action="chat-pin" data-mid="${m.id}" title="${m.pinned ? "Unpin" : "Pin"}" aria-label="${m.pinned ? "Unpin" : "Pin"}">📌</button><button type="button" class="btn btn-ghost icon-btn" data-action="chat-del" data-mid="${m.id}" title="Delete" aria-label="Delete">${icon("x")}</button>` : ""}</span>`}
+    </div>`;
+}
+function chatHtmlC(): string {
+  const c = S.community!;
+  const ch = c.channels.find((x) => x.name === c.channel);
+  const can = verifiedNow(c.member) && !(ch?.gate === "github" && !c.github);
+  const msgs = c.messages.length ? c.messages.map((m, i) => messageHtml(m, c.messages[i - 1])).join("") : `<div class="chat-empty">${icon("chat")}<h3>#${esc(c.channel)}</h3><p class="muted small">${esc(ch?.topic ?? "")}. Nothing here yet; say hello.</p></div>`;
+  return `<div class="chat-head"><span class="hash">#</span><b>${esc(c.channel)}</b><span class="small muted">${esc(ch?.topic ?? "")}</span><span class="right-actions">${c.pins?.length ? `<button type="button" class="btn btn-ghost" data-action="chat-pins" title="Pinned messages">📌<span class="small lbl">${c.pins.length}</span></button>` : ""}<button type="button" class="btn btn-ghost" data-action="rain" title="Send ICP to random people who chatted in the last 30 minutes" ${can ? "" : "disabled"}>☔<span class="small lbl">Rain</span></button>${S.mobile ? `<button type="button" class="btn btn-ghost icon-btn" data-action="chat-online-toggle" title="Who is online" aria-label="Who is online">${icon("person")}</button>` : ""}</span></div>
+    ${c.showPins && c.pins?.length ? `<div class="pins"><div class="pane-title" style="padding:0 0 4px">Pinned</div>${c.pins.map((m) => `<button type="button" class="pin-row" data-action="chat-goto" data-mid="${m.id}"><b>@${esc(m.handle)}</b> ${esc(m.text.slice(0, 100))}</button>`).join("")}</div>` : ""}
+    <div class="chat-log" data-chat-log>${c.loading && !c.messages.length ? `<p class="muted small" style="padding:12px">Loading…</p>` : msgs}</div>
+    <button type="button" class="btn jump" data-action="chat-jump" data-jump hidden>${icon("down")}<span class="n">Jump to latest</span></button>
+    ${ch?.gate === "github" && !c.github && verifiedNow(c.member) ? `<div class="gate"><b>#${esc(c.channel)} is for contributors${c.repo ? ` to ${esc(c.repo)}` : ""}.</b> ${c.repo ? `Put your principal <code>${esc(S.principal)}</code><button type="button" class="btn btn-ghost icon-btn" data-action="copy-principal" aria-label="Copy principal">${icon("copy")}</button> in your GitHub bio, then link your login.` : "An admin has not set the repository yet."}${c.repo ? `<button type="button" class="btn btn-primary" data-action="link-github">${icon("link")}Link GitHub</button>` : ""}</div>` : ""}
+    <form class="composer" data-form="chat-post">${c.editing !== undefined ? `<div class="replying">${icon("edit")}Editing your message<button type="button" class="btn btn-ghost icon-btn" data-action="chat-edit-cancel" aria-label="Cancel edit">${icon("x")}</button></div>` : ""}${c.replyTo ? `<div class="replying">${icon("links")}Replying to <b>@${esc(c.replyTo.handle)}</b>: ${esc(c.replyTo.text.slice(0, 80))}<button type="button" class="btn btn-ghost icon-btn" data-action="chat-reply-cancel" aria-label="Cancel reply">${icon("x")}</button></div>` : ""}
+      <div class="compose-box ${can ? "" : "off"}"><button type="button" class="btn btn-ghost icon-btn" data-action="chat-plus" title="Poll, gist or fundraiser" aria-label="More" ${can ? "" : "disabled"}>${icon("plus")}</button><textarea name="chattext" rows="1" placeholder="${can ? `Message #${esc(c.channel)}` : ch?.gate === "github" && verifiedNow(c.member) ? `Link your GitHub to post in #${esc(c.channel)}` : c.member ? "Renew your ICP check to post" : "Add ICP to your wallet and join to post"}" ${can ? "" : "disabled"} aria-label="Message" title="↵ to send, ⇧↵ for a new line">${esc(c.draft)}</textarea><button type="button" class="btn btn-ghost icon-btn emoji-btn" data-action="chat-emoji" title="Emoji" aria-label="Emoji" ${can ? "" : "disabled"}>☺</button></div>
+      ${c.picker ? `<div class="pop-scrim" data-action="chat-pick-close"></div><div class="emoji-pop" role="dialog" aria-label="Emoji">${c.picker.mid !== undefined ? `<div class="small muted" style="padding:4px 6px">React to <b>@${esc(c.messages.find((m) => m.id === c.picker!.mid)?.handle ?? "")}</b></div>` : ""}<div class="emoji-grid">${CHAT_EMOJI.map((e) => `<button type="button" class="emoji" data-action="chat-pick" data-emoji="${e}" aria-label="${e}">${e}</button>`).join("")}</div></div>` : ""}
+    </form>`;
+}
+function onlineHtml(): string {
+  const c = S.community!;
+  const here = c.online.filter((o) => o.principal.toText() !== S.principal || verifiedNow(c.member));
+  const byChan = new Map<string, Online[]>();
+  for (const o of here) byChan.set(o.channel, [...(byChan.get(o.channel) ?? []), o]);
+  return `<div class="pane-title">Online <span class="count">${here.length}</span></div>
+    ${here.length ? [...byChan.entries()].map(([ch, os]) => `<div class="pane-sub" style="padding:0 10px">#${esc(ch)}</div>${os.map((o) => `<div class="online-row"><span class="avatar" style="--h:${[...o.principal.toText()].reduce((a, x) => a + x.charCodeAt(0), 0) % 360}">${esc(o.handle.slice(0, 2).toUpperCase())}</span><span>${esc(o.handle)}</span>${o.principal.toText() === S.principal ? `<span class="small muted">you</span>` : ""}</div>`).join("")}`).join("") : `<div class="empty-side">Nobody is reading right now.</div>`}
+    <div class="pane-title">Notifications</div><div class="empty-side"><label class="switch" style="padding:0"><input type="checkbox" name="notify" ${notifyOn() ? "checked" : ""}> Tell me when I'm @mentioned, anywhere in the app</label>${notifyOn() && "Notification" in window && Notification.permission === "default" ? `<div class="nudge"><button type="button" class="btn btn-ghost" data-action="notify-allow">${icon("bell")}Also notify when this tab is hidden</button></div>` : ""}</div>
+    <div class="pane-title">House rules</div><div class="empty-side">Anyone signed in can read. To post, keep ICP in your in-app wallet and join; the check is renewed daily. No links, no images, no foul language; the registry refuses them. Admins make channels.</div>`;
+}
+// --- the board: reddit-style posts per topic
+const score = (x: { ups: Principal[]; downs: Principal[] }) => x.ups.length - x.downs.length;
+const myVote = (x: { ups: Principal[]; downs: Principal[] }) => (x.ups.some((p) => p.toText() === S.principal) ? 1 : x.downs.some((p) => p.toText() === S.principal) ? -1 : 0);
+const hot = (p: Post) => score(p) / Math.pow((Date.now() - Number(p.created_at / 1_000_000n)) / 3_600_000 + 2, 1.5);
+async function loadBoard(topic?: string, openId?: bigint) {
+  const b = S.board ?? { sort: (store("nb-board-sort") as "hot" | "new" | "top") || "hot", posts: [], comments: [], channels: [], fee: 20_000n, loading: true, showSide: !S.mobile && store("nb-board-side") !== "0", showAside: !S.mobile && store("nb-board-aside") !== "0" };
+  if (topic !== undefined) b.topic = topic || undefined;
+  b.loading = true;
+  S.board = b;
+  S.community = undefined; clearInterval(chatTimer);
+  render();
+  try {
+    const [chs, mem, fee, gh] = await Promise.all([registry().channels(), registry().my_membership(), registry().post_fee(), registry().my_github()]);
+    b.channels = chs; b.member = mem ?? undefined; b.fee = fee; b.github = gh ?? undefined;
+    b.posts = await registry().posts(b.topic ?? null);
+    if (openId !== undefined) { b.open = (await registry().get_post(openId)) ?? undefined; b.comments = b.open ? await registry().post_comments(openId) : []; if (!b.open) toast("That post is gone.", "info"); }
+    else { b.open = undefined; b.comments = []; }
+  } catch (e) { toast(errMsg(e), "error"); }
+  b.loading = false;
+  render();
+}
+function voteArrows(kind: "post" | "comment", x: { ups: Principal[]; downs: Principal[] }, ids: string, can: boolean): string {
+  const v = myVote(x);
+  return `<span class="votes"><button type="button" class="vote ${v > 0 ? "on" : ""}" data-action="board-vote" data-kind="${kind}" ${ids} data-dir="${v > 0 ? 0 : 1}" ${can ? "" : "disabled"} aria-label="Upvote">▲</button><b>${score(x)}</b><button type="button" class="vote down ${v < 0 ? "on" : ""}" data-action="board-vote" data-kind="${kind}" ${ids} data-dir="${v < 0 ? 0 : -1}" ${can ? "" : "disabled"} aria-label="Downvote">▼</button></span>`;
+}
+function postRow(p: Post, can: boolean): string {
+  return `<article class="prow"><div class="prow-votes">${voteArrows("post", p, `data-id="${p.id}"`, can)}</div><div class="prow-main"><a href="#/board/${p.id}" class="ptitle" data-action="nav">${esc(p.title)}</a>${p.gist ? `<span class="pill" title="Has a note attached">${icon("file")}note</span>` : ""}<div class="small muted">#${esc(p.topic)} · @${esc(p.handle)} · ${ago(p.created_at)} · ${p.comments} comment${p.comments === 1 ? "" : "s"}</div></div></article>`;
+}
+function commentTree(b: NonNullable<typeof S.board>, parent: bigint | undefined, depth: number, can: boolean): string {
+  const kids = b.comments.filter((c) => (parent === undefined ? c.parent === undefined || c.parent === null : c.parent === parent));
+  return kids.map((c) => { const mine = c.author.toText() === S.principal; return `<div class="pcomment" style="--d:${Math.min(depth, 6)}"><div class="pc-head">${voteArrows("comment", c, `data-post="${c.post}" data-id="${c.id}"`, can && !c.deleted)}<b>@${esc(c.handle)}</b><span class="small muted">${ago(c.created_at)}</span>${c.deleted ? "" : `<span class="pc-tools">${can ? `<button type="button" class="btn btn-ghost" data-action="board-reply" data-id="${c.id}">Reply</button>` : ""}${mine || S.isAdmin ? `<button type="button" class="btn btn-ghost" data-action="board-del-comment" data-post="${c.post}" data-id="${c.id}">Delete</button>` : ""}</span>`}</div><div class="mtext">${c.deleted ? `<span class="muted small">(removed)</span>` : chatText(c.text)}</div>${b.replyTo === c.id ? composer(b, c.id) : ""}${commentTree(b, c.id, depth + 1, can)}</div>`; }).join("");
+  function composer(bb: NonNullable<typeof S.board>, parent?: bigint) { return `<form class="pc-form" data-form="board-comment" data-post="${bb.open!.id}" ${parent !== undefined ? `data-parent="${parent}"` : ""}><textarea class="input" name="ptext" rows="2" placeholder="${parent !== undefined ? "Reply…" : "Add a comment…"}" required></textarea><div class="row tight"><button type="submit" class="btn btn-primary">${icon("send")}${parent !== undefined ? "Reply" : "Comment"}</button>${parent !== undefined ? `<button type="button" class="btn btn-ghost" data-action="board-reply" data-id="">Cancel</button>` : ""}</div></form>`; }
+}
+function boardPage(): string {
+  const b = S.board!;
+  const can = verifiedNow(b.member);
+  const ch = b.channels.find((x) => x.name === b.topic);
+  const gated = ch?.gate === "github" && !b.github;
+  const sorted = [...b.posts].sort((x, y) => (b.sort === "new" ? Number(y.created_at - x.created_at) : b.sort === "top" ? score(y) - score(x) : hot(y) - hot(x)));
+  const side = `<div class="pane-head"><span class="pane-title" style="padding:0">Topics</span></div>
+    <div class="chans"><button type="button" class="chan ${!b.topic ? "on" : ""}" data-action="board-topic" data-topic=""><span class="hash">∗</span>all</button>${b.channels.map((c) => `<button type="button" class="chan ${c.name === b.topic ? "on" : ""}" data-action="board-topic" data-topic="${esc(c.name)}" title="${esc(c.topic)}"><span class="hash">#</span>${esc(c.name)}${c.gate ? `<span class="gate-ico">${icon("lock")}</span>` : ""}</button>`).join("")}</div>
+    <div class="wallet"><div class="pane-title">Posting</div><div class="small muted">A post costs ${icp(b.fee)} ICP from your in-app wallet: about what storing it for 60 days costs in cycles, rounded up to twice the transfer minimum. Comments and votes are free for members.</div>${can ? `<div class="nudge"><button type="button" class="btn btn-primary" data-action="board-new" ${gated ? "disabled" : ""}>${icon("plus")}New post</button></div>` : `<div class="small muted nudge">${b.member ? "Renew your ICP check in the community to post." : "Join the community (hold ICP in your wallet) to post, comment and vote."}</div>`}</div>`;
+  const main = b.open ? (() => { const p = b.open!; const mine = p.author.toText() === S.principal; return `<div class="chat-head"><a href="#/board" class="btn btn-ghost" data-action="nav" title="Back to the list">${icon("chevron")}<span class="small lbl">Posts</span></a><span class="small muted">#${esc(p.topic)}</span><span class="right-actions">${can ? `<button type="button" class="btn btn-ghost" data-action="board-share" data-id="${p.id}" title="Drop a card into a chat channel">${icon("chat")}<span class="small lbl">Discuss in chat</span></button>` : ""}${mine || S.isAdmin ? `<button type="button" class="btn btn-ghost" data-action="board-del" data-id="${p.id}">${icon("trash")}</button>` : ""}</span></div>
+    <div class="post-view"><div class="prow"><div class="prow-votes">${voteArrows("post", p, `data-id="${p.id}"`, can)}</div><div class="prow-main"><h2 class="ptitle">${esc(p.title)}</h2><div class="small muted">@${esc(p.handle)} · ${when(p.created_at)} · ${p.comments} comment${p.comments === 1 ? "" : "s"} · gone a week after the last comment</div>${p.body ? `<div class="mtext pbody">${chatText(p.body)}</div>` : ""}${p.gist ? `<div class="gist"><div class="gist-head">${icon("file")}<b>${esc(p.gist.title)}</b><span class="small muted">${esc(p.gist.path)}</span><button type="button" class="btn btn-ghost" data-action="gist-open" data-nb="${p.gist.notebook.toText()}" data-path="${esc(p.gist.path)}">${icon("out")}Open</button></div><div class="gist-body md">${gistMd(p.gist.text)}</div></div>` : ""}</div></div>
+      ${can ? `<form class="pc-form top" data-form="board-comment" data-post="${p.id}"><textarea class="input" name="ptext" rows="2" placeholder="Add a comment…" required></textarea><div class="row tight"><button type="submit" class="btn btn-primary">${icon("send")}Comment</button></div></form>` : ""}
+      <div class="pcomments">${commentTree(b, undefined, 0, can) || `<p class="muted small">No comments yet.</p>`}</div></div>`; })()
+    : `<div class="chat-head"><b>${b.topic ? `#${esc(b.topic)}` : "All topics"}</b><span class="small muted">${esc(ch?.topic ?? "Posts from every topic")}</span><span class="right-actions"><span class="segmented sub">${(["hot", "new", "top"] as const).map((k) => `<button type="button" class="tab ${b.sort === k ? "on" : ""}" data-action="board-sort" data-sort="${k}">${k[0].toUpperCase()}${k.slice(1)}</button>`).join("")}</span></span></div>
+      <div class="plist">${b.loading && !b.posts.length ? `<p class="muted small" style="padding:12px">Loading…</p>` : sorted.length ? sorted.map((p) => postRow(p, can)).join("") : `<div class="chat-empty">${icon("list")}<h3>Nothing posted${b.topic ? ` in #${esc(b.topic)}` : ""} yet</h3><p class="muted small">Posts live a week past their last comment, then they are gone for good.</p></div>`}</div>`;
+  const aside = `<div class="pane-title">House rules</div><div class="empty-side">Members only. No links, no images, no foul language; the registry refuses them. One vote per person on each post and comment, changeable. A post is deleted permanently one week after its last comment. Attach a note from your notebooks to get opinions on it.</div>`;
+  return `<div class="shell ${S.mobile ? "is-mobile" : ""}">${ribbonHtml()}<div class="shell-main">
+    <header class="wsbar">${brand()}<span class="crumb"><b>Board</b>${b.topic ? `<span class="faint">/</span><span>#${esc(b.topic)}</span>` : ""}</span><span class="right">${S.mobile ? moreBtn() : `${pageNav()}${themeBtn()}`}</span></header>
+    ${panebar({ on: b.showSide, what: "topics", action: "side-toggle" }, { on: b.showAside, what: "the rules pane", action: "aside-toggle" })}
+    <div class="workspace community ${b.showSide ? "" : "no-side"} ${b.showAside ? "" : "no-aside"} ${S.mobile ? "m-note" : ""}">
+      <nav class="side" aria-label="Topics">${side}</nav>
+      <section class="main chatpane board">${main}</section>
+      <aside class="aside" aria-label="Rules">${aside}</aside>
+    </div>
+    ${S.mobile ? `<nav class="mobilebar" aria-label="Panes"><button type="button" class="mtab" data-action="chat-pane" data-pane="files">${icon("list")}Topics</button><button type="button" class="mtab" aria-selected="true" data-action="chat-pane" data-pane="note">${icon("book")}Posts</button><button type="button" class="mtab" data-action="chat-pane" data-pane="links">${icon("help")}Rules</button><button type="button" class="mtab" data-action="nav-home">${icon("book")}Notes</button></nav>` : ""}
+  </div></div>`;
+}
+type PostPrefill = { notebook?: string; path?: string; text?: string; title?: string; body?: string; topic?: string };
+/** Make sure the board state exists (pinning works from anywhere), then run the new-post flow. */
+async function pinToBoard(pre: PostPrefill) {
+  if (!S.board) S.board = { sort: "hot", posts: [], comments: [], channels: await registry().channels(), member: (await registry().my_membership()) ?? undefined, fee: await registry().post_fee(), loading: false, showSide: true, showAside: true };
+  if (!verifiedNow(S.board.member)) return toast("Join the community (hold ICP in your wallet) to pin things to the board.", "info");
+  await newPost(pre);
+}
+/** A note as text for a gist: markdown as is, sheets as CSV, Python notebooks as markdown and code blocks. */
+function noteAsMarkdown(path: string): string {
+  const text = S.drafts.get(path)?.text ?? note(path)?.content ?? "";
+  if (isSheetPath(path)) { const wb = parseWorkbook(text); const all = evaluate(wb); return wb.sheets.map((sh) => `## ${sh.name}\n\n\`\`\`csv\n${toCsv(all.get(sh.name) ?? [])}\n\`\`\``).join("\n\n"); }
+  if (isNotebookPath(path)) return parseNotebook(text).cells.map((c) => (c.type === "markdown" ? c.source : `\`\`\`python\n${c.source}\n\`\`\``)).join("\n\n");
+  if (isKanban(text)) return parseBoard(text).lanes.map((l) => `## ${l.title}\n\n${l.cards.map((c) => `- [${c.done ? "x" : " "}] ${c.text}`).join("\n")}`).join("\n\n");
+  return text;
+}
+async function newPost(pre?: PostPrefill) {
+  const b = S.board!;
+  const topic = pre?.topic ?? b.topic ?? (await ask({ title: "Which topic?", label: "Topic", choices: b.channels.map((c) => ({ value: c.name, label: `#${c.name} · ${c.topic}` })), value: "general", ok: "Next" }));
+  if (!topic) return;
+  const suggested = pre?.title ?? (pre?.path ? `Thoughts on “${title2(pre.path)}”?` : "");
+  const title = await ask({ title: `New post in #${topic}`, label: "Title", placeholder: "A clear question or statement", value: suggested, ok: "Next" });
+  if (!title?.trim()) return;
+  const body = await ask({ title: title.trim(), body: `Posting costs ${icp(b.fee)} ICP from your wallet. Plain text: bold, italics, code and @mentions; no links or images.`, label: "Text (optional)", multiline: true, placeholder: "Say more…", value: pre?.body ?? "", ok: `Pay ${icp(b.fee)} ICP and post` });
+  if (body === null) return;
+  try {
+    await approvePayment(Principal.fromText(REGISTRY), b.fee + ICP_FEE);
+    const gist = pre?.path && pre.notebook ? { title: title2(pre.path), text: (pre.text ?? "").slice(0, 8000), notebook: Principal.fromText(pre.notebook), path: pre.path } : null;
+    const r = await registry().create_post(topic, title.trim(), body, gist);
+    if (r.__kind__ === "Err") throw new Error(r.Err);
+    toast("Posted.", "ok");
+    location.hash = `#/board/${r.Ok.id}`;
+  } catch (e) { toast(errMsg(e), "error"); }
+}
+const title2 = (p: string) => p.split("/").pop()!.replace(/\.(md|sheet|dash|ipynb|canvas|excalidraw)$/i, "");
+function communityPage(): string {
+  const c = S.community!;
+  return `<div class="shell ${S.mobile ? "is-mobile" : ""}">${ribbonHtml()}<div class="shell-main">
+    <header class="wsbar">${brand()}<span class="crumb"><b>Community</b><span class="faint">/</span><span>#${esc(c.channel)}</span></span><span class="right">${S.mobile ? moreBtn() : `${pageNav()}${themeBtn()}`}</span></header>
+    ${panebar({ on: c.showChannels, what: "channels", action: "chat-side-toggle" }, { on: c.showOnline, what: "who is online", action: "chat-online-toggle" })}
+    <div class="workspace community ${c.showOnline ? "" : "no-aside"} ${c.showChannels ? "" : "no-side"} ${S.mobile ? "m-note" : ""}">
+      <nav class="side" id="chanpane" aria-label="Channels">${channelsHtml()}</nav>
+      <section class="main chatpane">${chatHtmlC()}</section>
+      <aside class="aside" id="onlinepane" aria-label="Online">${onlineHtml()}</aside>
+    </div>
+    ${S.mobile ? `<nav class="mobilebar" aria-label="Panes"><button type="button" class="mtab" data-action="chat-pane" data-pane="files">${icon("list")}Channels</button><button type="button" class="mtab" aria-selected="true" data-action="chat-pane" data-pane="note">${icon("chat")}Chat</button><button type="button" class="mtab" data-action="chat-pane" data-pane="links">${icon("person")}Online</button><button type="button" class="mtab" data-action="nav-home">${icon("book")}Notes</button></nav>` : ""}
+  </div></div>`;
+}
+async function createPoll() {
+  const c = S.community!;
+  const q = await ask({ title: "Create a poll", label: "Question", placeholder: "Which topic next week?", ok: "Next" });
+  if (!q?.trim()) return;
+  const opts = await ask({ title: q.trim(), body: "One option per line, 2 to 10 of them.", multiline: true, placeholder: "Lean\nRust\nAgents", ok: "Post poll" });
+  if (opts === null) return;
+  const r = await registry().post_poll(c.channel, q.trim(), opts.split("\n").map((o) => o.trim()).filter(Boolean));
+  if (r.__kind__ === "Err") return toast(r.Err, "error");
+  c.messages.push(r.Ok);
+  markChatSeen(c.channel, r.Ok.id);
+  renderChat();
+}
+async function myNotebookChoice(title: string): Promise<NotebookRec | undefined> {
+  const mine = S.notebooks ?? (S.notebooks = await registry().my_notebooks());
+  if (!mine.length) { toast("You have no notebooks yet.", "info"); return; }
+  const id = await ask({ title, label: "Notebook", choices: mine.map((n) => ({ value: n.canister.toText(), label: n.name })), value: mine[0].canister.toText(), ok: "Next" });
+  return id === null ? undefined : mine.find((n) => n.canister.toText() === id);
+}
+/** Share a note in the community for opinions: from a note (prefilled) or picked from your notebooks. */
+async function shareGist(pre?: { notebook: string; path: string; text: string }) {
+  let gist = pre;
+  if (!gist) {
+    const n = await myNotebookChoice("Share a note for opinions");
+    if (!n) return;
+    const files = await notebookOf(n.canister.toText()).list();
+    const notes = files.__kind__ === "Ok" ? files.Ok.filter((f) => f.path.endsWith(".md")) : [];
+    if (!notes.length) return toast("That notebook has no notes.", "info");
+    const path = await ask({ title: "Which note?", label: "Note", choices: notes.map((f) => ({ value: f.path, label: f.path })), value: notes[0].path, ok: "Next" });
+    if (path === null) return;
+    let content: string;
+    try { content = unwrap(await notebookOf(n.canister.toText()).read(path)).content; } catch (e) { return toast(errMsg(e), "error"); }
+    gist = { notebook: n.canister.toText(), path, text: content };
+  }
+  let channel = S.community?.channel;
+  if (!channel) {
+    const chs = await registry().channels();
+    channel = (await ask({ title: "Post in the community", label: "Channel", choices: chs.map((ch) => ({ value: ch.name, label: `#${ch.name} · ${ch.topic}` })), value: "general", ok: "Next" })) ?? undefined;
+    if (!channel) return;
+  }
+  const comment = await ask({ title: `Share “${title(gist.path)}” in #${channel}`, body: gist.text.length > 8000 ? "Only the first 8000 characters go with it." : "A snapshot of the note goes with your message; replies are the opinions.", label: "What do you want opinions on? (optional)", placeholder: "Does the argument in section 2 hold?", ok: "Share" });
+  if (comment === null) return;
+  const r = await registry().post_gist(channel, comment.trim(), title(gist.path), gist.text.slice(0, 8000), Principal.fromText(gist.notebook), gist.path);
+  if (r.__kind__ === "Err") return toast(r.Err, "error");
+  if (S.community && S.community.channel === channel) { S.community.messages.push(r.Ok); markChatSeen(channel, r.Ok.id); renderChat(); }
+  else toast(`Shared in #${channel}.`, "ok");
+}
+const PLANS = ["Claude Max", "ChatGPT Pro", "Gemini Ultra"];
+/** Developers channel: a contributor raises ICP toward an AI plan; donations land in their wallet. */
+async function startPlanFund() {
+  const c = S.community!;
+  const plan = await ask({ title: "Raise for an AI plan", body: "Contributors only. Donations go straight to your in-app wallet so you can pay for the plan.", label: "Plan", choices: PLANS.map((p) => ({ value: p, label: p })), value: PLANS[0], ok: "Next" });
+  if (plan === null) return;
+  const goal = await ask({ title: `${plan}`, label: "Goal (ICP)", value: "20", ok: "Next" });
+  if (goal === null) return;
+  const pitch = await ask({ title: "What will you build with it?", label: "A sentence or two", placeholder: "Shipping the Lean checker needs long agent runs; a month of Claude Max covers it.", ok: "Start" });
+  if (pitch === null) return;
+  const r = await registry().post_plan_fund(c.channel, pitch.trim(), plan, BigInt(Math.round(Number(goal) * 1e8)));
+  if (r.__kind__ === "Err") return toast(r.Err, "error");
+  c.messages.push(r.Ok);
+  renderChat();
+  scrollChat();
+}
+async function linkGithub() {
+  const c = S.community!;
+  const login = await ask({ title: "Link your GitHub", body: `Your GitHub bio must contain your principal ${S.principal}. The registry reads your public profile and the contributor list of ${c.repo}.`, label: "GitHub login", placeholder: "octocat", ok: "Link" });
+  if (!login?.trim()) return;
+  toast("Asking GitHub…", "info");
+  const r = await registry().link_github(login.trim());
+  if (r.__kind__ === "Err") return toast(r.Err, "error");
+  toast(`Linked @${r.Ok}. Welcome to #developers.`, "ok");
+  c.github = r.Ok;
+  render();
+  scrollChat();
+}
+/** Raise ICP that can only become cycles for one of your notebooks. */
+async function startFund() {
+  const c = S.community!;
+  const n = await myNotebookChoice("Raise cycles for a notebook");
+  if (!n) return;
+  const goal = await ask({ title: `Keep “${n.name}” alive`, body: "Donations are pulled from each donor's wallet and minted straight into this notebook's cycles. You never hold the ICP and cannot withdraw it.", label: "Goal (ICP)", value: "1", ok: "Next" });
+  if (goal === null) return;
+  const pitch = await ask({ title: "Why should people chip in?", label: "A sentence or two", placeholder: "The Lean course notes run dry next month; 1 ICP keeps them up for a year.", ok: "Start" });
+  if (pitch === null) return;
+  const r = await registry().post_fund(c.channel, pitch.trim(), n.canister, BigInt(Math.round(Number(goal) * 1e8)));
+  if (r.__kind__ === "Err") return toast(r.Err, "error");
+  c.messages.push(r.Ok);
+  markChatSeen(c.channel, r.Ok.id);
+  renderChat();
+}
+function replaceMessage(m: Message) { const c = S.community!; const i = c.messages.findIndex((x) => x.id === m.id); if (i >= 0) c.messages[i] = m; else c.messages.push(m); renderChat(); }
+async function reactTo(mid: bigint, emoji: string) {
+  const c = S.community!;
+  const r = await registry().react(c.channel, mid, emoji);
+  if (r.__kind__ === "Err") return toast(r.Err, "error");
+  replaceMessage(r.Ok);
+}
+function renderChat() { const log = document.querySelector<HTMLElement>("[data-chat-log]"); if (!log || !S.community) return; const c = S.community; const top = log.scrollTop; log.innerHTML = c.messages.length ? c.messages.map((m, i) => messageHtml(m, c.messages[i - 1])).join("") : ""; afterRender(log); if (c.atBottom === false) { log.scrollTop = top; chatScrolled(); } else scrollChat(); }
+/** Reading position: at the bottom everything is seen and the jump button hides; above it the button shows how much is new. */
+function chatScrolled() {
+  const c = S.community;
+  const log = document.querySelector<HTMLElement>("[data-chat-log]");
+  if (!c || !log) return;
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 48;
+  c.atBottom = atBottom;
+  if (atBottom && c.messages.length) { markChatSeen(c.channel, c.messages[c.messages.length - 1].id); c.newCount = 0; }
+  const b = document.querySelector<HTMLElement>("[data-jump]");
+  if (b) { b.hidden = atBottom; b.querySelector(".n")!.textContent = c.newCount ? `${c.newCount} new` : "Jump to latest"; }
+}
+document.addEventListener("scroll", (e) => { if ((e.target as HTMLElement | null)?.hasAttribute?.("data-chat-log")) chatScrolled(); }, true);
+function renderChannels() { const p = document.getElementById("chanpane"); if (p) p.innerHTML = channelsHtml(); }
+function renderOnline() { const p = document.getElementById("onlinepane"); if (p) p.innerHTML = onlineHtml(); }
+function scrollChat() { const log = document.querySelector<HTMLElement>("[data-chat-log]"); if (log) { log.scrollTop = log.scrollHeight; chatScrolled(); } }
+async function makeRain() {
+  const c = S.community!;
+  const eligible = await registry().rain_eligible().catch(() => 0);
+  if (!eligible) return toast("Nobody but you has chatted in the last 30 minutes; rain needs someone to fall on.", "info");
+  const count = await ask({ title: "☔ Make it rain", body: `${eligible} ${eligible === 1 ? "person has" : "people have"} chatted in the last 30 minutes. Pick how many of them get a share, chosen at random, and the total ICP to split. Each transfer costs the ledger fee.`, label: "How many people (1 to 10)", value: String(Math.min(5, eligible)), ok: "Next" });
+  if (count === null) return;
+  const n = Math.max(1, Math.min(10, Number(count) || 1));
+  const amt = await ask({ title: `Rain on ${Math.min(n, eligible)} ${Math.min(n, eligible) === 1 ? "person" : "people"}`, label: "Total ICP", value: "0.1", body: `Paid from ${payLabel()}; the registry splits it and sends each share straight to their wallet.`, ok: "Rain" });
+  if (amt === null) return;
+  const total = BigInt(Math.round(Number(amt) * 1e8));
+  await act("rain", async () => {
+    await approvePayment(Principal.fromText(REGISTRY), total + ICP_FEE);
+    const r = await registry().rain(c.channel, total, n);
+    if (r.__kind__ === "Err") throw new Error(r.Err);
+    await loadCommunity(c.channel);
+    return `☔ Rained ${icp(r.Ok.each_e8s)} ICP on ${r.Ok.recipients.map(([, h]) => `@${h}`).join(", ")}.`;
+  });
+}
+/** The celebration: drops fall over the whole app and a card says who rained how much. Shown once per rain, anywhere, while signed in. */
+function celebrateRain(rains: Rain[]) {
+  const total = rains.reduce((a, r) => a + r.each_e8s, 0n);
+  const from = [...new Set(rains.map((r) => `@${r.from_handle}`))].join(", ");
+  const el = document.createElement("div");
+  el.className = "rainfall";
+  el.innerHTML = `${Array.from({ length: 60 }, (_, i) => `<i style="--x:${(i * 37) % 100}%;--d:${(i % 10) * 0.25}s;--s:${0.8 + (i % 5) * 0.15}">${i % 7 === 0 ? "🪙" : "💧"}</i>`).join("")}<div class="raincard"><div class="big">☔ You got rained on!</div><div><b>+${icp(total)} ICP</b> from ${esc(from)}${rains[0].channel ? ` in #${esc(rains[0].channel)}` : ""}</div><div class="small muted">It is in your in-app wallet already.</div><button type="button" class="btn btn-primary" data-rain-close>Nice</button></div>`;
+  document.body.append(el);
+  const close = () => el.remove();
+  el.querySelector("[data-rain-close]")!.addEventListener("click", close);
+  setTimeout(close, 12_000);
+}
+async function checkRain() {
+  if (!S.identity || document.hidden) return;
+  try {
+    const last = BigInt(store("nb-rain-seen") ?? "0");
+    const rs = await registry().my_rain(last);
+    if (!rs.length) return;
+    store("nb-rain-seen", rs[rs.length - 1].id.toString());
+    celebrateRain(rs);
+    if (S.community) void icpBalance().then((b) => { if (S.community) { S.community.balance = b; renderChannels(); } });
+  } catch { /* next time */ }
+}
+setInterval(checkRain, 30_000);
+const notifyOn = () => store("nb-notify") !== "0";
+/** Every 20 s, anywhere in the app: new @mentions of me become a toast (click opens the channel), a browser notification when the tab is hidden, and a badge on the Community icon. */
+async function checkMentions() {
+  if (!S.identity || !notifyOn()) return;
+  try {
+    const last = BigInt(store("nb-mention-seen") ?? "0");
+    const ms = await registry().my_mentions(last);
+    if (!ms.length) return;
+    store("nb-mention-seen", ms[ms.length - 1].id.toString());
+    if (!last) return; // first run: everything older is not news
+    const reading = (m: Message) => S.community && S.community.channel === m.channel && !document.hidden;
+    const fresh = ms.filter((m) => !reading(m));
+    if (!fresh.length) return;
+    S.mentions += fresh.length;
+    document.querySelectorAll<HTMLElement>(".rb[href='#/community']").forEach((a) => { a.outerHTML = ribbonHtml().match(/<a class="rb[^"]*" href="#\/community"[\s\S]*?<\/a>/)?.[0] ?? a.outerHTML; });
+    for (const m of fresh.slice(-3)) {
+      const text = `@${m.handle} mentioned you in #${m.channel}: ${m.text.slice(0, 120)}`;
+      mentionToast(text, m.channel);
+      if (document.hidden && "Notification" in window && Notification.permission === "granted") { const n = new Notification(`@${m.handle} in #${m.channel}`, { body: m.text.slice(0, 160), tag: `mention-${m.id}` }); n.onclick = () => { window.focus(); location.hash = "#/community"; void loadCommunity(m.channel); }; }
+    }
+  } catch { /* next time */ }
+}
+function mentionToast(text: string, channel: string) {
+  let host = document.getElementById("toasts");
+  if (!host) { host = Object.assign(document.createElement("div"), { id: "toasts" }); document.body.append(host); }
+  const el = document.createElement("button");
+  el.type = "button";
+  el.className = "toast mention";
+  el.innerHTML = `${icon("bell")}<span>${esc(text)}</span>`;
+  el.addEventListener("click", () => { el.remove(); location.hash = "#/community"; void loadCommunity(channel); });
+  host.append(el);
+  setTimeout(() => el.remove(), 8000);
+}
+setInterval(() => void checkMentions(), 20_000);
+setTimeout(() => void checkMentions(), 2500);
+async function joinCommunity() {
+  const c = S.community!;
+  const handle = await ask({ title: c.member ? "Your handle" : "Join the community", label: "Handle", value: c.member?.handle ?? "", placeholder: "ada", body: `Posting needs ${c.min <= 10_000n ? "some" : `at least ${icp(c.min)}`} ICP in your in-app wallet; the registry checks the ledger and remembers it for a day.`, ok: c.member ? "Save" : "Join" });
+  if (!handle?.trim()) return;
+  try {
+    const r = await registry().join_community(handle.trim());
+    if (r.__kind__ === "Err") throw new Error(r.Err);
+    c.member = r.Ok;
+    c.balance = r.Ok.balance_e8s;
+    const on = await registry().ping_chat(c.channel);
+    if (on.__kind__ === "Ok") c.online = on.Ok;
+    toast(`You are in as @${r.Ok.handle}.`, "ok");
+    render();
+    scrollChat();
+  } catch (e) { toast(errMsg(e), "error"); }
+}
+/** Top up the in-app wallet through OISY: the same one-button signer flow as paying for cycles, no address shown. */
+async function addIcp() {
+  const v = await ask({ title: "Add ICP from OISY", label: "Amount (ICP)", value: "0.1", body: useOisy ? `Your OISY wallet opens and asks you to send the amount to your in-app account; nothing to copy or paste. ${S.oisyAccount ? `Last sent from ${shortPrincipal(S.oisyAccount)}.` : ""} The ledger fee of ${icp(ICP_FEE)} ICP is taken on top.` : "Locally there is no OISY and your development account is the wallet itself; fund it with the command shown next (or open the app with ?oisy to use the real signer).", ok: useOisy ? "Send from OISY" : "Show command" });
+  if (v === null) return;
+  const amount = BigInt(Math.round(Number(v) * 1e8));
+  if (amount < ICP_FEE * 2n) return toast("Send at least a couple of ledger fees.", "error");
+  if (!useOisy) return toast(`icp token transfer ${v} ${S.principal}`, "info");
+  try {
+    const owner = await transferWithOisy({ to: S.principal, amountE8s: amount, onStatus: (m) => toast(m, "info") });
+    S.oisyAccount = owner;
+    store("nb-oisy", owner);
+    toast(`${icp(amount)} ICP sent from OISY; the balance updates in a moment.`, "ok");
+    setTimeout(() => void icpBalance().then((b) => { if (S.community) { S.community.balance = b; renderChannels(); } if (S.board) render(); }), 3000);
+  } catch (e) { toast(errMsg(e), "error"); }
+}
+
+// --- the Work tab: tasks, projects, meetings, decisions, people, reminders, weekly review
+
+const workNotes = () => (S.notes ?? []).filter((n) => n.path.endsWith(".md") && !n.agent).map((n) => ({ ...n, content: S.drafts.get(n.path)?.text ?? n.content })).filter((n) => !quizKind(n.content) && (frontmatter(n.content).data.type ?? "").trim().toLowerCase() !== "review"); // quiz options and the weekly review's own list are not tasks
+const overdueCount = () => (S.notes ? parseTasks(workNotes()).filter((t) => isOverdue(t, new Date())).length : 0);
+type Project = { path: string; name: string; status: string; goal: string; milestones: { text: string; done: boolean }[]; folder: string; open: number; done: number };
+function projects(): Project[] {
+  const notes = workNotes();
+  const tasks = parseTasks(notes);
+  return notes.filter((n) => (frontmatter(n.content).data.type ?? "").trim().toLowerCase() === "project").map((n) => {
+    const fm = frontmatter(n.content).data;
+    const folder = dir(n.path);
+    const ms = (section(n.content, "Milestones") ?? "").split("\n").map((l) => /^\s*[-*+]\s+(?:\[([ xX])\]\s+)?(.+)$/.exec(l)).filter(Boolean).map((m) => ({ text: m![2].trim(), done: (m![1] ?? " ").toLowerCase() === "x" }));
+    const inside = tasks.filter((t) => folder ? t.path.startsWith(`${folder}/`) : t.path === n.path);
+    return { path: n.path, name: headings(n.content)[0]?.text ?? title(n.path), status: (fm.status ?? "active").trim(), goal: fm.goal ?? "", milestones: ms, folder, open: inside.filter((t) => !t.done).length, done: inside.filter((t) => t.done).length };
+  });
+}
+const BUILTIN_TEMPLATES: Record<string, string> = {
+  "Slide show": SLIDES_TEMPLATE,
+  "Meeting": MEETING_TEMPLATE("{{title}}", "{{date}}"),
+  "1:1": "---\ntype: meeting\ndate: {{date}}\nattendees: [@name]\n---\n# 1:1 with @name\n\n## How are things\n\n- \n\n## Their topics\n\n- \n\n## My topics\n\n- \n\n## Decisions\n\n- \n\n## Actions\n\n- [ ] @name  📅 {{date}}\n- [ ] @me  📅 {{date}}\n",
+  "Decision record": "---\ndate: {{date}}\nstatus: proposed\n---\n# {{title}}\n\n## Context\n\nWhat is forcing a decision now.\n\n## Options\n\n1. \n2. \n\nDecision:: \n\n## Consequences\n\n- \n",
+  "One-pager": "---\ndate: {{date}}\n---\n# {{title}}\n\n**Problem.** \n\n**Proposal.** \n\n**Why now.** \n\n**What it costs.** \n\n**What we will measure.** \n\n## Open questions\n\n- [ ] \n",
+  "Post-mortem": "---\ndate: {{date}}\n---\n# {{title}}\n\n## What happened\n\n| Time | Event |\n| --- | --- |\n| | |\n\n## Impact\n\n\n\n## Root cause\n\n\n\n## What went well\n\n- \n\n## What we will change\n\n- [ ] @owner  📅 {{date}}\n",
+  "Proposal": "---\ndate: {{date}}\nstatus: draft\n---\n# {{title}}\n\n## Summary\n\n\n\n## Goals\n\n- \n\n## Plan\n\n| Phase | Owner | When |\n| --- | --- | --- |\n| | @ | |\n\n## Risks\n\n- \n\nDecision:: pending\n",
+  "Person": "---\ntype: person\nrole: \nteam: \n---\n# {{title}}\n\n## Context\n\n\n\n## Last 1:1\n\n\n\n## Open with them\n\n- [ ] \n",
+  "Project": "---\ntype: project\nstatus: active\ngoal: \n---\n# {{title}}\n\n## Milestones\n\n- [ ] \n\n## Notes\n\n",
+};
+function workTab(): string {
+  const today = new Date();
+  const notes = workNotes();
+  const tasks = sortTasks(parseTasks(notes), today).filter((t) => !t.done);
+  const owners = [...new Set(tasks.map((t) => t.owner).filter((o): o is string => !!o))].sort();
+  const shown = S.taskOwner ? tasks.filter((t) => t.owner === S.taskOwner) : tasks;
+  const byNote = new Map<string, typeof tasks>();
+  for (const t of shown) byNote.set(t.path, [...(byNote.get(t.path) ?? []), t]);
+  const meetings = notes.filter((n) => isMeeting(n.content)).map((n) => parseMeeting(n.path, n.content)).sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
+  const weekAgo = new Date(today); weekAgo.setDate(today.getDate() - 7);
+  const projs = projects();
+  const decs = decisions(notes);
+  const ppl = people(notes);
+  const rems = reminders(notes);
+  const taskRow = (t: typeof tasks[number]) => `<label class="task-row ${isOverdue(t, today) ? "overdue" : ""}"><input type="checkbox" name="taskdone" data-path="${esc(t.path)}" data-line="${t.line}"><span class="md inline">${renderMd(t.text, t.path)}</span>${t.due ? `<span class="pill ${isOverdue(t, today) ? "low" : ""}">${icon("calendar")}${esc(t.due)}</span>` : ""}</label>`;
+  return `<section class="main" style="overflow:auto"><div class="page">
+    <div class="stats">
+      <div class="stat"><div class="label">Open tasks</div><div class="num">${tasks.length}</div><div class="small muted">${tasks.filter((t) => isOverdue(t, today)).length} overdue</div></div>
+      <div class="stat"><div class="label">Projects</div><div class="num">${projs.filter((p) => p.status !== "done").length}</div><div class="small muted">${projs.length} in all</div></div>
+      <div class="stat"><div class="label">Meetings this week</div><div class="num">${meetings.filter((m) => (m.date ?? "") >= dayKey(weekAgo)).length}</div><div class="small muted">${meetings.length} in all</div></div>
+      <div class="stat"><div class="label">Reminders</div><div class="num">${rems.filter((r) => r.at.getTime() <= Date.now() + 86_400_000).length}</div><div class="small muted">due within a day</div></div>
+    </div>
+    <div class="row tight nudge"><button type="button" class="btn btn-primary" data-action="new-meeting">${icon("calendar")}New meeting</button><label class="btn">${icon("upload")}Import .ics<input type="file" name="ics" accept=".ics,text/calendar" multiple hidden></label><button type="button" class="btn" data-action="weekly-review">${icon("history")}Weekly review</button><button type="button" class="btn" data-action="new-from-template">${icon("template")}New from template</button><button type="button" class="btn btn-ghost" data-action="quick-capture" title="${MOD}⇧N">${icon("plus")}Quick capture</button></div>
+    <div class="card band">
+      <h2>${icon("check")} Tasks <span class="count">${shown.length}</span></h2>
+      <p class="muted small">Every open <code>- [ ]</code> across the notebook. Dates as <code>📅 2026-10-14</code>, owners as <code>@name</code>, priority with ⏫ or 🔼. Overdue first.</p>
+      ${owners.length ? `<div class="row tight"><button type="button" class="tag-chip ${S.taskOwner ? "" : "active"}" data-action="task-owner" data-owner="">Everyone</button>${owners.map((o) => `<button type="button" class="tag-chip ${S.taskOwner === o ? "active" : ""}" data-action="task-owner" data-owner="${esc(o)}">@${esc(o)}</button>`).join("")}</div>` : ""}
+      ${byNote.size ? [...byNote.entries()].map(([p, ts]) => `<div class="band-title"><a href="#" data-action="open" data-path="${esc(p)}">${esc(title(p))}</a></div>${ts.map(taskRow).join("")}`).join("") : `<p class="small muted">Nothing open. Add <code>- [ ] something 📅 ${dayKey(today)}</code> to any note.</p>`}
+    </div>
+    <div class="card band">
+      <h2>${icon("board")} Projects <span class="count">${projs.length}</span></h2>
+      <p class="muted small">A note with <code>type: project</code> (and <code>status:</code>, <code>goal:</code>, a <code>## Milestones</code> list) marks its folder as a project; progress comes from the tasks in that folder.</p>
+      ${projs.length ? `<div class="runs">${projs.map((p) => { const total = p.open + p.done; const pct = total ? Math.round((p.done / total) * 100) : 0; return `<div class="run"><span><b><a href="#" data-action="open" data-path="${esc(p.path)}">${esc(p.name)}</a></b> <span class="pill ${p.status === "done" ? "ok" : p.status === "blocked" ? "low" : ""}">${esc(p.status)}</span>${p.goal ? `<br><span class="small muted">${esc(p.goal)}</span>` : ""}${p.milestones.length ? `<br><span class="small">${p.milestones.map((m) => `${m.done ? "☑" : "☐"} ${esc(m.text)}`).join(" · ")}</span>` : ""}</span><span class="small muted" style="min-width:160px;text-align:right">${p.done}/${total} tasks <span class="meter inline"><i style="width:${pct}%"></i></span></span></div>`; }).join("")}</div>` : `<p class="small muted">No projects yet. New from template → Project.</p>`}
+    </div>
+    <div class="card band">
+      <h2>${icon("calendar")} Meetings <span class="count">${meetings.length}</span></h2>
+      ${meetings.length ? `<div class="runs">${meetings.slice(0, 20).map((m) => `<div class="run"><span><b><a href="#" data-action="open" data-path="${esc(m.path)}">${esc(m.title)}</a></b> <span class="small muted">${esc(m.date ?? "")}${m.attendees.length ? ` · ${m.attendees.map((a) => `@${esc(a)}`).join(" ")}` : ""} · ${m.decisions.filter(Boolean).length} decision${m.decisions.filter(Boolean).length === 1 ? "" : "s"}, ${actionCards(m).length} action${actionCards(m).length === 1 ? "" : "s"}</span></span><span class="row tight"><button type="button" class="btn btn-ghost" data-action="follow-up" data-path="${esc(m.path)}" title="Copy or mail the decisions and actions">${icon("mail")}Follow-up</button><button type="button" class="btn btn-ghost" data-action="actions-to-board" data-path="${esc(m.path)}" title="Add the action items to a kanban board">${icon("board")}To board</button></span></div>`).join("")}</div>` : `<p class="small muted">No meeting notes yet. New meeting, or import an .ics invite.</p>`}
+    </div>
+    <div class="card band">
+      <h2>${icon("check")} Decisions <span class="count">${decs.length}</span></h2>
+      <p class="muted small">Every <code>Decision:: …</code> line and the Decisions section of meeting notes, newest first.</p>
+      ${decs.length ? `<div class="runs">${decs.slice(0, 50).map((d) => `<div class="run"><span>${esc(d.text)}</span><span class="small muted">${esc(d.date ?? "")} · <a href="#" data-action="open" data-path="${esc(d.path)}">${esc(title(d.path))}</a></span></div>`).join("")}</div>` : `<p class="small muted">None recorded.</p>`}
+    </div>
+    <div class="card band">
+      <h2>${icon("person")} People <span class="count">${ppl.length}</span></h2>
+      <p class="muted small">Everyone mentioned as <code>@name</code>, with their person note (<code>type: person</code>) when there is one.</p>
+      ${ppl.length ? `<div class="runs">${ppl.slice(0, 40).map((p) => `<div class="run"><span><b>${p.path ? `<a href="#" data-action="open" data-path="${esc(p.path)}">${esc(p.name)}</a>` : esc(p.name)}</b> <span class="small muted">${[p.role, p.team].filter((x): x is string => !!x).map(esc).join(" · ")}</span></span><span class="row tight"><span class="small muted">${p.mentions.length} mention${p.mentions.length === 1 ? "" : "s"}</span>${p.path ? "" : `<button type="button" class="btn btn-ghost" data-action="new-person" data-name="${esc(p.name)}">${icon("plus")}Person note</button>`}</span></div>`).join("")}</div>` : `<p class="small muted">Nobody mentioned yet.</p>`}
+    </div>
+    <div class="card band">
+      <h2>${icon("bell")} Reminders <span class="count">${rems.length}</span></h2>
+      <p class="muted small">A <code>remind: 2026-10-14 09:00</code> property fires a notification while the app is open and badges the Work icon.</p>
+      ${rems.length ? `<div class="runs">${rems.map((r) => `<div class="run"><span><a href="#" data-action="open" data-path="${esc(r.path)}">${esc(r.text)}</a></span><span class="small ${r.at.getTime() <= Date.now() ? "danger" : "muted"}">${r.at.toLocaleString()}</span></div>`).join("")}</div>` : `<p class="small muted">None set.</p>`}
+      ${"Notification" in window && Notification.permission === "default" ? `<button type="button" class="btn btn-ghost" data-action="notify-allow">${icon("bell")}Allow notifications</button>` : ""}
+    </div>
+  </div></section>`;
+}
+async function newMeeting(ev?: { summary: string; start: string; attendees: string[]; description: string }) {
+  const date = ev?.start || dayKey(new Date());
+  const name = ev?.summary ?? (await ask({ title: "New meeting", label: "Title", placeholder: "Roadmap review", ok: "Create" }));
+  if (!name?.trim()) return;
+  const path = `Meetings/${date} ${name.trim().replace(/[#^[\]|\\/:]/g, " ")}.md`;
+  if (note(path)) return ev ? undefined : open(path);
+  const agenda = ev?.description ? ev.description.split("\n").map((l) => l.trim()).filter(Boolean).slice(0, 8) : [];
+  await newNote(path, "Meetings", undefined, MEETING_TEMPLATE(name.trim(), date, ev?.attendees.map((a) => a.replace(/\s+/g, "").replace(/@.*/, "")) ?? [], agenda));
+}
+async function importIcs(files: FileList) {
+  let made = 0;
+  for (const f of files) for (const ev of parseIcs(await f.text())) { await newMeeting(ev); made++; }
+  toast(`${made} meeting note${made === 1 ? "" : "s"} created under Meetings/.`, "ok");
+}
+function followUp(path: string, el: HTMLElement) {
+  const m = parseMeeting(path, draftOf(path).text);
+  const text = meetingSummary(m);
+  const r = el.getBoundingClientRect();
+  contextMenu(r.left, r.bottom + 4, "Follow-up", [
+    { label: "Copy for Slack or chat", icon: "copy", action: () => void copy(text).then(() => toast("Summary copied.", "ok")) },
+    { label: "Mail the attendees", icon: "mail", action: () => { location.href = `mailto:${encodeURIComponent(m.attendees.filter((a) => a.includes("@")).join(","))}?subject=${encodeURIComponent(`${m.title}: decisions and actions`)}&body=${encodeURIComponent(text)}`; } },
+    { label: "Add actions to a board", icon: "board", action: () => void actionsToBoard(path) },
+  ]);
+}
+async function actionsToBoard(path: string) {
+  const cards = actionCards(parseMeeting(path, draftOf(path).text));
+  if (!cards.length) return toast("No action items in this meeting note.", "info");
+  const boards = paths().filter((p) => p.endsWith(".md") && isKanban(draftOf(p).text));
+  const target = boards.length ? await ask({ title: "Which board?", label: "Board", choices: [...boards.map((b) => ({ value: b, label: title(b) })), { value: "__new__", label: "New board: Actions" }], ok: "Add" }) : "__new__";
+  if (target === null) return;
+  const board = target === "__new__" ? "Actions.md" : target;
+  if (!note(board)) await newNote(board, "", undefined, NEW_BOARD.replace("- [ ] First task", cards.join("\n")));
+  else updateBoard(board, (b) => { const lane = b.lanes[0]; for (const c of cards) lane.cards.push({ text: c.replace(/^- \[ \] /, ""), done: false }); });
+  toast(`${cards.length} action${cards.length === 1 ? "" : "s"} on ${title(board)}.`, "ok");
+}
+function downloadBytes(name: string, bytes: Uint8Array | string, type: string) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([bytes as BlobPart], { type }));
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+/** The home-screen shortcut: the last notebook you were in (or the first), then a blank Inbox note. */
+async function captureRoute() {
+  if (!S.identity) { location.hash = "#/"; return; }
+  if (!S.notebooks) await loadNotebooks();
+  const last = store("nb-last")?.match(/^#\/notebook\/([a-z0-9-]+)/)?.[1];
+  const id = (last && S.notebooks?.some((v) => v.canister.toText() === last) ? last : S.notebooks?.[0]?.canister.toText());
+  if (!id) { location.hash = "#/"; return; }
+  if (S.notebook?.canister.toText() !== id) await openNotebook(id);
+  await quickCapture();
+}
+async function quickCapture() {
+  const d = new Date();
+  const p = `Inbox/${dayKey(d)} ${String(d.getHours()).padStart(2, "0")}${String(d.getMinutes()).padStart(2, "0")}.md`;
+  await newNote(p, "Inbox", undefined, "");
+  const pn = pane(); pn.view = "edit"; render();
+}
+const dismissed = () => new Set(JSON.parse(store("nb-rem-done") ?? "[]") as string[]);
+function checkReminders() {
+  if (!S.notes) return;
+  const done = dismissed();
+  for (const r of reminders(workNotes())) {
+    const key = `${r.path}@${r.at.getTime()}`;
+    if (r.at.getTime() > Date.now() || done.has(key)) continue;
+    done.add(key);
+    store("nb-rem-done", JSON.stringify([...done].slice(-200)));
+    toast(`Reminder: ${r.text}`, "info");
+    if ("Notification" in window && Notification.permission === "granted") new Notification(r.text, { body: r.path });
+  }
+}
+setInterval(checkReminders, 60_000);
+
+// --- the Study tab: due cards, attempts, glossary, sources, goals, stats, export
+
+function studyTab(): string {
+  const today = new Date();
+  const decks = deckPaths().map((p) => ({ path: p, due: dueCount(p, note(p)!.content), total: parseCards(note(p)!.content).length, stats: S.settings.deckStats[p] }));
+  const quizzes = (S.notes ?? []).filter((n) => n.path.endsWith(".md") && quizKind(n.content) === "choice").map((n) => n.path);
+  const g = glossary(S.notes ?? []);
+  const src = sources(S.notes ?? []);
+  const week: string[] = []; for (let i = 0; i < 7; i++) { const d = new Date(today); d.setDate(today.getDate() - i); week.push(dayKey(d)); }
+  const created = countByDay((S.notes ?? []).filter((n) => n.path.endsWith(".md") && !n.agent).map((n) => n.created));
+  const notesWeek = goalProgress(created, week, S.settings.goals.notesPerWeek ?? 0);
+  const cardsToday = goalProgress(new Map(Object.entries(S.settings.study)), [dayKey(today)], S.settings.goals.cardsPerDay ?? 0);
+  const st = streak(today, new Map([...created].map(([k, v]) => [k, v + (S.settings.study[k] ?? 0)])));
+  const byQuiz = new Map<string, Attempt[]>();
+  for (const a of S.attempts) byQuiz.set(a.path, [...(byQuiz.get(a.path) ?? []), a]);
+  return `<section class="main" style="overflow:auto"><div class="page">
+    <div class="stats">
+      <div class="stat"><div class="label">Due today</div><div class="num ${dueTotal() ? "accent" : ""}">${dueTotal()}</div><div class="small muted">cards across ${decks.length} deck${decks.length === 1 ? "" : "s"}</div></div>
+      <div class="stat"><div class="label">Reviewed today</div><div class="num">${S.settings.study[dayKey(today)] ?? 0}</div><div class="small muted">${S.settings.goals.cardsPerDay ? `goal ${S.settings.goals.cardsPerDay} a day` : "no daily goal yet"}</div></div>
+      <div class="stat"><div class="label">Notes this week</div><div class="num">${notesWeek.done}</div><div class="small muted">${S.settings.goals.notesPerWeek ? `goal ${S.settings.goals.notesPerWeek} a week` : "no weekly goal yet"}</div></div>
+      <div class="stat"><div class="label">Streak</div><div class="num">${st}</div><div class="small muted">day${st === 1 ? "" : "s"} with notes or reviews</div></div>
+    </div>
+    <div class="card band">
+      <h2>${icon("check")} Due today</h2>
+      ${decks.length ? `<div class="runs">${decks.map((d) => `<div class="run"><span><b>${esc(title(d.path))}</b> <span class="small muted">${d.due} due of ${d.total}${d.stats?.reviews ? ` · ${Math.round((d.stats.good / d.stats.reviews) * 100)}% got it` : ""}</span></span><span class="row tight"><button type="button" class="btn ${d.due ? "btn-primary" : ""}" data-action="open" data-path="${esc(d.path)}">${icon(d.due ? "check" : "eye")}${d.due ? "Review" : "Study anyway"}</button><button type="button" class="btn btn-ghost icon-btn" data-action="anki" data-path="${esc(d.path)}" title="Export for Anki" aria-label="Export for Anki">${icon("download")}</button></span></div>`).join("")}</div>` : `<p class="small muted">No flashcard decks yet. Make one from the command palette, or open any note and choose "Make flashcards" from its menu.</p>`}
+      ${quizzes.length ? `<div class="band-title">Quizzes</div><div class="runs">${quizzes.map((q) => `<div class="run"><span><b>${esc(title(q))}</b> <span class="small muted">${parseChoice(note(q)!.content).length} questions${byQuiz.get(q)?.length ? ` · ${byQuiz.get(q)!.length} attempt${byQuiz.get(q)!.length === 1 ? "" : "s"} by others` : ""}</span></span><button type="button" class="btn" data-action="open" data-path="${esc(q)}">${icon("list")}Take it</button></div>`).join("")}</div>` : ""}
+    </div>
+    ${S.attempts.length ? `<div class="card band"><h2>${icon("bot")} Attempts on your shared quizzes</h2><p class="muted small">People you shared a quiz or deck with, and how they did. Newest first.</p><div class="runs">${S.attempts.slice(0, 50).map((a) => `<div class="run"><span><b>${esc(title(a.path))}</b> <span class="small muted">${shortPrincipal(a.who.toText())}</span></span><span class="small muted">${when(a.at)}</span><span class="pill ${a.score * 2 >= a.total ? "ok" : "low"}">${a.score}/${a.total}</span></div>`).join("")}</div></div>` : ""}
+    <form class="card band" data-form="goals">
+      <h2>${icon("star")} Goals</h2>
+      <p class="muted small">The activity grid on the notebooks page shades each day against your goal once one is set.</p>
+      <div class="row tight"><label class="field"><span class="label">Notes a week</span><input class="input" name="notesPerWeek" type="number" min="0" value="${S.settings.goals.notesPerWeek ?? ""}" placeholder="3" style="max-width:120px"></label><label class="field"><span class="label">Cards a day</span><input class="input" name="cardsPerDay" type="number" min="0" value="${S.settings.goals.cardsPerDay ?? ""}" placeholder="20" style="max-width:120px"></label><button type="submit" class="btn btn-primary" style="align-self:flex-end">Save goals</button></div>
+      ${S.settings.goals.notesPerWeek || S.settings.goals.cardsPerDay ? `<div class="row tight nudge">${S.settings.goals.notesPerWeek ? `<span class="small">Notes: ${notesWeek.done}/${notesWeek.goal} this week <span class="meter inline"><i style="width:${Math.round(notesWeek.ratio * 100)}%"></i></span></span>` : ""}${S.settings.goals.cardsPerDay ? `<span class="small">Cards: ${cardsToday.done}/${cardsToday.goal} today <span class="meter inline"><i style="width:${Math.round(cardsToday.ratio * 100)}%"></i></span></span>` : ""}</div>` : ""}
+    </form>
+    <div class="card band">
+      <h2>${icon("book")} Glossary <span class="count">${g.length}</span></h2>
+      <p class="muted small">Every <code>Term:: definition</code> line in your notes. Terms are underlined in reading view; hover for the definition.</p>
+      ${g.length ? `<dl class="glossary">${g.map((e) => `<div class="gl-row"><dt>${esc(e.term)}</dt><dd>${esc(e.definition)} <a href="#" class="small muted" data-action="open" data-path="${esc(e.path)}">${esc(title(e.path))}</a></dd></div>`).join("")}</dl>` : `<p class="small muted">Nothing defined yet.</p>`}
+    </div>
+    <div class="card band">
+      <h2>${icon("link")} Sources <span class="count">${src.length}</span></h2>
+      <p class="muted small">From <code>source:</code> in each note's properties. "Cite source" in a note's menu adds a footnote with it.</p>
+      ${src.length ? `<div class="runs">${src.map((x) => `<div class="run"><span><b>${/^https?:\/\//.test(x.source) ? `<a href="${esc(x.source)}" target="_blank" rel="noopener">${esc(x.source)}</a>` : esc(x.source)}</b></span><span class="small">${x.notes.map((n) => `<a href="#" data-action="open" data-path="${esc(n)}">${esc(title(n))}</a>`).join(", ")}</span></div>`).join("")}</div>` : `<p class="small muted">No sources yet.</p>`}
+    </div>
+  </div></section>`;
+}
+async function loadAttempts() {
+  try { const r = await nb().all_attempts(); if (r.__kind__ === "Ok") S.attempts = r.Ok; } catch { /* none */ }
+  if (S.tab === "study") render();
+}
+
+/** Notes made from a note: flashcards beside it, summaries and questions under Study/. */
+async function studyNote(kind: "cards" | "summary" | "explain" | "questions", path: string) {
+  const n = note(path);
+  if (!n) return;
+  const text = draftOf(path).text;
+  const t = title(path);
+  const target = kind === "cards" ? `${dir(path) ? `${dir(path)}/` : ""}${t} (cards).md` : `Study/${t} ${kind === "summary" ? "summary" : kind === "explain" ? "explained" : "questions"}.md`;
+  const content = kind === "cards" ? cardsFromNote(text, t) : kind === "summary" ? summarise(text, t) : kind === "explain" ? explain(text, t) : `---\nsource: [[${t}]]\n---\n\n# ${t}: check yourself\n\n${questionsFor(text).map((q) => `- [ ] ${q}`).join("\n")}\n`;
+  if (note(target) && (await ask({ title: `Replace “${title(target)}”?`, body: "It exists already; its content will be overwritten.", ok: "Replace" })) === null) return;
+  if (note(target)) { onDraftInput(target, content); await save(target); await open(target); }
+  else await newNote(target, dir(target), undefined, content);
+  toast(kind === "cards" ? "Deck made; edit the cards as you like." : "Written; it is an extract until a model is connected, so rewrite it in your words.", "ok");
+}
+async function citeSource(path: string) {
+  let text = draftOf(path).text;
+  if (!frontmatter(text).data.source) {
+    const src = await ask({ title: "Source for this note", label: "URL, book, lecture…", placeholder: "https://… or Author, Title (year)", ok: "Add" });
+    if (!src?.trim()) return;
+    text = setFrontmatter(text, { ...frontmatter(text).data, source: src.trim() });
+  }
+  onDraftInput(path, cite(text));
+  toast("Footnote added at the end of the note.", "ok");
+}
+
+// --- Jupyter notebooks: cells, outputs, Python in a worker
+
+// --- spreadsheets: a grid of inputs; values are patched in place so typing never loses focus
+const sheetTab = new Map<string, number>(); // path -> active sheet index
+const wbOf = (path: string): Workbook => parseWorkbook(draftOf(path).text);
+function sheetHtml(path: string, text: string): string {
+  const wb = parseWorkbook(text);
+  const si = Math.min(sheetTab.get(path) ?? 0, wb.sheets.length - 1);
+  const sh = wb.sheets[si];
+  const vals = evaluate(wb).get(sh.name) ?? [];
+  const nrows = Math.max(sh.rows.length + 5, 25);
+  const ncols = Math.max(...sh.rows.map((r) => r.length), 0) + 2 > 8 ? Math.max(...sh.rows.map((r) => r.length)) + 2 : 8;
+  const ro = S.mobile;
+  const cell = (r: number, c: number) => {
+    const raw = sh.rows[r]?.[c] ?? "";
+    const v = vals[r]?.[c] ?? null;
+    const f = fmt(v);
+    return `<td><input class="cell ${typeof v === "number" ? "num" : ""} ${f.startsWith("#") && raw.startsWith("=") ? "err" : ""} ${raw.startsWith("=") ? "fx" : ""}" name="cell" data-path="${esc(path)}" data-s="${si}" data-r="${r}" data-c="${c}" data-raw="${esc(raw)}" value="${esc(f)}" title="${raw.startsWith("=") ? esc(raw) : ""}" aria-label="${colName(c)}${r + 1}" autocomplete="off" spellcheck="false" ${ro ? "readonly" : ""}></td>`;
+  };
+  const head = `<tr><th class="rn"></th>${Array.from({ length: ncols }, (_, c) => `<th>${colName(c)}</th>`).join("")}</tr>`;
+  const body = Array.from({ length: nrows }, (_, r) => `<tr><th class="rn">${r + 1}</th>${Array.from({ length: ncols }, (_, c) => cell(r, c)).join("")}</tr>`).join("");
+  const charts = sh.charts.map((ch) => `<figure class="sheet-chart" data-chart="${esc(ch.id)}">${chartSvg(vals, ch)}${ro ? "" : `<span class="chart-tools"><button type="button" class="btn btn-ghost icon-btn" data-action="sheet-chart-edit" data-path="${esc(path)}" data-id="${esc(ch.id)}" title="Edit chart" aria-label="Edit chart">${icon("edit")}</button><button type="button" class="btn btn-ghost icon-btn" data-action="sheet-chart-del" data-path="${esc(path)}" data-id="${esc(ch.id)}" title="Remove chart" aria-label="Remove chart">${icon("x")}</button></span>`}</figure>`).join("");
+  return `<div class="sheet-tabs">${wb.sheets.map((x, i) => `<button type="button" class="stab ${i === si ? "on" : ""}" data-action="sheet-tab" data-path="${esc(path)}" data-i="${i}" title="${i === si ? "Click to rename" : x.name}">${esc(x.name)}${ro || wb.sheets.length < 2 ? "" : `<span class="stab-x" data-action="sheet-del" data-path="${esc(path)}" data-i="${i}" title="Delete sheet">${icon("x")}</span>`}</button>`).join("")}${ro ? "" : `<button type="button" class="stab add" data-action="sheet-add" data-path="${esc(path)}" title="Add a sheet">${icon("plus")}</button>`}</div>
+    <div class="grid-wrap"><table class="grid" data-grid><thead>${head}</thead><tbody>${body}</tbody></table>${ro ? "" : `<button type="button" class="btn btn-ghost more-rows" data-action="sheet-rows" data-path="${esc(path)}">${icon("plus")}20 rows</button>`}</div>
+    ${charts ? `<div class="sheet-charts">${charts}</div>` : ""}`;
+}
+function refreshSheet(path: string) {
+  document.querySelectorAll<HTMLElement>(`.shx[data-sheet="${CSS.escape(path)}"]`).forEach((h) => { h.innerHTML = sheetHtml(path, draftOf(path).text); afterRender(h); });
+}
+/** Recompute and patch every visible cell and chart without rebuilding the grid (keeps focus and caret). */
+function syncSheet(path: string) {
+  const wb = wbOf(path);
+  const all = evaluate(wb);
+  document.querySelectorAll<HTMLElement>(`.shx[data-sheet="${CSS.escape(path)}"]`).forEach((h) => {
+    const si = Math.min(sheetTab.get(path) ?? 0, wb.sheets.length - 1);
+    const sh = wb.sheets[si];
+    const vals = all.get(sh.name) ?? [];
+    h.querySelectorAll<HTMLInputElement>("input[name=cell]").forEach((inp) => {
+      const r = Number(inp.dataset.r), c = Number(inp.dataset.c);
+      const raw = sh.rows[r]?.[c] ?? "";
+      const v = vals[r]?.[c] ?? null;
+      const f = fmt(v);
+      inp.dataset.raw = raw;
+      inp.title = raw.startsWith("=") ? raw : "";
+      inp.classList.toggle("num", typeof v === "number");
+      inp.classList.toggle("fx", raw.startsWith("="));
+      inp.classList.toggle("err", f.startsWith("#") && raw.startsWith("="));
+      if (document.activeElement !== inp) inp.value = f;
+    });
+    h.querySelectorAll<HTMLElement>(".sheet-chart").forEach((fig) => { const ch = sh.charts.find((x) => x.id === fig.dataset.chart); const svg = fig.querySelector("svg"); if (ch && svg) svg.outerHTML = chartSvg(vals, ch); });
+  });
+}
+function updateWorkbook(path: string, f: (wb: Workbook) => void, rebuild = false) {
+  const wb = wbOf(path);
+  f(wb);
+  onDraftInput(path, serializeWorkbook(wb));
+  if (rebuild) refreshSheet(path); else syncSheet(path);
+  refreshDashes();
+}
+function commitCell(inp: HTMLInputElement) {
+  const v = inp.value;
+  if (v === inp.dataset.raw) return;
+  const p = inp.dataset.path!, si = Number(inp.dataset.s), r = Number(inp.dataset.r), c = Number(inp.dataset.c);
+  updateWorkbook(p, (wb) => { const sh = wb.sheets[si]; while (sh.rows.length <= r) sh.rows.push([]); while (sh.rows[r].length <= c) sh.rows[r].push(""); sh.rows[r][c] = v; });
+  void save(p);
+}
+const cellAt = (inp: HTMLInputElement, dr: number, dc: number) => inp.closest("table")?.querySelector<HTMLInputElement>(`input[name=cell][data-r="${Number(inp.dataset.r) + dr}"][data-c="${Number(inp.dataset.c) + dc}"]`);
+function newSheetNote(folder?: string) {
+  const where = folder ?? (cur() ? dir(cur()!) : "");
+  const have = new Set(paths());
+  let name = "Sheet";
+  for (let i = 1; have.has(`${where ? `${where}/` : ""}${name}.sheet`); i++) name = `Sheet ${i}`;
+  return newNote(`${where ? `${where}/` : ""}${name}.sheet`, where, undefined, NEW_WORKBOOK);
+}
+/** Every `.sheet` note's computed values as CSV, by name and by path, for `sheet("Name")` in Python. */
+function sheetsForPython(): Record<string, Record<string, string>> {
+  const out: Record<string, Record<string, string>> = {};
+  for (const n of S.notes ?? []) {
+    if (!isSheetPath(n.path)) continue;
+    const wb = parseWorkbook(S.drafts.get(n.path)?.text ?? n.content);
+    const all = evaluate(wb);
+    const tabs: Record<string, string> = {};
+    for (const sh of wb.sheets) tabs[sh.name] = sheetCsv(all.get(sh.name) ?? []);
+    out[stem(n.path)] = tabs;
+    out[n.path] = tabs;
+  }
+  return out;
+}
+/** Rename a sheet and every `Name!A1` reference to it, on every sheet of the workbook. */
+function renameSheet(path: string, i: number, name: string) {
+  updateWorkbook(path, (wb) => {
+    const old = wb.sheets[i].name;
+    if (!name || wb.sheets.some((s, j) => j !== i && s.name.toLowerCase() === name.toLowerCase())) { toast("A sheet with that name exists.", "error"); return; }
+    wb.sheets[i].name = name;
+    const re = new RegExp(`(^|[^A-Za-z0-9_'])(?:'${old.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}'|${old.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})!`, "gi");
+    const quoted = /[^A-Za-z0-9_]/.test(name) ? `'${name}'` : name;
+    for (const s of wb.sheets) s.rows = s.rows.map((r) => r.map((c) => (c.startsWith("=") ? c.replace(re, `$1${quoted}!`) : c)));
+  }, true);
+}
+/** Add or edit a chart with a live preview: type, columns, palette or custom colours, legend, labels, stacking. */
+function chartDialog(path: string, id?: string) {
+  const wb = wbOf(path);
+  const si = Math.min(sheetTab.get(path) ?? 0, wb.sheets.length - 1);
+  const sh = wb.sheets[si];
+  const vals = evaluate(wb).get(sh.name) ?? [];
+  const ch: Chart = sh.charts.find((c) => c.id === id) ?? { id: "", type: "bar", title: "", labels: "A", values: ["B"] };
+  const scrim = document.createElement("div");
+  scrim.className = "scrim";
+  const sel = (name: string, opts: [string, string][], v: string) => `<select class="input" name="${name}">${opts.map(([k, l]) => `<option value="${k}" ${k === v ? "selected" : ""}>${l}</option>`).join("")}</select>`;
+  scrim.innerHTML = `<form class="modal wide" role="dialog" aria-modal="true" aria-labelledby="ch-t">
+    <h2 id="ch-t">${icon("graph")} ${id ? "Edit chart" : "Add a chart"}</h2>
+    <div class="grid2">
+      <label class="field"><span class="label">Type</span>${sel("type", [["bar", "Bars (several columns make groups)"], ["line", "Lines (one per column)"], ["area", "Area"], ["pie", "Pie (first value column)"]], ch.type)}</label>
+      <label class="field"><span class="label">Title</span><input class="input" name="title" value="${esc(ch.title)}" placeholder="Optional"></label>
+      <label class="field"><span class="label">Label column</span><input class="input" name="labels" value="${esc(ch.labels)}" placeholder="A"></label>
+      <label class="field"><span class="label">Value columns, comma separated</span><input class="input" name="values" value="${esc(ch.values.join(", "))}" placeholder="B, C"></label>
+      <label class="field"><span class="label">Palette</span>${sel("palette", Object.keys(PALETTES).map((k) => [k, k]), ch.palette ?? "default")}</label>
+      <label class="field"><span class="label">Custom colours (hex, comma separated; beats the palette)</span><input class="input" name="colors" value="${esc((ch.colors ?? []).join(", "))}" placeholder="#4f8cff, #f0a742"></label>
+      <label class="field"><span class="label">Legend</span>${sel("legend", [["auto", "Automatic"], ["right", "Right"], ["bottom", "Bottom"], ["none", "None"]], ch.legend ?? "auto")}</label>
+      <label class="field"><span class="label">Axis titles (x, y)</span><div class="row tight"><input class="input" name="xLabel" value="${esc(ch.xLabel ?? "")}" placeholder="x"><input class="input" name="yLabel" value="${esc(ch.yLabel ?? "")}" placeholder="y"></div></label>
+    </div>
+    <div class="row tight nudge"><label class="switch"><input type="checkbox" name="showValues" ${ch.showValues ? "checked" : ""}> Show values</label><label class="switch"><input type="checkbox" name="stacked" ${ch.stacked ? "checked" : ""}> Stack series</label><label class="switch"><input type="checkbox" name="smooth" ${ch.smooth ? "checked" : ""}> Smooth lines</label></div>
+    <div class="chart-preview nudge" data-preview></div>
+    <div class="actions"><button type="button" class="btn" data-x="cancel">Cancel</button><button type="submit" class="btn btn-primary">${id ? "Save" : "Add"}</button></div>
+  </form>`;
+  const read = (): Chart => {
+    const g = (n: string) => scrim.querySelector<HTMLInputElement | HTMLSelectElement>(`[name=${n}]`)!.value.trim();
+    const on = (n: string) => scrim.querySelector<HTMLInputElement>(`[name=${n}]`)!.checked;
+    const legend = g("legend");
+    return { id: ch.id, type: g("type") as ChartType, title: g("title"), labels: (g("labels") || "A").toUpperCase(), values: g("values").split(/[,\s]+/).filter(Boolean).map((v) => v.toUpperCase()), palette: g("palette"), colors: g("colors").split(/[,\s]+/).filter((c) => /^#[0-9a-f]{3,8}$/i.test(c)), legend: legend === "auto" ? undefined : (legend as Chart["legend"]), xLabel: g("xLabel") || undefined, yLabel: g("yLabel") || undefined, showValues: on("showValues") || undefined, stacked: on("stacked") || undefined, smooth: on("smooth") || undefined };
+  };
+  const preview = () => { scrim.querySelector("[data-preview]")!.innerHTML = chartSvg(vals, read()); };
+  preview();
+  scrim.addEventListener("input", preview);
+  const close = () => scrim.remove();
+  scrim.addEventListener("click", (e) => { if (e.target === scrim) close(); });
+  scrim.querySelector("[data-x=cancel]")!.addEventListener("click", close);
+  scrim.querySelector("form")!.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const c = read();
+    if (!c.values.length) return toast("Pick at least one value column.", "error");
+    updateWorkbook(path, (w) => { const sheet = w.sheets[si]; if (id) { const i = sheet.charts.findIndex((x) => x.id === id); if (i >= 0) sheet.charts[i] = c; } else addChart(sheet, c); }, true);
+    void save(path);
+    close();
+  });
+  document.body.append(scrim);
+  scrim.querySelector<HTMLElement>("[name=title]")?.focus();
+}
+
+// --- dashboards: `.dash` notes that mash up charts, cell values and Jupyter outputs from other notes
+type Tile = { id: string; kind: "chart" | "kpi" | "cell"; source: string; sheet?: string; chart?: string; ref?: string; cell?: string; label?: string; w?: 1 | 2 };
+type Dash = { tiles: Tile[] };
+const isDashPath = (p: string) => p.toLowerCase().endsWith(".dash");
+const NEW_DASH = `{\n "tiles": []\n}\n`;
+const parseDash = (json: string): Dash => { try { const d = JSON.parse(json) as Partial<Dash>; return { tiles: Array.isArray(d.tiles) ? d.tiles.filter((t) => t && typeof t.source === "string").map((t) => ({ ...t, id: t.id ?? Math.random().toString(36).slice(2, 8) })) : [] }; } catch { return { tiles: [] }; } };
+const dashOf = (path: string) => parseDash(draftOf(path).text);
+const noteText = (path: string): string | undefined => S.drafts.get(path)?.text ?? note(path)?.content;
+function tileHtml(path: string, t: Tile): string {
+  const src = noteText(t.source);
+  const link = `<a href="#" class="tile-src" data-action="open" data-path="${esc(t.source)}" title="Open ${esc(t.source)}">${icon("out")}${esc(stem(t.source))}</a>`;
+  const tools = S.mobile ? "" : `<span class="tile-tools"><button type="button" class="btn btn-ghost icon-btn" data-action="dash-move" data-path="${esc(path)}" data-id="${esc(t.id)}" data-d="-1" title="Move earlier" aria-label="Move earlier">${icon("chevron")}</button><button type="button" class="btn btn-ghost icon-btn flip" data-action="dash-move" data-path="${esc(path)}" data-id="${esc(t.id)}" data-d="1" title="Move later" aria-label="Move later">${icon("chevron")}</button><button type="button" class="btn btn-ghost icon-btn" data-action="dash-width" data-path="${esc(path)}" data-id="${esc(t.id)}" title="${t.w === 2 ? "Half width" : "Full width"}" aria-label="Toggle width">${icon("columns")}</button><button type="button" class="btn btn-ghost icon-btn" data-action="dash-del" data-path="${esc(path)}" data-id="${esc(t.id)}" title="Remove tile" aria-label="Remove tile">${icon("x")}</button></span>`;
+  let title = t.label ?? "", body = "";
+  if (src === undefined) body = `<div class="empty-side">Source not found: ${esc(t.source)}</div>`;
+  else if (t.kind === "cell") {
+    const nb = parseNotebook(src);
+    const c = nb.cells.find((x) => x.id === t.cell);
+    title ||= c?.source.split("\n")[0]?.replace(/^#\s*/, "") ?? "Cell";
+    body = c ? `<div class="nb-outputs">${c.outputs.filter((o) => o.kind !== "error").map(outputHtml).join("") || `<div class="empty-side">No output yet; run the cell.</div>`}</div>` : `<div class="empty-side">That cell is gone.</div>`;
+  } else {
+    const wb = parseWorkbook(src);
+    const sh = wb.sheets.find((x) => x.name === t.sheet) ?? wb.sheets[0];
+    const vals = evaluate(wb).get(sh.name) ?? [];
+    if (t.kind === "kpi") {
+      const r = parseRef(t.ref ?? "");
+      const v = r ? vals[r.r]?.[r.c] ?? null : "#REF!";
+      title ||= `${sh.name}!${t.ref ?? ""}`;
+      body = `<div class="kpi ${typeof v === "string" && v.startsWith("#") ? "err" : ""}">${esc(fmt(v))}</div>`;
+    } else {
+      const ch = sh.charts.find((x) => x.id === t.chart);
+      title ||= ch?.title || `${sh.name} chart`;
+      body = ch ? chartSvg(vals, { ...ch, title: "" }) : `<div class="empty-side">That chart was removed from the sheet.</div>`;
+    }
+  }
+  return `<section class="tile ${t.w === 2 ? "w2" : ""}" data-tile="${esc(t.id)}"><header class="tile-head"><b>${esc(title)}</b>${link}${tools}</header><div class="tile-body">${body}</div></section>`;
+}
+function dashHtml(path: string, text: string): string {
+  const d = parseDash(text);
+  return d.tiles.length ? d.tiles.map((t) => tileHtml(path, t)).join("") : `<div class="chat-empty"><h3>Empty dashboard</h3><p class="muted small">Add tiles: charts and cell values from spreadsheet notes, outputs from Python notebooks. Each tile links back to its source.</p></div>`;
+}
+function refreshDashes() { document.querySelectorAll<HTMLElement>(".dsh[data-dash]").forEach((h) => { h.innerHTML = dashHtml(h.dataset.dash!, draftOf(h.dataset.dash!).text); afterRender(h); }); }
+function updateDash(path: string, f: (d: Dash) => void) { const d = dashOf(path); f(d); onDraftInput(path, `${JSON.stringify(d, null, 1)}\n`); refreshDashes(); }
+function newDashNote(folder?: string) {
+  const where = folder ?? (cur() ? dir(cur()!) : "");
+  const have = new Set(paths());
+  let name = "Dashboard";
+  for (let i = 1; have.has(`${where ? `${where}/` : ""}${name}.dash`); i++) name = `Dashboard ${i}`;
+  return newNote(`${where ? `${where}/` : ""}${name}.dash`, where, undefined, NEW_DASH);
+}
+/** Pick a source note and what to show from it. */
+function tileDialog(path: string) {
+  const sources = (S.notes ?? []).filter((n) => isSheetPath(n.path) || isNotebookPath(n.path)).map((n) => n.path).sort();
+  if (!sources.length) return toast("Make a spreadsheet or Python notebook first; tiles come from those.", "info");
+  const scrim = document.createElement("div");
+  scrim.className = "scrim";
+  scrim.innerHTML = `<form class="modal" role="dialog" aria-modal="true" aria-labelledby="tl-t">
+    <h2 id="tl-t">${icon("graph")} Add a tile</h2>
+    <label class="field"><span class="label">Source note</span><select class="input" name="source">${sources.map((p) => `<option value="${esc(p)}">${esc(p)}</option>`).join("")}</select></label>
+    <label class="field nudge"><span class="label">What to show</span><select class="input" name="what"></select></label>
+    <label class="field nudge" data-ref hidden><span class="label">Cell (like B4)</span><input class="input" name="ref" value="B2"></label>
+    <label class="field nudge"><span class="label">Label (optional)</span><input class="input" name="label" placeholder="Uses the chart title"></label>
+    <label class="switch nudge"><input type="checkbox" name="wide"> Full width</label>
+    <div class="actions"><button type="button" class="btn" data-x="cancel">Cancel</button><button type="submit" class="btn btn-primary">Add</button></div>
+  </form>`;
+  const what = scrim.querySelector<HTMLSelectElement>("[name=what]")!;
+  const fill = () => {
+    const src = scrim.querySelector<HTMLSelectElement>("[name=source]")!.value;
+    const text = noteText(src) ?? "";
+    const opts: string[] = [];
+    if (isSheetPath(src)) {
+      const wb = parseWorkbook(text);
+      for (const sh of wb.sheets) { for (const c of sh.charts) opts.push(`<option value="chart:${esc(sh.name)}:${esc(c.id)}">${esc(sh.name)} · ${esc(c.title || `${c.type} chart`)}</option>`); opts.push(`<option value="kpi:${esc(sh.name)}">${esc(sh.name)} · one cell's value</option>`); }
+    } else {
+      for (const c of parseNotebook(text).cells) if (c.type === "code" && c.outputs.some((o) => o.kind === "image" || o.kind === "html")) opts.push(`<option value="cell:${esc(c.id)}">${esc(c.source.split("\n")[0].slice(0, 60) || "code cell")}</option>`);
+      if (!opts.length) opts.push(`<option value="" disabled selected>No cell has an image or table output yet</option>`);
+    }
+    what.innerHTML = opts.join("");
+    scrim.querySelector<HTMLElement>("[data-ref]")!.hidden = !what.value.startsWith("kpi:");
+  };
+  fill();
+  scrim.querySelector("[name=source]")!.addEventListener("change", fill);
+  what.addEventListener("change", () => { scrim.querySelector<HTMLElement>("[data-ref]")!.hidden = !what.value.startsWith("kpi:"); });
+  const close = () => scrim.remove();
+  scrim.addEventListener("click", (e) => { if (e.target === scrim) close(); });
+  scrim.querySelector("[data-x=cancel]")!.addEventListener("click", close);
+  scrim.querySelector("form")!.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const source = scrim.querySelector<HTMLSelectElement>("[name=source]")!.value;
+    const v = what.value;
+    if (!v) return toast("Nothing to show from that note yet.", "error");
+    const [kind, a, b] = v.split(":");
+    const label = scrim.querySelector<HTMLInputElement>("[name=label]")!.value.trim() || undefined;
+    const w = scrim.querySelector<HTMLInputElement>("[name=wide]")!.checked ? 2 : 1;
+    const t: Tile = kind === "chart" ? { id: "", kind: "chart", source, sheet: a, chart: b, label, w } : kind === "kpi" ? { id: "", kind: "kpi", source, sheet: a, ref: scrim.querySelector<HTMLInputElement>("[name=ref]")!.value.trim().toUpperCase(), label, w } : { id: "", kind: "cell", source, cell: a, label, w };
+    t.id = Math.random().toString(36).slice(2, 8);
+    updateDash(path, (d) => { d.tiles.push(t); });
+    void save(path);
+    close();
+  });
+  document.body.append(scrim);
+}
+async function importCsv(path: string, file: File) {
+  const rows = parseCsv(await file.text());
+  if (!rows.length) return toast("That CSV is empty.", "info");
+  const name = file.name.replace(/\.csv$/i, "") || "Import";
+  updateWorkbook(path, (wb) => { let n = name; for (let i = 2; wb.sheets.some((s) => s.name.toLowerCase() === n.toLowerCase()); i++) n = `${name} ${i}`; wb.sheets.push({ ...newSheet(n), rows }); sheetTab.set(path, wb.sheets.length - 1); }, true);
+  void save(path);
+  toast(`Imported ${rows.length} rows into a new sheet.`, "ok");
+}
+const nbEditing = new Map<string, Set<string>>(); // path -> markdown cells currently being edited
+const nbRunning = new Set<string>(); // cell ids
+function outputHtml(o: NbOutput): string {
+  switch (o.kind) {
+    case "text": return `<pre class="nb-out ${o.stream === "stderr" ? "err" : ""}">${esc(o.text)}</pre>`;
+    case "error": return `<pre class="nb-out err"><b>${esc(o.name)}</b>: ${esc(o.value)}\n${esc(o.traceback)}</pre>`;
+    case "image": return `<img class="nb-img" src="data:${esc(o.mime)};base64,${o.data}" alt="output">`;
+    case "html": return `<div class="nb-html">${DOMPurify.sanitize(o.html)}</div>`;
+  }
+}
+function notebookHtml(path: string, text: string): string {
+  const nb = parseNotebook(text);
+  const editing = nbEditing.get(path) ?? new Set<string>();
+  const ro = S.mobile;
+  const cell = (c: NbCell, i: number) => {
+    const tools = ro ? "" : `<span class="nb-tools"><button type="button" class="btn btn-ghost icon-btn" data-action="nb-move" data-path="${esc(path)}" data-i="${i}" data-d="-1" title="Move up" aria-label="Move up">${icon("updown")}</button><button type="button" class="btn btn-ghost icon-btn" data-action="nb-type" data-path="${esc(path)}" data-i="${i}" title="${c.type === "code" ? "Make it a text cell" : "Make it a code cell"}" aria-label="Change cell type">${icon(c.type === "code" ? "file" : "command")}</button><button type="button" class="btn btn-ghost icon-btn" data-action="nb-add" data-path="${esc(path)}" data-i="${i}" data-type="code" title="Add a code cell below" aria-label="Add code cell">${icon("plus")}</button><button type="button" class="btn btn-ghost icon-btn" data-action="nb-del" data-path="${esc(path)}" data-i="${i}" title="Delete cell" aria-label="Delete cell">${icon("trash")}</button></span>`;
+    if (c.type === "markdown") {
+      return editing.has(c.id) || !c.source.trim()
+        ? `<div class="nb-cell md-cell editing" data-cell="${esc(c.id)}"><div class="nb-gutter">md</div><div class="nb-body"><textarea class="nb-src" name="nbsrc" data-path="${esc(path)}" data-i="${i}" rows="${Math.max(2, c.source.split("\n").length)}" placeholder="Markdown…" ${ro ? "readonly" : ""}>${esc(c.source)}</textarea><div class="small muted">${ro ? "" : "Shift+Enter or click outside to render"}</div></div>${tools}</div>`
+        : `<div class="nb-cell md-cell" data-cell="${esc(c.id)}" data-action="nb-edit-md" data-path="${esc(path)}" data-i="${i}" title="${ro ? "" : "Double-click to edit"}"><div class="nb-gutter">md</div><div class="nb-body md">${renderMd(c.source, path)}</div>${tools}</div>`;
+    }
+    const running = nbRunning.has(c.id);
+    return `<div class="nb-cell code-cell ${running ? "running" : ""}" data-cell="${esc(c.id)}"><div class="nb-gutter">${ro ? "" : `<button type="button" class="btn btn-ghost icon-btn nb-run" data-action="nb-run" data-path="${esc(path)}" data-i="${i}" title="Run (Shift+Enter)" aria-label="Run cell">${icon(running ? "refresh" : "move")}</button>`}<span class="nb-count">[${running ? "*" : c.count ?? " "}]</span></div><div class="nb-body"><textarea class="nb-src code" name="nbsrc" data-path="${esc(path)}" data-i="${i}" rows="${Math.max(2, c.source.split("\n").length)}" spellcheck="false" placeholder="# python" ${ro ? "readonly" : ""}>${esc(c.source)}</textarea><div class="nb-outputs" data-outputs="${esc(c.id)}">${c.outputs.map(outputHtml).join("")}</div></div>${tools}</div>`;
+  };
+  return `${nb.cells.map(cell).join("")}${ro ? "" : `<div class="nb-addrow"><button type="button" class="btn btn-ghost" data-action="nb-add" data-path="${esc(path)}" data-i="${nb.cells.length - 1}" data-type="code">${icon("plus")}Code</button><button type="button" class="btn btn-ghost" data-action="nb-add" data-path="${esc(path)}" data-i="${nb.cells.length - 1}" data-type="markdown">${icon("plus")}Text</button></div>`}`;
+}
+function refreshNotebook(path: string) {
+  document.querySelectorAll<HTMLElement>(`.nbk[data-ipynb="${CSS.escape(path)}"]`).forEach((h) => { h.innerHTML = notebookHtml(path, draftOf(path).text); afterRender(h); });
+}
+/** Change the parsed notebook and write it back as nbformat JSON. */
+function updateNotebook(path: string, f: (nb: Nb) => void, rerender = true) {
+  const nb = parseNotebook(draftOf(path).text);
+  f(nb);
+  onDraftInput(path, serializeNotebook(nb));
+  if (rerender) refreshNotebook(path);
+}
+async function runCell(path: string, i: number) {
+  const nb = parseNotebook(draftOf(path).text);
+  const c = nb.cells[i];
+  if (!c || c.type !== "code") return;
+  nbRunning.add(c.id);
+  updateNotebook(path, (n) => { n.cells[i].outputs = []; });
+  document.querySelectorAll<HTMLElement>("[data-py-status]").forEach((e) => (e.textContent = pythonLoaded() ? "Running…" : "Loading Python (first run)…"));
+  const live: NbOutput[] = [];
+  const box = () => document.querySelector<HTMLElement>(`.nbk[data-ipynb="${CSS.escape(path)}"] [data-outputs="${CSS.escape(c.id)}"]`);
+  const r = await runPython(c.source, (o) => { live.push(o); const b = box(); if (b) b.innerHTML = live.map(outputHtml).join(""); }, sheetsForPython());
+  nbRunning.delete(c.id);
+  updateNotebook(path, (n) => { const cell = n.cells.find((x) => x.id === c.id); if (cell) { cell.outputs = r.outputs; cell.count = Math.max(0, ...n.cells.map((x) => x.count ?? 0)) + 1; } });
+  refreshDashes();
+  document.querySelectorAll<HTMLElement>("[data-py-status]").forEach((e) => (e.textContent = r.error ? "Error in the last cell" : "Python ready"));
+  return r;
+}
+function newPyNotebook(folder?: string) {
+  const where = folder ?? (cur() ? dir(cur()!) : "");
+  const have = new Set(paths());
+  let name = "Notebook";
+  for (let i = 1; have.has(`${where ? `${where}/` : ""}${name}.ipynb`); i++) name = `Notebook ${i}`;
+  return newNote(`${where ? `${where}/` : ""}${name}.ipynb`, where, undefined, NEW_IPYNB);
+}
+
+// --- kanban boards
+
+function boardHtml(path: string, text: string): string {
+  const b = parseBoard(text);
+  const lanes = b.lanes.map((l, li) => `<section class="kb-lane ${l.complete ? "complete" : ""}" data-lane="${li}">
+      <div class="kb-head"><input class="kb-title" name="kbtitle" value="${esc(l.title)}" data-path="${esc(path)}" data-lane="${li}" aria-label="Lane name" spellcheck="false"><span class="cnt">${l.cards.length}</span><button type="button" class="btn btn-ghost icon-btn" data-action="kb-lane-menu" data-path="${esc(path)}" data-lane="${li}" aria-label="Lane actions">${icon("more")}</button></div>
+      <div class="kb-cards" data-kb-drop data-lane="${li}">${l.cards.map((c, ci) => `<article class="kb-card ${c.done ? "done" : ""}" draggable="true" data-kb-card data-lane="${li}" data-idx="${ci}" data-path="${esc(path)}"><label class="kb-check"><input type="checkbox" name="kbdone" data-path="${esc(path)}" data-lane="${li}" data-idx="${ci}" ${c.done ? "checked" : ""} aria-label="Done"></label><div class="kb-text md">${renderMd(c.text, path)}</div><button type="button" class="btn btn-ghost icon-btn kb-del" data-action="kb-del" data-path="${esc(path)}" data-lane="${li}" data-idx="${ci}" aria-label="Delete card">${icon("x")}</button></article>`).join("")}</div>
+      <form class="kb-add" data-form="kb-add" data-path="${esc(path)}" data-lane="${li}"><input class="input" name="kbnew" placeholder="+ Add a card" aria-label="New card" autocomplete="off"></form>
+    </section>`).join("");
+  return `${lanes}<button type="button" class="kb-new-lane" data-action="kb-add-lane" data-path="${esc(path)}">${icon("plus")}Add lane</button>`;
+}
+/** Change a board and write it back as markdown; every open view of the note follows. */
+function updateBoard(path: string, f: (b: Board) => void) {
+  const b = parseBoard(draftOf(path).text);
+  f(b);
+  onDraftInput(path, serializeBoard(b));
+}
+let kbDrag: { path: string; lane: number; idx: number } | undefined;
+function newBoard(folder?: string) {
+  const where = folder ?? (cur() ? dir(cur()!) : "");
+  const have = new Set(paths());
+  let name = "Board";
+  for (let i = 1; have.has(`${where ? `${where}/` : ""}${name}.md`); i++) name = `Board ${i}`;
+  return newNote(`${where ? `${where}/` : ""}${name}.md`, where, undefined, NEW_BOARD);
+}
+
+// --- workspace: chat tab
+
+/** Folders a chat prompt may draw on: every folder (and the root) minus the ones switched off. */
+function chatFolders(): Set<string> {
+  const all = new Set<string>([""]);
+  for (const f of S.folders) all.add(f);
+  for (const p of paths()) { const d = dir(p); if (d) { all.add(d); let i = d.indexOf("/"); while (i > 0) { all.add(d.slice(0, i)); i = d.indexOf("/", i + 1); } } }
+  for (const x of S.chat.excluded) all.delete(x);
+  return all;
+}
+function chatHtml(): string {
+  const msgs = S.chat.messages.length
+    ? S.chat.messages.map((m) => `<div class="msg ${m.role}">${m.role === "you" ? `<div class="bubble">${esc(m.text)}</div>` : `<div class="bubble md">${renderMd(m.text)}</div>${m.picks?.length ? `<div class="sources">${m.picks.map((p) => `<button type="button" class="src" data-action="open" data-path="${esc(p.path)}" title="${esc(p.why.join("; "))}">${icon("file")}${esc(title(p.path))}</button>`).join("")}</div>` : ""}`}</div>`).join("")
+    : `<div class="chat-empty">${icon("chat")}<h3>Ask your notes</h3><p class="muted small">Type a question in plain language. The notebook picks the notes that look relevant from the folders ticked on the right and answers from them.</p></div>`;
+  return `<section class="main chat" data-chat>
+    <div class="chat-log">${msgs}${S.chat.busy ? `<div class="msg notes"><div class="bubble muted">Reading your notes…</div></div>` : ""}</div>
+    <form class="chat-ask" data-form="chat"><textarea class="input" name="chatq" rows="1" placeholder="Ask your notes…" title="↵ to send, ⇧↵ for a new line" aria-label="Ask your notes">${esc(S.chat.input)}</textarea><button type="submit" class="btn btn-primary icon-btn" title="Send" aria-label="Send" ${S.chat.busy ? "disabled" : ""}>${icon("send")}</button></form>
+  </section>`;
+}
+function chatAside(): string {
+  const on = chatFolders();
+  const all = [...new Set([...chatFolders(), ...S.chat.excluded])].sort();
+  const rows = all.map((f) => `<label class="switch chat-folder" style="--d:${f ? f.split("/").length : 0}"><input type="checkbox" name="chatfolder" value="${esc(f)}" ${on.has(f) ? "checked" : ""}>${icon(f === AGENT_ROOT ? "lock" : "folder")}${esc(f ? f.split("/").pop()! : "Top level")}</label>`).join("");
+  const last = [...S.chat.messages].reverse().find((m) => m.picks?.length);
+  return `<div class="pane-title">Folders to ask <span class="count">${on.size}/${all.length}</span></div>
+    <div class="row tight" style="padding:0 8px"><button type="button" class="btn btn-ghost" data-action="chat-folders" data-all="1">Select all</button><button type="button" class="btn btn-ghost" data-action="chat-folders" data-all="0">None</button></div>
+    <div class="chat-folders">${rows}</div>
+    ${last ? `<div class="pane-title">Notes used last</div>${last.picks!.map((p) => `<div class="bl" data-action="open" data-path="${esc(p.path)}"><div class="t">${icon("file")}${esc(stem(p.path))}</div><div class="ctx">${esc(p.why.join(" · "))}</div></div>`).join("")}` : ""}
+    <div class="pane-title">How it works</div><div class="empty-side">A quick System 1 pass scores every note on title, tags and word overlap, then the best few are quoted back. Nothing leaves the canister.</div>
+    ${S.chat.messages.length ? `<div style="padding:8px"><button type="button" class="btn btn-ghost" data-action="chat-clear">${icon("trash")}Clear chat</button></div>` : ""}`;
+}
+/** ponytail: the answer is composed locally from `decide`'s picks; later this sends prompt + picks to Gemini. */
+async function askNotes() {
+  const q = S.chat.input.trim();
+  if (!q || !S.notes || S.chat.busy) return;
+  S.chat.input = "";
+  S.chat.messages.push({ role: "you", text: q });
+  S.chat.busy = true;
+  render();
+  await new Promise((r) => setTimeout(r, 150)); // let the "reading" state paint; the model call goes here
+  const picks = decide(q, S.notes.map((n) => ({ ...n, content: S.drafts.get(n.path)?.text ?? n.content })), S.idx, { folders: chatFolders() });
+  S.chat.messages.push({ role: "notes", text: answer(q, picks), picks });
+  S.chat.busy = false;
+  render();
+  document.querySelector<HTMLTextAreaElement>("[name=chatq]")?.focus();
+}
+
+// --- workspace: graph tab
+
+function graphTab(): string {
+  const n = S.notes?.length ?? 0;
+  return `<section class="main"><div class="graph-wrap">
+      <canvas id="graph" aria-label="Knowledge graph of this notebook"></canvas>
+      <div class="graph-tools">
+        <label class="search" style="max-width:180px">${icon("search")}<input name="gq" value="${esc(S.graphStyle.query)}" placeholder="Find in graph" aria-label="Find in graph"></label>
+        <select class="input" name="gcolor" aria-label="Colour by" style="flex:0 0 auto;padding:5px 8px"><option value="none" ${S.graphStyle.colorBy === "none" ? "selected" : ""}>No groups</option><option value="folder" ${S.graphStyle.colorBy === "folder" ? "selected" : ""}>Colour by folder</option><option value="tag" ${S.graphStyle.colorBy === "tag" ? "selected" : ""}>Colour by first tag</option></select>
+        <label class="switch"><input type="checkbox" name="gattach" ${S.graphStyle.hideAttachments ? "checked" : ""}> Hide attachments</label>
+        <label class="switch"><input type="checkbox" name="gorphans" ${S.graphStyle.orphans ? "checked" : ""}> Orphans</label>
+        <label class="switch"><input type="checkbox" name="ghosts" ${S.graphGhosts ? "checked" : ""}> Unresolved</label>
+        <button type="button" class="btn btn-ghost" data-action="graph-fit" title="Fit to view (double-click the canvas)">${icon("fit")}Fit</button>
+        <span class="small muted">${n} notes · ${[...S.idx.links.values()].reduce((a, s) => a + s.size, 0)} links</span>
+      </div>
+      <div class="graph-legend"><span><i></i>note</span><span><i class="cur"></i>open note</span><span><i class="agent"></i>agent note</span><span><i class="ghost"></i>unresolved</span><span class="graph-groups"></span><span class="faint">drag to move · wheel to zoom · click to open</span></div>
+      ${n ? "" : `<div class="graph-empty">No notes to draw yet.</div>`}
+    </div></section>`;
+}
+
+// --- workspace: manage tab (cycles, export, canister)
+
+function manageTab(): string {
+  const i = S.info;
+  const v = S.notebook!;
+  const low = lowCycles(i);
+  const runway = i ? Math.min(100, (Number(i.cycles) / 3e12) * 100) : 0;
+  const rows = S.topups.length
+    ? `<div class="runs">${S.topups.map((t) => `<div class="run"><span><b>${icp(t.amount_e8s)} ICP</b> <span class="small muted">→ ${tc(t.cycles)} · ${t.from.toText() === v.canister.toText() ? "sent to the account" : shortPrincipal(t.from.toText())}</span></span><span class="small muted">${when(t.at)}</span><span class="pill ${t.status.__kind__ === "Failed" ? "low" : t.status.__kind__ === "Completed" ? "ok" : ""}">${t.status.__kind__}</span></div>`).join("")}</div>`
+    : `<p class="small muted">No top-ups yet.</p>`;
+  return `<section class="main" style="overflow:auto"><div class="page">
+    <div class="stats">
+      <div class="stat"><div class="label">Cycles left</div><div class="num ${low ? "danger" : ""}">${i ? tc(i.cycles) : "…"}</div><div class="meter"><i style="width:${runway}%"></i></div><div class="small muted nudge">${(() => { const h = S.health.get(v.canister.toText()); return h ? `Freezes below ${tc(h.freeze_at)} (90 days of idle burn, ${tc(h.idle_cycles_burned_per_day)}/day); about ${daysUntilFreeze(h)} days until then. A frozen notebook keeps its data 90 days, then it is deleted.` : low ? "Below the freezing line the canister stops answering until topped up." : "Comfortable. 3 TC is a full bar."; })()}</div></div>
+      <div class="stat"><div class="label">Files</div><div class="num">${i ? String(i.files) : "…"}</div><div class="small muted">${S.folders.length} folders</div></div>
+      <div class="stat"><div class="label">Stored</div><div class="num">${i ? kb(i.bytes) : "…"}</div><div class="small muted">note content</div></div>
+      <div class="stat"><div class="label">Topped up</div><div class="num">${i ? `${icp(i.total_topped_up_e8s)} ICP` : "…"}</div><div class="small muted">${i ? `→ ${tc(i.total_cycles_from_topups)}` : ""}</div></div>
+    </div>
+    <p class="small muted nudge">Canister <code>${v.canister.toText()}</code> · created ${when(v.created_at)} · controllers: you and the registry.</p>
+    <nav class="segmented sub" role="tablist" aria-label="Manage sections">${MANAGE_TABS.map(([k, label, ic]) => `<button type="button" role="tab" class="tab" aria-selected="${S.manageTab === k}" data-action="manage-tab" data-tab="${k}">${icon(ic)}<span class="lbl">${label}</span></button>`).join("")}</nav>
+    ${S.manageTab === "notebook" ? `<form class="card band" data-form="nb-meta"><h2>${esc(notebookEmoji(v))} Icon and description</h2><p class="muted small">What the notebook's card shows on the list. Leave the icon empty to let the app pick one from the name.</p><div class="row tight"><label class="field"><span class="label">Icon (one emoji)</span><input class="input" name="emoji" value="${esc(v.emoji ?? "")}" placeholder="${esc(notebookEmoji(v))}" maxlength="4" style="max-width:90px;font-size:1.3rem;text-align:center"></label><label class="field" style="flex:1;min-width:220px"><span class="label">Description</span><input class="input" name="desc" value="${esc(v.description ?? "")}" maxlength="280" placeholder="What it is for, who it is for"></label><button type="submit" class="btn btn-primary" style="align-self:flex-end" ${S.busy ? "disabled" : ""}>Save</button></div></form>` : ""}
+    ${S.manageTab === "finance" ? `
+    <div class="card band">
+      <h2>${icon("bolt")} Keep it running</h2>
+      <p class="muted small">The canister burns cycles for every call and for its memory. Top it up from your OISY wallet in ICP, ckBTC, ckETH, ckUSDC or ckUSDT; the registry converts whatever you send into this notebook's cycles at once and never keeps a token. Bitcoin, ether, USDC or USDT held natively in OISY: convert them to the ck version inside OISY first.</p>
+      <form class="row tight nudge" data-form="topup"><input class="input" name="topupAmount" inputmode="decimal" value="${esc(S.topupAmount)}" required aria-label="Amount" style="max-width:140px">${tokenSelect("paytoken", S.payToken)}<button type="submit" class="btn btn-primary" ${S.busy ? "disabled" : ""}>${icon("bolt")}${S.busy === "topup" ? "Waiting for the wallet…" : `Top up with ${payLabel()}`}</button></form>
+      <p class="small muted">${useOisy ? `Your OISY wallet opens and asks you to approve the amount plus one fee for the registry, which converts it into this notebook's cycles. ${S.oisyAccount ? `Last paid from <code>${esc(shortPrincipal(S.oisyAccount))}</code>.` : ""}` : "Approves the registry on the local ledger for the amount plus one fee; it converts it in one step."}</p>
+      ${autoTopupCard()}
+    </div>
+    <div class="band"><div class="band-title">Top-up history<button type="button" class="btn btn-ghost icon-btn" data-action="refresh-info" title="Refresh" aria-label="Refresh">${icon("refresh")}</button></div>${rows}</div>` : S.manageTab === "notebook" ? `
+    <div class="card band">
+      <h2>${icon("download")} Your data</h2>
+      <p class="muted small">Everything in this notebook as a zip of markdown files, folders included. Nothing leaves the canister except to you. Restore puts a zip back: existing notes are overwritten and notes missing from the zip are deleted (agent notes are kept).</p>
+      <div class="row tight"><button type="button" class="btn btn-primary" data-action="download" ${S.notes ? "" : "disabled"}>${icon("download")}Download notebook (.zip)</button><button type="button" class="btn" data-action="import" ${S.notes ? "" : "disabled"}>${icon("upload")}Import Obsidian vault…</button><button type="button" class="btn" data-action="restore" ${S.notes ? "" : "disabled"}>${icon("history")}Restore from zip…</button><span class="small muted">${S.notes ? `${S.notes.length} files · ${kb(S.notes.reduce((n, x) => n + x.content.length, 0))}` : ""}</span></div>
+    </div>
+    ${snapshotsCard()}
+    ${account()}` : S.manageTab === "sharing" ? `
+    ${sharesCard()}
+    ${publishCard()}` : S.manageTab === "agents" ? `
+    ${agentsCard()}
+    ${clipperCard()}` : `
+    ${sellCard()}`}
+  </div></section>`;
+}
+
+function workspace(): string {
+  if (S.tab === "manage") return shell(manageTab());
+  if (S.tab === "graph") return shell(graphTab());
+  if (S.tab === "study") return shell(studyTab());
+  if (S.tab === "work") return shell(workTab());
+  if (S.tab === "chat") return shell(`<div class="workspace m-${S.mobilePane} ${S.sideOpen ? "" : "no-side"} ${S.asideOpen ? "" : "no-aside"}"><nav id="side" class="side" aria-label="Files">${side()}</nav>${chatHtml()}<aside id="aside" class="aside" aria-label="Sources">${chatAside()}</aside></div>`);
+  return shell(`<div class="workspace m-${S.mobilePane} ${S.sideOpen ? "" : "no-side"} ${S.asideOpen ? "" : "no-aside"}"><nav id="side" class="side" aria-label="Files">${side()}</nav>${panesHtml()}<aside id="aside" class="aside" aria-label="Links">${aside()}</aside></div>`);
+}
+
+/** Full-screen slide show: arrows or a click move, Escape leaves. `dead` renders links dead (gists). */
+function showHtml(): string {
+  const sh = S.show!;
+  const slide = sh.slides[sh.i] ?? "";
+  return `<div class="show" role="dialog" aria-label="Slide show">
+    <div class="show-slide md" data-action="show-next">${sh.dead ? gistMd(slide) : renderMd(slide, sh.self)}</div>
+    <button type="button" class="btn btn-ghost icon-btn show-x" data-action="show-close" aria-label="Leave the slide show">${icon("x")}</button>
+    <div class="show-nav"><button type="button" class="btn btn-ghost icon-btn" data-action="show-prev" aria-label="Previous slide" ${sh.i === 0 ? "disabled" : ""}>${icon("chevron")}</button><span class="small">${sh.i + 1} / ${sh.slides.length}</span><button type="button" class="btn btn-ghost icon-btn flip" data-action="show-next" aria-label="Next slide" ${sh.i >= sh.slides.length - 1 ? "disabled" : ""}>${icon("chevron")}</button></div>
+  </div>`;
+}
+function present(content: string, self?: string, dead = false) {
+  const slides = splitSlides(content);
+  if (!slides.length) return toast("Nothing to present: separate slides with --- lines.", "info");
+  S.show = { slides, i: 0, self, dead };
+  render();
+  document.documentElement.requestFullscreen?.().catch(() => {});
+}
+function showStep(d: number) {
+  const sh = S.show;
+  if (!sh) return;
+  sh.i = Math.max(0, Math.min(sh.slides.length - 1, sh.i + d));
+  const el = document.querySelector(".show");
+  if (el) el.outerHTML = showHtml(); else render();
+  afterRender();
+}
+function closeShow() {
+  S.show = undefined;
+  if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+  render();
+}
+function render() {
+  const active = document.activeElement as HTMLElement | null;
+  const focusKey = active?.dataset?.action ?? (active as HTMLInputElement | null)?.name;
+  const ta = undefined as undefined | { pane?: string; s: number; e: number; top: number };
+  closeMenu();
+  unmountEditors(true);
+  const focusedPath = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>(".cm-host")?.dataset.cm;
+  const chatTop = document.querySelector<HTMLElement>("[data-chat-log]")?.scrollTop;
+  destroyEditors();
+  app.innerHTML = S.shared ? sharedPage() : S.board && S.identity ? boardPage() : S.community && S.identity ? communityPage() : S.market && S.identity ? marketPage() : S.admin && S.isAdmin ? adminPage() : !S.identity ? landing() : S.notebook ? workspace() : notebooksPage();
+  if (S.show) app.insertAdjacentHTML("beforeend", showHtml());
+  // a re-render must not move the reader: keep the chat where it was, or at the bottom
+  if (S.community) { const log = app.querySelector<HTMLElement>("[data-chat-log]"); if (log) { log.scrollTop = S.community.atBottom === false && chatTop !== undefined ? chatTop : log.scrollHeight; chatScrolled(); } }
+  mountEditors();
+  if (focusedPath) for (const [host, ed] of editors) if (host.dataset.cm === focusedPath) { ed.focus(); break; }
+  if (focusKey && focusKey !== "draft" && !focusedPath) app.querySelector<HTMLElement>(`[data-action="${focusKey}"], [name="${focusKey}"]`)?.focus();
+  if (ta) {
+    const el = app.querySelector<HTMLTextAreaElement>(`textarea[name=draft][data-pane="${ta.pane}"]`);
+    if (el) {
+      el.focus();
+      el.setSelectionRange(ta.s, ta.e);
+      el.scrollTop = ta.top;
+    }
+  }
+  mountGraphs();
+  persistTabs();
+  afterRender();
+  scrollPending();
+}
+let pendingScroll: { path: string; target: string } | undefined;
+/** After a `[[Note#Heading]]` or `[[Note#^block]]` opens, bring the target into view in that note's preview. */
+function scrollPending() {
+  if (!pendingScroll) return;
+  const { path, target } = pendingScroll;
+  const pv = document.querySelector<HTMLElement>(`[data-preview-path="${CSS.escape(path)}"]`);
+  if (!pv) return;
+  pendingScroll = undefined;
+  const el = target.startsWith("^")
+    ? pv.querySelector<HTMLElement>(`[data-block="${CSS.escape(target.slice(1))}"]`)?.parentElement
+    : [...pv.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6")].find((h) => (h.dataset.heading ?? h.textContent ?? "").trim().toLowerCase() === target.trim().toLowerCase());
+  if (el) {
+    el.scrollIntoView({ block: "start", behavior: "smooth" });
+    el.classList.add("flash");
+    setTimeout(() => el.classList.remove("flash"), 1500);
+  }
+}
+/** Sidebar and link pane only; leaves the textareas alone while typing. */
+function renderSide() {
+  const s = document.getElementById("side");
+  const a = document.getElementById("aside");
+  if (s) s.innerHTML = side();
+  if (a) a.innerHTML = aside();
+  const c = cur();
+  const n = c ? S.comments.filter((x) => x.path === c).length : 0;
+  document.querySelectorAll<HTMLElement>('[data-action="comments"]').forEach((b) => { b.querySelector(".badge")?.remove(); if (n) b.insertAdjacentHTML("beforeend", `<span class="badge">${n}</span>`); });
+  mountGraphs();
+}
+/** Status + tab dirty dots for one path, in every pane that shows it. */
+function status(path: string) {
+  const d = draftOf(path);
+  const text = d.saving ? "Saving…" : d.dirty ? "Unsaved" : "Saved";
+  const cls = d.saving ? "saving" : d.dirty ? "dirty" : "";
+  document.querySelectorAll<HTMLElement>(`[data-status-path="${CSS.escape(path)}"]`).forEach((el) => (el.innerHTML = `<i class="dot ${cls}"></i>${text}`));
+  document.querySelectorAll<HTMLElement>(`.tabitem[data-tab="${CSS.escape(path)}"]`).forEach((el) => {
+    const has = el.querySelector(".dot-dirty");
+    if (d.dirty && !has) el.querySelector(".tname")?.insertAdjacentHTML("afterend", `<span class="dot-dirty"></span>`);
+    if (!d.dirty && has) has.remove();
+  });
+}
+function mountGraphs() {
+  const gc = document.getElementById("graph") as HTMLCanvasElement | null;
+  graph?.destroy();
+  graph = undefined;
+  if (gc && S.notes) {
+    graph = new ForceGraph(gc, { cache: graphPos, onOpen: (id) => void open(id) });
+    applyGraph();
+  }
+  const mc = document.getElementById("mini") as HTMLCanvasElement | null;
+  mini?.destroy();
+  mini = undefined;
+  const c = cur();
+  if (mc && S.notes && c) {
+    mini = new ForceGraph(mc, { cache: miniPos, labels: "always", onOpen: (id) => void open(id) });
+    const d = graphData(S.notes, S.idx, { focus: c, depth: S.localDepth, unresolved: true });
+    mini.setData(d.nodes, d.edges, c);
+  }
+}
+
+const PALETTE = ["#4a8df6", "#2fbfa6", "#e2b53e", "#ef8f3d", "#ee6e6e", "#a978f5", "#5fd3e8", "#9ccc65", "#f48fb1", "#8d6e63"];
+/** Push the current filter and colouring into the graph view. */
+function applyGraph() {
+  if (!graph || !S.notes) return;
+  const notes = S.graphStyle.hideAttachments ? S.notes.filter((n) => !isAttachment(n.path)) : S.notes;
+  const d = graphData(notes, S.idx, { unresolved: S.graphGhosts });
+  const degree = new Map(d.nodes.map((n) => [n.id, n.degree]));
+  const nodes = S.graphStyle.orphans ? d.nodes.filter((n) => !degree.get(n.id)) : d.nodes;
+  const colors = new Map<string, string>();
+  const groups = new Map<string, string>();
+  const gcolor = (key: string) => { if (!groups.has(key)) groups.set(key, PALETTE[groups.size % PALETTE.length]); return groups.get(key)!; };
+  if (S.graphStyle.colorBy === "folder") for (const n of nodes) colors.set(n.id, gcolor(dir(n.id) || "/"));
+  if (S.graphStyle.colorBy === "tag") for (const n of nodes) { const t = [...S.idx.tags.entries()].find(([, ps]) => ps.has(n.id))?.[0]; if (t) colors.set(n.id, gcolor(t.split("/")[0])); }
+  const q = S.graphStyle.query.trim().toLowerCase();
+  const match = q ? new Set(nodes.filter((n) => n.label.toLowerCase().includes(q) || n.id.toLowerCase().includes(q)).map((n) => n.id)) : undefined;
+  graph.setStyle({ colors, match });
+  graph.setData(nodes, d.edges.filter((e) => S.graphStyle.orphans ? false : true), cur());
+  const legend = document.querySelector(".graph-groups");
+  if (legend) legend.innerHTML = [...groups.entries()].slice(0, 12).map(([k, c]) => `<span><i style="background:${c}"></i>${esc(k)}</span>`).join("");
+}
+
+/** Tabs and panes survive a reload, per notebook, in this browser. */
+function persistTabs() {
+  if (!S.notebook) return;
+  store(`nb-tabs-${S.notebook.canister.toText()}`, JSON.stringify({ panes: S.panes.map((p) => ({ tabs: p.tabs, active: p.active, view: p.view })), focused: S.panes.findIndex((p) => p.id === S.focused) }));
+}
+function restoreTabs() {
+  const raw = S.notebook && store(`nb-tabs-${S.notebook.canister.toText()}`);
+  const have = new Set(paths());
+  let panes: Pane[] = [];
+  let focusedIdx = 0;
+  if (raw) {
+    try {
+      const j = JSON.parse(raw) as { panes: { tabs: string[]; active?: string; view: View }[]; focused: number };
+      panes = j.panes.map((p) => ({ ...newPane(p.view), tabs: p.tabs.filter((t) => have.has(t)), active: p.active && have.has(p.active) ? p.active : undefined })).map((p) => ({ ...p, active: p.active ?? p.tabs[0] }));
+      panes = panes.filter((p, i) => p.tabs.length || i === 0);
+      focusedIdx = Math.min(Math.max(0, j.focused), panes.length - 1);
+    } catch {
+      panes = [];
+    }
+  }
+  if (!panes.length) {
+    panes = [newPane()];
+    // first visit: open the front page
+    if (have.has("index.md")) {
+      panes[0].tabs = ["index.md"];
+      panes[0].active = "index.md";
+    }
+  }
+  S.panes = panes;
+  S.focused = panes[focusedIdx].id;
+}
+
+// ---------- flows ----------
+
+async function signIn() {
+  S.signin = { busy: true, error: "" };
+  render();
+  try {
+    S.identity = devMode ? devIdentity(true) : await auth.signIn();
+    if (!S.identity) throw new Error("No identity was returned");
+    S.principal = S.identity.getPrincipal().toText();
+    S.signin = { busy: false, error: "" };
+    if (S.shared) return openShared(S.shared.canister, S.shared.path);
+    render();
+    await loadNotebooks();
+  } catch (e) {
+    S.signin = { busy: false, error: errMsg(e) || "The identity provider did not respond" };
+    render();
+  }
+}
+async function signOut() {
+  await saveAll();
+  if (devMode) {
+    store(DEV_ON, null);
+    devId = undefined;
+  } else await auth.signOut().catch(() => {});
+  Object.assign(S, { identity: undefined, principal: "", notebooks: undefined, notebook: undefined, notes: undefined, error: "", isAdmin: false, admin: undefined });
+  S.drafts.clear();
+  location.hash = "#/";
+  render();
+}
+
+async function loadNotebooks() {
+  try {
+    if (!REGISTRY) throw new Error("The registry canister ID is missing from this deployment");
+    registry().is_admin().then((v) => { if (v !== S.isAdmin) { S.isAdmin = v; render(); } }).catch(() => {});
+    registry().price().then((p) => { S.price = p; }).catch(() => {});
+    registry().tokens().then((t) => { S.tokens = t; }).catch(() => {});
+    S.notebooks = await registry().my_notebooks();
+    S.error = "";
+    render();
+    await Promise.all(S.notebooks.map(async (v) => {
+      try {
+        S.notebookInfo.set(v.canister.toText(), await notebookOf(v.canister.toText()).info());
+      } catch {
+        await loadHealth(v.canister.toText()); // frozen notebooks still report their health through the registry
+      }
+    }));
+    void loadActivity();
+  } catch (e) {
+    S.error = errMsg(e);
+    S.notebooks = [];
+  }
+  render();
+}
+
+async function createNotebook() {
+  S.busy = "create";
+  S.error = "";
+  render();
+  try {
+    let r;
+    if (S.price > 0n) {
+      const payer = await approvePayment(Principal.fromText(REGISTRY), S.price + ICP_FEE);
+      r = await registry().create_notebook_paid_by(S.newNotebook.trim(), payer);
+    } else r = await registry().create_notebook(S.newNotebook.trim());
+    if (r.__kind__ === "Err") throw new Error(r.Err);
+    if (S.newDesc.trim()) { try { await registry().set_notebook_meta(r.Ok.canister, null, S.newDesc.trim()); } catch { /* the card can be edited later */ } }
+    S.newNotebook = "";
+    S.newDesc = "";
+    toast(`Notebook “${r.Ok.name}” is live at ${r.Ok.canister.toText()}.`, "ok");
+    await loadNotebooks();
+    void openNotebook(r.Ok.canister.toText());
+  } catch (e) {
+    S.error = errMsg(e);
+  }
+  S.busy = "";
+  render();
+}
+
+function reindex() {
+  S.idx = buildIndex(S.notes ?? []);
+}
+
+async function loadNotebook() {
+  const a = nb();
+  const notes: Note[] = [];
+  let after: string | null = null;
+  do {
+    const page: { notes: Note[]; next?: string | null } = unwrap(await a.read_page(after, 300));
+    notes.push(...page.notes);
+    after = page.next ?? null;
+  } while (after);
+  const [folders, info, topups, keys, shares, settings] = await Promise.all([a.folders(), a.info(), a.topups(10), a.agent_keys(), a.shares(), a.get_settings()]);
+  S.agentKeys = keys.__kind__ === "Ok" ? keys.Ok : [];
+  S.shares = shares.__kind__ === "Ok" ? shares.Ok : [];
+  try {
+    const j = settings.__kind__ === "Ok" && settings.Ok ? (JSON.parse(settings.Ok) as Partial<Settings>) : {};
+    S.settings = parseSettings(j);
+  } catch {
+    S.settings = parseSettings(undefined);
+  }
+  S.recent = JSON.parse(store(`nb-recent-${S.notebook!.canister.toText()}`) ?? "[]") as string[];
+  const [cm, pub, at] = await Promise.all([a.all_comments(), a.published(), a.auto_topup()]);
+  S.comments = cm.__kind__ === "Ok" ? cm.Ok : [];
+  S.published = pub ?? null;
+  S.autoTopup = at;
+  S.fromCache = false;
+  void cacheSet(`nb:${S.notebook!.canister.toText()}`, { notes: S.notes, folders: S.folders, settings: S.settings, at: Date.now() });
+  S.notes = notes.sort((x, y) => x.path.localeCompare(y.path));
+  attachments.clear();
+  S.folders = unwrap(folders);
+  S.info = info;
+  S.topups = topups;
+  for (const [p, d] of S.drafts) if (!d.dirty) S.drafts.delete(p);
+  for (const p of S.panes) {
+    p.tabs = p.tabs.filter((t) => note(t));
+    if (p.active && !note(p.active)) p.active = p.tabs[0];
+  }
+  for (const p of paths()) void p;
+  reindex();
+}
+
+async function openNotebook(id: string, path?: string) {
+  const v = S.notebooks?.find((x) => x.canister.toText() === id);
+  if (!v) return;
+  S.notebook = v;
+  S.notes = undefined;
+  S.drafts.clear();
+  S.tab = "notes";
+  S.chat = { input: "", busy: false, messages: [], excluded: new Set(JSON.parse(store(`nb-chat-off-${id}`) ?? "[]") as string[]) };
+  S.query = S.tag = "";
+  S.error = "";
+  S.info = undefined;
+  S.frozen = false;
+  S.attest = S.listing = S.tokenId = S.deposits = undefined;
+  S.mobilePane = "files";
+  graphPos.clear();
+  miniPos.clear();
+  location.hash = `#/notebook/${id}`;
+  render();
+  try {
+    await loadNotebook();
+    restoreTabs();
+    void loadHealth(id).then((h) => { if (urgent(h) && S.notebook?.canister.toText() === id) { render(); freezeModal(id, h!); } });
+  } catch (e) {
+    const h = await loadHealth(id);
+    const cached = await cacheGet<{ notes: Note[]; folders: string[]; settings: Settings; at: number }>(`nb:${id}`);
+    if (h?.frozen) {
+      S.frozen = true;
+      S.notes = cached?.notes ?? [];
+      S.folders = cached?.folders ?? [];
+      S.fromCache = true;
+      reindex();
+      render();
+      freezeModal(id, h);
+      return;
+    }
+    if (cached) {
+      S.notes = cached.notes;
+      S.folders = cached.folders;
+      S.settings = parseSettings(cached.settings);
+      S.fromCache = true;
+      reindex();
+      restoreTabs();
+      toast(`Offline: showing the copy from ${ago(BigInt(cached.at) * 1_000_000n)}. Edits are queued until you are back online.`, "info");
+    } else {
+      toast(errMsg(e), "error");
+      S.notes = [];
+    }
+  }
+  S.pendingWrites = (await queued()).filter((q) => q.canister === id).length;
+  render();
+  if (path && note(path)) await open(path);
+  else if (cur()) syncHash();
+  if (lowCycles(S.info)) toast("This notebook is low on cycles. Top it up in Manage before it freezes.", "error");
+}
+
+async function loadSellInfo() {
+  if (!S.notebook) return;
+  const c = S.notebook.canister;
+  try {
+    nb().deposits().then((d) => { if (d.__kind__ === "Ok") { S.deposits = d.Ok; if (S.tab === "manage") render(); } }).catch(() => {});
+    const [a, l, id, fee] = await Promise.all([registry().attestation(c), registry().listing(c), registry().token_id(c), registry().market_fee()]);
+    S.attest = a ?? undefined;
+    S.listing = l ?? undefined;
+    S.tokenId = id ?? undefined;
+    S.marketFee = Number(fee);
+    if (!S.tokens.length) S.tokens = await registry().tokens();
+  } catch { /* the sell card shows what it has */ }
+  if (S.tab === "manage") render();
+}
+
+async function refreshInfo() {
+  if (!S.notebook) return;
+  try {
+    const a = nb();
+    [S.info, S.topups] = await Promise.all([a.info(), a.topups(10)]);
+  } catch (e) {
+    toast(errMsg(e), "error");
+  }
+  render();
+}
+
+function syncHash() {
+  const c = cur();
+  location.hash = `#/notebook/${S.notebook!.canister.toText()}${c ? `/${encodeURIComponent(c)}` : ""}`;
+}
+
+/** Open a note in the focused pane: replaces the active tab unless `newTab`; `paneId` targets a pane. */
+async function open(path: string, o: { newTab?: boolean; paneId?: number } = {}) {
+  const n = note(path);
+  if (!n) return;
+  const p = pane(o.paneId);
+  S.focused = p.id;
+  const i = p.tabs.indexOf(path);
+  if (i >= 0) p.active = path;
+  else if (o.newTab || !p.active) {
+    p.tabs.push(path);
+    p.active = path;
+  } else {
+    p.tabs[p.tabs.indexOf(p.active)] = path;
+    p.active = path;
+  }
+  draftOf(path);
+  S.recent = [path, ...S.recent.filter((r) => r !== path)].slice(0, 12);
+  store("nb-last", `#/notebook/${S.notebook!.canister.toText()}/${encodeURIComponent(path)}`);
+  { const lean = isLeanNote(draftOf(path).text) ? path : leanFor(path); void Promise.all([loadAttestations(path), lean && lean !== path ? loadAttestations(lean) : Promise.resolve()]).then(() => { if (cur() === path) { renderSide(); refreshPreviews(); } }); }
+  if (shareFor(path) && !shareFor(path)!.share.public && !S.groupProgress.has(path)) void nb().progress(path).then((r) => { if (r.__kind__ === "Ok") { S.groupProgress.set(path, r.Ok); renderSide(); } }).catch(() => {});
+  store(`nb-recent-${S.notebook!.canister.toText()}`, JSON.stringify(S.recent));
+  if (S.mobile) {
+    S.mobilePane = "note";
+    p.view = "preview"; // reading mode first on a phone
+  }
+  S.tab = "notes";
+  syncHash();
+  render();
+}
+
+function closeTab(paneId: number, path: string) {
+  const p = pane(paneId);
+  const i = p.tabs.indexOf(path);
+  if (i < 0) return;
+  p.tabs.splice(i, 1);
+  if (p.active === path) p.active = p.tabs[Math.min(i, p.tabs.length - 1)];
+  if (!p.tabs.length && S.panes.length > 1) {
+    S.panes = S.panes.filter((x) => x.id !== p.id);
+    if (S.focused === p.id) S.focused = S.panes[0].id;
+  }
+  if (!S.panes.flatMap((x) => x.tabs).includes(path) && !draftOf(path).dirty) S.drafts.delete(path);
+  syncHash();
+  render();
+}
+
+/** Move a tab (or a file from the tree) into `to` at `index`, or into a new pane after `to` when `split`. */
+function moveTab(from: number | undefined, path: string, to: number, index?: number, split = false) {
+  if (from !== undefined && from !== to) {
+    const src = pane(from);
+    src.tabs = src.tabs.filter((t) => t !== path);
+    if (src.active === path) src.active = src.tabs[0];
+  }
+  let dst = pane(to);
+  if (split) {
+    const np = newPane(dst.view);
+    S.panes.splice(S.panes.indexOf(dst) + 1, 0, np);
+    dst = np;
+  } else if (from === to) dst.tabs = dst.tabs.filter((t) => t !== path);
+  if (!dst.tabs.includes(path)) dst.tabs.splice(index === undefined ? dst.tabs.length : Math.min(index, dst.tabs.length), 0, path);
+  dst.active = path;
+  S.focused = dst.id;
+  S.panes = S.panes.filter((p, i) => p.tabs.length || (i === 0 && S.panes.length === 1) || p.id === dst.id);
+  if (!S.panes.find((p) => p.id === S.focused)) S.focused = S.panes[0].id;
+  draftOf(path);
+  syncHash();
+  render();
+}
+
+/** Edit → split → reading → edit, per pane; the desktop default is remembered. */
+/** Wrap the editor selection in `==…==`, or unwrap it when it already is a highlight (${MOD}⇧H). */
+function toggleHighlight() {
+  const host = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>(".cm-host");
+  const ed = host && editors.get(host);
+  if (!ed) return;
+  const { view } = ed;
+  const { from, to } = view.state.selection.main;
+  const doc = view.state.doc;
+  const inner = doc.sliceString(from, to);
+  if (from >= 2 && doc.sliceString(from - 2, from) === "==" && doc.sliceString(to, to + 2) === "==") {
+    view.dispatch({ changes: [{ from: from - 2, to: from }, { from: to, to: to + 2 }], selection: { anchor: from - 2, head: to - 2 } });
+  } else if (inner.startsWith("==") && inner.endsWith("==") && inner.length >= 4) {
+    view.dispatch({ changes: { from, to, insert: inner.slice(2, -2) }, selection: { anchor: from, head: to - 4 } });
+  } else {
+    view.dispatch({ changes: { from, to, insert: `==${inner}==` }, selection: { anchor: from + 2, head: to + 2 } });
+  }
+  view.focus();
+}
+
+function toggleSide(which: "side" | "aside") {
+  if (S.board) { const b = S.board; if (which === "side") { b.showSide = !b.showSide; store("nb-board-side", b.showSide ? "1" : "0"); } else { b.showAside = !b.showAside; store("nb-board-aside", b.showAside ? "1" : "0"); } return render(); }
+  if (S.community) { const c = S.community; if (which === "side") { c.showChannels = !c.showChannels; store("nb-chat-side", c.showChannels ? "1" : "0"); } else { c.showOnline = !c.showOnline; store("nb-chat-aside", c.showOnline ? "1" : "0"); } return render(); }
+  if (which === "side") { S.sideOpen = !S.sideOpen; store("nb-side", S.sideOpen ? "1" : "0"); } else { S.asideOpen = !S.asideOpen; store("nb-aside", S.asideOpen ? "1" : "0"); }
+  render();
+}
+
+function cycleView(paneId?: number) {
+  const p = pane(paneId);
+  p.view = p.view === "edit" ? "split" : p.view === "split" ? "preview" : "edit";
+  if (!S.mobile) store("nb-view", p.view);
+  render();
+}
+
+function splitRight(paneId: number) {
+  const p = pane(paneId);
+  if (!p.active) return toast("Open a note first, then split.", "info");
+  const np = newPane(p.view);
+  np.tabs = [p.active];
+  np.active = p.active;
+  S.panes.splice(S.panes.indexOf(p) + 1, 0, np);
+  S.focused = np.id;
+  render();
+}
+
+const saveTimers = new Map<string, number>();
+function scheduleSave(path: string) {
+  clearTimeout(saveTimers.get(path));
+  saveTimers.set(path, window.setTimeout(() => void save(path), 1000));
+}
+async function save(path: string) {
+  clearTimeout(saveTimers.get(path));
+  const d = S.drafts.get(path);
+  if (!S.notebook || !d || !d.dirty || d.saving || !note(path)) return;
+  const content = d.text;
+  d.saving = true;
+  status(path);
+  try {
+    if (S.offline || S.fromCache) throw new Error("offline");
+    const m = unwrap(await nb().write(path, content));
+    const n = note(path);
+    if (n) {
+      n.content = content;
+      n.modified = m.modified;
+    }
+    if (d.text === content) d.dirty = false;
+    reindex();
+    renderSide();
+    void cacheSet(`nb:${S.notebook.canister.toText()}`, { notes: S.notes, folders: S.folders, settings: S.settings, at: Date.now() });
+  } catch (e) {
+    if (errMsg(e) === "offline" || !navigator.onLine) {
+      await queueWrite({ canister: S.notebook.canister.toText(), path, content, at: Date.now() });
+      const n = note(path);
+      if (n) n.content = content;
+      if (d.text === content) d.dirty = false;
+      S.pendingWrites = (await queued()).filter((q) => q.canister === S.notebook!.canister.toText()).length;
+      toast(`Saved offline; ${S.pendingWrites} change${S.pendingWrites === 1 ? "" : "s"} will sync when you are back online.`, "info");
+    } else toast(`Could not save ${path}: ${errMsg(e)}`, "error");
+  }
+  d.saving = false;
+  status(path);
+  if (d.dirty) scheduleSave(path);
+}
+
+/** Replay writes made offline, then reload the notebook. */
+async function syncQueue() {
+  const all = await queued();
+  if (!all.length || !S.identity) return;
+  let ok = 0;
+  const left: Queued[] = [];
+  for (const q of all) {
+    try {
+      const r = await notebookOf(q.canister).write(q.path, q.content);
+      if (r.__kind__ === "Err") throw new Error(describe(r.Err));
+      ok++;
+    } catch {
+      left.push(q);
+    }
+  }
+  await clearQueue();
+  for (const q of left) await queueWrite(q);
+  S.pendingWrites = left.length;
+  if (ok) toast(`Synced ${ok} offline change${ok === 1 ? "" : "s"}.`, "ok");
+  if (S.notebook && !left.length) {
+    try {
+      await loadNotebook();
+      render();
+    } catch {
+      /* still offline */
+    }
+  }
+}
+window.addEventListener("online", () => { S.offline = false; render(); void syncQueue(); });
+window.addEventListener("offline", () => { S.offline = true; render(); });
+async function saveAll() {
+  await Promise.all([...S.drafts.keys()].map((p) => save(p)));
+}
+
+/** Apply a textarea edit from the editor helpers and let the normal input flow run. */
+function applyEdit(ta: HTMLTextAreaElement, e: { value: string; start: number; end: number }) {
+  ta.value = e.value;
+  ta.setSelectionRange(e.start, e.end);
+  ta.dispatchEvent(new Event("input", { bubbles: true }));
+}
+function onDraftInput(path: string, v: string, from?: HTMLElement) {
+  const d = draftOf(path);
+  if (d.text === v && !d.dirty) return;
+  d.text = v;
+  d.dirty = true;
+  if (S.shared && S.shared.path === path) {
+    S.shared.dirty = true;
+    clearTimeout(sharedSaveTimer);
+    sharedSaveTimer = window.setTimeout(() => void saveShared(), 1000);
+    return;
+  }
+  status(path);
+  for (const [host, ed] of editors) if (host !== from && host.dataset.cm === path) ed.setDoc(v);
+  document.querySelectorAll<HTMLElement>(`[data-preview-path="${CSS.escape(path)}"]`).forEach((pv) => {
+    pv.innerHTML = previewHtml(path, v);
+    afterRender(pv);
+  });
+  document.querySelectorAll<HTMLElement>(`[data-counts-path="${CSS.escape(path)}"]`).forEach((el) => (el.textContent = `${words(v)} words · ${v.length} characters`));
+  document.querySelectorAll<HTMLElement>(`.kb[data-kanban="${CSS.escape(path)}"]`).forEach((kb) => { kb.innerHTML = boardHtml(path, v); afterRender(kb); });
+  if (document.querySelector(`.qz[data-quiz="${CSS.escape(path)}"]`)) refreshQuiz(path);
+  if (from?.closest(".cm-host") && document.querySelector(`.nbk[data-ipynb="${CSS.escape(path)}"]`)) refreshNotebook(path);
+  document.querySelectorAll<HTMLElement>(`.cv-wrap[data-canvas="${CSS.escape(path)}"]`).forEach((cv) => { cv.innerHTML = canvasSvg(v); cv.dataset.mounted = ""; mountCanvasPanZoom(cv); cv.dataset.mounted = "1"; });
+  scheduleSave(path);
+}
+
+async function newNote(name?: string, folder?: string, paneId?: number, content = "") {
+  if (!S.notes) return;
+  const c = cur();
+  let where = folder ?? (c ? dir(c) : "");
+  if (isAgentPath(where)) where = "";
+  const path = name ? (/\.(md|ipynb|canvas|sheet|dash)$/i.test(name) ? name : `${name}.md`) : untitled(paths(), where);
+  try {
+    const m = unwrap(await nb().write(path, content));
+    S.notes.push({ path, content, created: m.created, modified: m.modified });
+    S.notes.sort((x, y) => x.path.localeCompare(y.path));
+    if (dir(path) && !S.folders.includes(dir(path))) S.folders = [...S.folders, dir(path)].sort();
+    reindex();
+    await open(path, { newTab: true, paneId });
+    if (S.mobile && !isExcalidraw(path)) {
+      pane().view = "edit";
+      render();
+    }
+    app.querySelector<HTMLInputElement>(`[name="title"][data-pane="${pane().id}"]`)?.select();
+  } catch (e) {
+    toast(errMsg(e), "error");
+    render();
+  }
+}
+
+/** A new Excalidraw drawing (`Drawing.excalidraw.md`, Obsidian's plugin format) in `folder`. */
+function newDrawing(folder?: string) {
+  const where = folder ?? (cur() ? dir(cur()!) : "");
+  const have = new Set(paths());
+  let name = "Drawing";
+  for (let i = 1; have.has(`${where ? `${where}/` : ""}${name}.excalidraw.md`); i++) name = `Drawing ${i}`;
+  return newNote(`${where ? `${where}/` : ""}${name}.excalidraw.md`, where, undefined, NEW_DRAWING);
+}
+
+/** Today's note in `Daily/`, from `Templates/Daily.md` when there is one. */
+async function openDaily() {
+  if (!S.notes) return;
+  const path = dailyPath();
+  if (note(path)) return open(path);
+  const tpl = note("Templates/Daily.md")?.content;
+  const content = tpl ? fillTemplate(tpl, { title: stem(path).split("/").pop()! }) : `# ${stem(path).split("/").pop()}\n\n`;
+  await newNote(path, "Daily", undefined, content);
+}
+/** Pick a note from `Templates/`, name the new note, fill `{{date}}`-style tokens. */
+async function newFromTemplate(folder?: string) {
+  const tpls = paths().filter((p) => p.startsWith("Templates/") && p.endsWith(".md"));
+  const t = await ask({ title: "New note from template", label: "Template", choices: [...tpls.map((p) => ({ value: p, label: stem(p).slice("Templates/".length) })), ...Object.keys(BUILTIN_TEMPLATES).map((k) => ({ value: `builtin:${k}`, label: `${k} (built in)` }))] });
+  if (!t) return;
+  const name = await ask({ title: "Name the note", label: "Name", placeholder: "Meeting with Ada", ok: "Create" });
+  if (!name?.trim()) return;
+  const body = t.startsWith("builtin:") ? BUILTIN_TEMPLATES[t.slice(8)] : note(t)!.content;
+  const sub = t === "builtin:Person" ? "People" : t === "builtin:Project" ? "" : t === "builtin:Meeting" || t === "builtin:1:1" ? "Meetings" : "";
+  const where = folder ?? (sub || (cur() && !isAgentPath(cur()!) ? dir(cur()!) : ""));
+  await newNote(`${where ? `${where}/` : ""}${name.trim()}`, where, undefined, fillTemplate(body, { title: name.trim() }));
+}
+async function saveSettings() {
+  try {
+    unwrap(await nb().set_settings(JSON.stringify(S.settings)));
+  } catch (e) {
+    toast(errMsg(e), "error");
+  }
+}
+async function toggleBookmark(path: string) {
+  const has = S.settings.bookmarks.includes(path);
+  S.settings.bookmarks = has ? S.settings.bookmarks.filter((p) => p !== path) : [...S.settings.bookmarks, path];
+  render();
+  await saveSettings();
+  toast(has ? "Bookmark removed." : "Bookmarked.", "ok");
+}
+/** Earlier versions of a note with a line diff against what is open now, and a restore button. */
+async function historyDialog(path: string) {
+  let revs: Revision[] = [];
+  try {
+    revs = unwrap(await nb().history(path));
+  } catch (e) {
+    return toast(errMsg(e), "error");
+  }
+  const scrim = document.createElement("div");
+  scrim.className = "scrim";
+  const list = revs.length ? revs.map((r) => `<div class="hist-row"><button type="button" class="btn btn-ghost" data-seq="${r.seq}">${icon("history")}v${r.seq}</button><span>${when(r.modified)}</span><span class="muted small">${kb(r.size)}${r.agent ? ` · agent ${esc(r.agent)}` : r.by.toText() === S.principal ? "" : ` · ${shortPrincipal(r.by.toText())}`}</span><span class="grow"></span><button type="button" class="btn" data-restore="${r.seq}">Restore</button></div>`).join("") : `<p class="muted">No earlier versions yet; one is kept every time the content changes (last 20).</p>`;
+  scrim.innerHTML = `<div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="hs-t"><h2 id="hs-t">${icon("history")} History of “${esc(stem(path))}”</h2><div class="runs">${list}</div><div class="diff" data-diff hidden></div><div class="actions"><button type="button" class="btn" data-x="cancel">Close</button></div></div>`;
+  const close = () => scrim.remove();
+  scrim.addEventListener("click", async (e) => {
+    if (e.target === scrim) return close();
+    const t = e.target as HTMLElement;
+    if (t.closest("[data-x=cancel]")) return close();
+    const seqEl = t.closest<HTMLElement>("[data-seq], [data-restore]");
+    if (!seqEl) return;
+    const seq = BigInt(seqEl.dataset.seq ?? seqEl.dataset.restore!);
+    try {
+      const rev = unwrap(await nb().revision(path, seq));
+      if (seqEl.dataset.restore) {
+        onDraftInput(path, rev.content);
+        await save(path);
+        close();
+        render();
+        toast(`Restored v${seq}; the replaced version is in the history too.`, "ok");
+        return;
+      }
+      const box = scrim.querySelector<HTMLElement>("[data-diff]")!;
+      box.hidden = false;
+      box.innerHTML = `<div class="small muted" style="padding:6px 10px">v${seq} → now</div>` + diffLines(rev.content, draftOf(path).text).map((r) => `<div class="${r.kind === "+" ? "add" : r.kind === "-" ? "del" : ""}">${esc(r.text) || " "}</div>`).join("");
+    } catch (err) {
+      toast(errMsg(err), "error");
+    }
+  });
+  document.body.append(scrim);
+}
+
+function retarget(from: string, to: string) {
+  for (const p of S.panes) {
+    p.tabs = p.tabs.map((t) => (t === from ? to : t));
+    if (p.active === from) p.active = to;
+  }
+  const d = S.drafts.get(from);
+  if (d) {
+    S.drafts.delete(from);
+    S.drafts.set(to, d);
+  }
+}
+
+async function renamePath(from: string, to: string) {
+  if (!S.notes) return;
+  const target = to.trim().replace(/^\/+/, "");
+  const path = target.endsWith(".md") || !from.endsWith(".md") ? target : `${target}.md`;
+  if (!target || path === from) return render();
+  await save(from);
+  try {
+    const r = unwrap(await nb().rename(from, path));
+    retarget(from, path);
+    await loadNotebook();
+    const n = r.relinked.filter((p) => p !== path).length;
+    toast(n ? `Renamed. Links updated in ${n} note${n === 1 ? "" : "s"}.` : "Renamed.", "ok");
+    syncHash();
+  } catch (e) {
+    toast(errMsg(e), "error");
+  }
+  render();
+}
+
+async function deletePath(path: string) {
+  if (!S.notes) return;
+  if (!(await confirmDialog(`Delete “${stem(path)}”?`, "The note is removed from the canister. Links to it in other notes become unresolved."))) return;
+  clearTimeout(saveTimers.get(path));
+  S.drafts.delete(path);
+  try {
+    unwrap(await nb().delete_(path));
+    S.notes = S.notes.filter((n) => n.path !== path);
+    for (const p of S.panes) {
+      const i = p.tabs.indexOf(path);
+      if (i >= 0) {
+        p.tabs.splice(i, 1);
+        if (p.active === path) p.active = p.tabs[Math.min(i, p.tabs.length - 1)];
+      }
+    }
+    S.panes = S.panes.filter((p, i) => p.tabs.length || i === 0);
+    if (!S.panes.find((p) => p.id === S.focused)) S.focused = S.panes[0].id;
+    reindex();
+    toast(`Deleted ${path}.`, "ok");
+    syncHash();
+  } catch (e) {
+    toast(errMsg(e), "error");
+  }
+  render();
+}
+
+async function moveTo(path: string) {
+  const choices = [{ value: "", label: "/ (notebook root)" }, ...S.folders.map((f) => ({ value: f, label: `/${f}` }))];
+  const f = await ask({ title: `Move “${stem(path)}”`, label: "Folder", choices, value: dir(path) });
+  if (f === null) return;
+  const name = path.split("/").pop()!;
+  await renamePath(path, f ? `${f}/${name}` : name);
+}
+
+async function newFolder(parent = "") {
+  const name = await ask({ title: "New folder", label: parent ? `Inside /${parent}` : "In the notebook root", placeholder: "Folder name", ok: "Create" });
+  if (!name?.trim()) return;
+  try {
+    const p = unwrap(await nb().mkdir(parent ? `${parent}/${name.trim()}` : name.trim()));
+    S.folders = unwrap(await nb().folders());
+    S.collapsed.delete(parent);
+    toast(`Folder /${p} created.`, "ok");
+  } catch (e) {
+    toast(errMsg(e), "error");
+  }
+  renderSide();
+}
+
+async function renameFolder(path: string, target?: string) {
+  const to = target ?? (await ask({ title: "Rename or move folder", label: "Folder path", value: path, ok: "Rename" }));
+  if (!to?.trim() || to.trim() === path) return;
+  await saveAll();
+  try {
+    const r = unwrap(await nb().rename_folder(path, to.trim()));
+    for (const t of S.panes.flatMap((p) => p.tabs)) if (t.startsWith(`${path}/`)) retarget(t, `${to.trim()}${t.slice(path.length)}`);
+    await loadNotebook();
+    toast(`Moved ${r.moved} file${r.moved === 1 ? "" : "s"}${r.relinked.length ? `, links updated in ${r.relinked.length} note${r.relinked.length === 1 ? "" : "s"}` : ""}.`, "ok");
+    syncHash();
+  } catch (e) {
+    toast(errMsg(e), "error");
+  }
+  render();
+}
+
+async function deleteFolder(path: string) {
+  const n = paths().filter((p) => p.startsWith(`${path}/`)).length;
+  if (!(await confirmDialog(`Delete folder “${path}”?`, n ? `${n} note${n === 1 ? "" : "s"} inside will be deleted too. This cannot be undone.` : "The folder is empty."))) return;
+  for (const t of [...S.drafts.keys()]) if (t.startsWith(`${path}/`)) { clearTimeout(saveTimers.get(t)); S.drafts.delete(t); }
+  try {
+    const gone = unwrap(await nb().delete_folder(path));
+    await loadNotebook();
+    S.panes = S.panes.filter((p, i) => p.tabs.length || i === 0);
+    if (!S.panes.find((p) => p.id === S.focused)) S.focused = S.panes[0].id;
+    toast(`Deleted /${path} and ${gone} file${gone === 1 ? "" : "s"}.`, "ok");
+    syncHash();
+  } catch (e) {
+    toast(errMsg(e), "error");
+  }
+  render();
+}
+
+/** Everything in the notebook as a zip, built in the browser from what is already loaded. */
+async function downloadNotebook() {
+  if (!S.notes || !S.notebook) return;
+  const missing = S.notes.filter((n) => isAttachment(n.path) && !attachments.has(n.path));
+  if (missing.length) {
+    toast(`Fetching ${missing.length} attachment${missing.length === 1 ? "" : "s"}…`);
+    await Promise.all(missing.map(async (n) => {
+      const r = await nb().read(n.path);
+      if (r.__kind__ === "Ok") attachments.set(n.path, r.Ok.content);
+    }));
+  }
+  const entries = [
+    ...S.folders.map((f) => ({ path: `${f}/`, dir: true })),
+    ...S.notes.map((n) => {
+      const text = isAttachment(n.path) ? attachments.get(n.path) ?? "" : draftOf(n.path).text;
+      const m = /^data:[^;,]+;base64,(.*)$/s.exec(text);
+      return { path: n.path, data: m ? Uint8Array.from(atob(m[1]), (c) => c.charCodeAt(0)) : text, mtime: new Date(Number(n.modified / 1_000_000n)) };
+    }),
+  ];
+  const blob = new Blob([zip(entries) as BlobPart], { type: "application/zip" });
+  const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: `${S.notebook.name.replace(/[\\/:*?"<>|]/g, "-")}.zip` });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+  toast(`Downloading ${S.notes.length} files as ${a.download}.`, "ok");
+}
+
+/** Follow a `[[link]]` (with optional `#heading` / `#^block`): open the note, or create it when nothing matches. */
+async function follow(raw: string, newTab = false) {
+  if (!S.notes) return;
+  const hash = raw.indexOf("#");
+  const target = hash >= 0 ? raw.slice(0, hash).trim() : raw.trim();
+  const sub = hash >= 0 ? raw.slice(hash + 1).trim() : "";
+  const dest = target ? resolveLink(target) : cur();
+  if (dest) {
+    if (sub) pendingScroll = { path: dest, target: sub };
+    if (isAttachment(dest) && !dest.match(/\.(png|jpe?g|gif|webp|svg|bmp|avif|ico|mp3|wav|ogg|m4a|flac|mp4|webm|mov|m4v)$/i)) return openAttachment(dest);
+    await open(dest, { newTab });
+    if (sub) scrollPending();
+    return;
+  }
+  if (await ask({ title: `No note named “${target}”`, body: "Create it now? The link will resolve as soon as it exists.", ok: "Create" }).then((v) => v !== null)) await newNote(target);
+}
+/** PDFs and other non-inline attachments open in a new browser tab from their data. */
+async function openAttachment(path: string) {
+  let data = attachments.get(path);
+  if (!data) {
+    const r = await nb().read(path);
+    if (r.__kind__ !== "Ok") return toast(describe(r.Err), "error");
+    data = r.Ok.content;
+    attachments.set(path, data);
+  }
+  const m = /^data:([^;,]+);base64,(.*)$/s.exec(data);
+  if (!m) return toast("This file is not a stored attachment.", "error");
+  const bytes = Uint8Array.from(atob(m[2]), (c) => c.charCodeAt(0));
+  const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: m[1] }));
+  window.open(url, "_blank", "noopener");
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+// ---------- import: a folder (Obsidian vault) or a zip of one ----------
+
+const TEXT_EXT = /\.(md|markdown|txt|canvas|excalidraw|json|csv|yaml|yml|base|css|js|html|ipynb)$/i;
+const MAX_ATTACHMENT = 700_000;
+const BATCH_BYTES = 1_400_000;
+type Incoming = { path: string; bytes: Uint8Array };
+/** The text of each page of a PDF, through pdf.js loaded on first use. */
+async function pdfPages(bytes: Uint8Array): Promise<string[]> {
+  const pdfjs = await import("pdfjs-dist");
+  const worker = (await import("pdfjs-dist/build/pdf.worker.min.mjs?url")).default as string;
+  pdfjs.GlobalWorkerOptions.workerSrc = worker;
+  const doc = await pdfjs.getDocument({ data: bytes.slice() }).promise;
+  const out: string[] = [];
+  for (let i = 1; i <= doc.numPages; i++) {
+    const page = await doc.getPage(i);
+    const tc = await page.getTextContent();
+    let last = -1;
+    let text = "";
+    for (const it of tc.items as { str: string; transform: number[] }[]) {
+      const y = Math.round(it.transform[5]);
+      text += (last >= 0 && Math.abs(y - last) > 2 ? "\n" : "") + it.str + (it.str.endsWith(" ") ? "" : " ");
+      last = y;
+    }
+    out.push(text.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n"));
+  }
+  return out;
+}
+
+function b64(bytes: Uint8Array): string {
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+const MIME: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", svg: "image/svg+xml", bmp: "image/bmp", avif: "image/avif", ico: "image/x-icon", pdf: "application/pdf", mp3: "audio/mpeg", wav: "audio/wav", ogg: "audio/ogg", m4a: "audio/mp4", flac: "audio/flac", mp4: "video/mp4", webm: "video/webm", mov: "video/quicktime", m4v: "video/mp4" };
+
+/** Files from a dropped or picked folder; the top-level folder name (the vault) is stripped. */
+async function filesFromList(list: FileList | File[]): Promise<Incoming[]> {
+  const files = [...list].filter((f) => f.size > 0 || f.name);
+  const roots = new Set(files.map((f) => ((f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name).split("/")[0]));
+  const strip = files.length > 1 && roots.size === 1 && files.every((f) => ((f as File & { webkitRelativePath?: string }).webkitRelativePath || "").includes("/"));
+  return Promise.all(files.map(async (f) => {
+    const rel = (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name;
+    return { path: strip ? rel.split("/").slice(1).join("/") : rel, bytes: new Uint8Array(await f.arrayBuffer()) };
+  }));
+}
+async function filesFromDrop(dt: DataTransfer): Promise<Incoming[]> {
+  const out: Incoming[] = [];
+  const walk = async (entry: FileSystemEntry, prefix: string): Promise<void> => {
+    if (entry.isFile) {
+      const f = await new Promise<File>((res, rej) => (entry as FileSystemFileEntry).file(res, rej));
+      out.push({ path: prefix + f.name, bytes: new Uint8Array(await f.arrayBuffer()) });
+    } else if (entry.isDirectory) {
+      const reader = (entry as FileSystemDirectoryEntry).createReader();
+      let batch: FileSystemEntry[];
+      do {
+        batch = await new Promise<FileSystemEntry[]>((res, rej) => reader.readEntries(res, rej));
+        for (const e of batch) await walk(e, `${prefix}${entry.name}/`);
+      } while (batch.length);
+    }
+  };
+  const items = [...dt.items];
+  const entries = items.map((i) => i.webkitGetAsEntry?.()).filter((e): e is FileSystemEntry => !!e);
+  if (!entries.length) return filesFromList(dt.files);
+  for (const e of entries) await walk(e, "");
+  // a single dropped folder is the vault itself: strip its name
+  if (entries.length === 1 && entries[0].isDirectory) return out.map((f) => ({ ...f, path: f.path.split("/").slice(1).join("/") }));
+  return out;
+}
+
+/** Import files into the open notebook: text as-is, small attachments as data: URLs, dotfolders skipped. */
+async function importFiles(incoming: Incoming[], overwrite: boolean, restore = false) {
+  if (!S.notebook || !S.notes) return;
+  const dec = new TextDecoder();
+  const batch: [string, string][] = [];
+  const skipped: string[] = [];
+  let zips = 0;
+  for (const f of incoming) {
+    if (/(^|\/)\./.test(f.path)) continue; // .obsidian, .trash, .DS_Store
+    if (/\.zip$/i.test(f.path)) {
+      zips++;
+      const inner = await unzip(f.bytes.buffer.slice(f.bytes.byteOffset, f.bytes.byteOffset + f.bytes.byteLength) as ArrayBuffer);
+      const all = inner.filter((e) => !e.dir);
+      const roots = new Set(all.map((e) => e.path.split("/")[0]));
+      const strip = roots.size === 1 && all.every((e) => e.path.includes("/"));
+      incoming.push(...all.map((e) => ({ path: strip ? e.path.split("/").slice(1).join("/") : e.path, bytes: e.data })));
+      continue;
+    }
+    const ext = f.path.split(".").pop()!.toLowerCase();
+    if (ext === "pdf") {
+      try {
+        const pages = await pdfPages(f.bytes);
+        const stemName = f.path.replace(/\.pdf$/i, "");
+        pages.forEach((text, i) => batch.push([`${stemName}/Page ${String(i + 1).padStart(3, "0")}.md`, `---\nsource: ${f.path.split("/").pop()}\n---\n\n# ${title(stemName)} · page ${i + 1}\n\n${text.trim() || "_(no text on this page)_"}\n`]));
+        if (f.bytes.length <= MAX_ATTACHMENT && MIME[ext]) batch.push([f.path, `data:${MIME[ext]};base64,${b64(f.bytes)}`]);
+        continue;
+      } catch { skipped.push(`${f.path} (could not read the PDF)`); continue; }
+    }
+    if (TEXT_EXT.test(f.path)) batch.push([f.path, dec.decode(f.bytes)]);
+    else if (MIME[ext]) {
+      if (f.bytes.length > MAX_ATTACHMENT) skipped.push(`${f.path} (over ${Math.round(MAX_ATTACHMENT / 1000)} KB)`);
+      else batch.push([f.path, `data:${MIME[ext]};base64,${b64(f.bytes)}`]);
+    } else skipped.push(f.path);
+  }
+  if (!batch.length) return toast(zips || incoming.length ? "Nothing importable in there: no markdown, text or supported attachments." : "No files chosen.", "error");
+  const total = batch.length;
+  let written = 0;
+  const failed: [string, string][] = [];
+  const progress = document.createElement("div");
+  progress.className = "toast";
+  progress.setAttribute("role", "status");
+  (document.getElementById("toasts") ?? (() => { const h = Object.assign(document.createElement("div"), { id: "toasts" }); document.body.append(h); return h; })()).append(progress);
+  let chunk: [string, string][] = [];
+  let bytes = 0;
+  const flush = async () => {
+    if (!chunk.length) return;
+    progress.textContent = `Importing ${written + chunk.length} of ${total} files…`;
+    const r = await nb().write_many(chunk, overwrite);
+    if (r.__kind__ === "Err") throw new Error(describe(r.Err));
+    written += r.Ok.written;
+    failed.push(...r.Ok.failed);
+    chunk = [];
+    bytes = 0;
+  };
+  try {
+    for (const item of batch) {
+      if (chunk.length && (bytes + item[1].length > BATCH_BYTES || chunk.length >= 200)) await flush();
+      chunk.push(item);
+      bytes += item[1].length;
+    }
+    await flush();
+  } catch (e) {
+    toast(`Import stopped: ${errMsg(e)}`, "error");
+  }
+  progress.remove();
+  let removed = 0;
+  if (restore) {
+    const keep = new Set(batch.map((b) => b[0]));
+    const gone = paths().filter((p) => !keep.has(p) && !isAgentPath(p));
+    for (const p of gone) {
+      try {
+        unwrap(await nb().delete_(p));
+        removed++;
+      } catch {
+        /* keep going */
+      }
+    }
+  }
+  await loadNotebook();
+  render();
+  const exists = failed.filter((f) => f[1] === "exists").length;
+  const other = failed.filter((f) => f[1] !== "exists");
+  await ask({
+    title: `Imported ${written} file${written === 1 ? "" : "s"}`,
+    body: [removed ? `${removed} note${removed === 1 ? "" : "s"} not in the archive were deleted.` : "", exists ? `${exists} already existed and were left alone (tick “overwrite” to replace them).` : "", other.length ? `${other.length} refused: ${other.slice(0, 5).map((f) => `${f[0]} (${f[1]})`).join("; ")}${other.length > 5 ? "…" : ""}.` : "", skipped.length ? `${skipped.length} skipped: ${skipped.slice(0, 5).join(", ")}${skipped.length > 5 ? "…" : ""}.` : "", "Settings in .obsidian were not imported."].filter(Boolean).join(" "),
+    ok: "Done",
+  });
+}
+
+/** Restore: a zip replaces the notebook (overwrite + delete what is missing), after a confirmation. */
+async function restoreDialog() {
+  if (!(await confirmDialog("Restore from a zip?", "Notes in the zip overwrite yours; notes not in the zip are deleted (agent notes are kept). Take a snapshot first if unsure.", "Choose zip"))) return;
+  const inp = Object.assign(document.createElement("input"), { type: "file", accept: ".zip" });
+  inp.addEventListener("change", async () => {
+    if (inp.files?.length) await importFiles(await filesFromList(inp.files), true, true);
+  });
+  inp.click();
+}
+
+/** The import dialog: pick a folder or a zip, or drop either onto the file pane. */
+function importDialog() {
+  const scrim = document.createElement("div");
+  scrim.className = "scrim";
+  scrim.innerHTML = `<form class="modal" role="dialog" aria-modal="true" aria-labelledby="imp-t">
+    <h2 id="imp-t">${icon("upload")} Import an Obsidian vault</h2>
+    <p class="muted small">Pick the vault folder, or a zip of it. Markdown and text files are imported as notes, a PDF becomes one note per page plus the file; images, audio and PDFs under ${Math.round(MAX_ATTACHMENT / 1000)} KB come along as attachments. The .obsidian settings folder is skipped. You can also drop a folder onto the file list any time.</p>
+    <div class="row tight nudge">
+      <label class="btn btn-primary">${icon("folder")}Choose folder<input type="file" name="dir" webkitdirectory multiple hidden></label>
+      <label class="btn">${icon("file")}Choose zip or files<input type="file" name="zip" multiple accept=".zip,.md,.txt,.canvas,image/*,audio/*,video/*,application/pdf" hidden></label>
+    </div>
+    <label class="switch nudge"><input type="checkbox" name="overwrite"> Overwrite notes that already exist</label>
+    <div class="actions"><button type="button" class="btn" data-x="cancel">Cancel</button></div>
+  </form>`;
+  const close = () => scrim.remove();
+  scrim.addEventListener("click", (e) => e.target === scrim && close());
+  scrim.querySelector("[data-x=cancel]")!.addEventListener("click", close);
+  scrim.querySelectorAll<HTMLInputElement>("input[type=file]").forEach((inp) =>
+    inp.addEventListener("change", async () => {
+      const files = inp.files;
+      const overwrite = scrim.querySelector<HTMLInputElement>("[name=overwrite]")!.checked;
+      close();
+      if (files?.length) await importFiles(await filesFromList(files), overwrite);
+    }),
+  );
+  document.body.append(scrim);
+}
+
+/** Approve `amountE8s` for `spender` on the ICP ledger: in OISY (mainnet) or with the dev identity (local). Returns the payer. */
+const tokenOf = (sym: string): Token => S.tokens.find((t) => t.symbol === sym) ?? { symbol: "ICP", ledger: Principal.fromText(ICP_LEDGER), decimals: 8, fee: ICP_FEE, route: "Icp" as Token["route"] };
+/** `amount` in the token's smallest unit as a human number, trailing zeros trimmed. */
+function fmtAmt(amount: bigint, t: Token): string {
+  const d = BigInt(10) ** BigInt(t.decimals);
+  const s = `${amount / d}.${(amount % d).toString().padStart(t.decimals, "0")}`;
+  return `${s.replace(/0+$/, "").replace(/\.$/, "")} ${t.symbol}`;
+}
+function parseAmt(v: string, t: Token): bigint {
+  const [i, f = ""] = v.trim().split(".");
+  if (!/^\d*$/.test(i) || !/^\d*$/.test(f) || (!i && !f)) throw new Error("Enter a number");
+  return BigInt(i || "0") * BigInt(10) ** BigInt(t.decimals) + BigInt((f + "0".repeat(t.decimals)).slice(0, t.decimals));
+}
+const OISY_TOKENS = ["ICP", "ckBTC", "ckETH", "ckUSDC", "ckUSDT"];
+const tokenSelect = (name: string, chosen: string) => `<select class="input" name="${name}" aria-label="Token" style="flex:0 0 auto;padding:6px 8px">${(S.tokens.filter((t) => OISY_TOKENS.includes(t.symbol)).length ? S.tokens.filter((t) => OISY_TOKENS.includes(t.symbol)) : [tokenOf("ICP")]).map((t) => `<option value="${esc(t.symbol)}" ${t.symbol === chosen ? "selected" : ""}>${esc(t.symbol)}</option>`).join("")}</select>`;
+/** Approve `amount` of `symbol` (plus one fee) for the registry, then have the registry turn it into `canister`'s cycles. */
+async function payFor(canister: Principal, symbol: string, amount: bigint, onStatus?: (m: string) => void): Promise<bigint> {
+  const t = tokenOf(symbol);
+  onStatus?.("Waiting for the payment approval…");
+  const payer = await approvePayment(Principal.fromText(REGISTRY), amount + t.fee, t);
+  onStatus?.(`Converting ${fmtAmt(amount, t)} into cycles…`);
+  const r = await registry().pay(canister, t.symbol, amount, payer.toText() === S.principal ? null : payer);
+  if (r.__kind__ === "Err") throw new Error(r.Err);
+  return r.Ok;
+}
+
+async function approvePayment(spender: Principal, amountE8s: bigint, token?: Token): Promise<Principal> {
+  if (useOisy) {
+    const owner = await approveWithOisy({ spender: spender.toText(), amountE8s, onStatus: (m) => toast(m, "info"), ledger: token?.ledger.toText(), symbol: token?.symbol, decimals: token?.decimals });
+    S.oisyAccount = owner;
+    store("nb-oisy", owner);
+    return Principal.fromText(owner);
+  }
+  const agent = HttpAgent.createSync({ identity: S.identity, rootKey: env.IC_ROOT_KEY });
+  const ledger = Actor.createActor<Ledger>(ledgerIdl, { agent, canisterId: token?.ledger.toText() ?? ICP_LEDGER });
+  const ap = await ledger.icrc2_approve({ fee: [], memo: [], from_subaccount: [], created_at_time: [], amount: amountE8s, expected_allowance: [], expires_at: [], spender: { owner: spender, subaccount: [] } });
+  if ("Err" in ap) throw new Error(`Approve failed: ${JSON.stringify(ap.Err, (_, x) => (typeof x === "bigint" ? x.toString() : x))}`);
+  return S.identity!.getPrincipal();
+}
+const payLabel = () => (useOisy ? "OISY" : "my local account");
+
+async function act(label: string, f: () => Promise<string>) {
+  S.busy = label;
+  render();
+  try {
+    toast(await f(), "ok");
+  } catch (e) {
+    toast(errMsg(e), "error");
+  }
+  S.busy = "";
+  await refreshInfo();
+}
+
+function menuFor(kind: "file" | "folder" | "root", path: string, x: number, y: number) {
+  if (kind === "file") {
+    const locked = isAgentPath(path);
+    contextMenu(x, y, path, [
+      { label: "Open", icon: "file", action: () => void open(path) },
+      { label: "Open in new tab", icon: "plus", action: () => void open(path, { newTab: true }) },
+      { label: "Open to the right", icon: "split", action: () => moveTab(undefined, path, S.focused, undefined, true) },
+      "-",
+      ...(locked ? [] : [
+        { label: "Rename…", icon: "edit", action: () => void ask({ title: "Rename note", label: "Name (folder/name)", value: stem(path), ok: "Rename" }).then((v) => { if (v) void renamePath(path, v); }) } as MenuItem,
+        { label: "Move to folder…", icon: "move", action: () => void moveTo(path) } as MenuItem,
+      ]),
+      { label: "Copy [[link]]", icon: "link", action: () => void copy(`[[${base(path)}]]`).then(() => toast(`Copied [[${base(path)}]]`, "ok")) },
+      { label: S.settings.bookmarks.includes(path) ? "Remove bookmark" : "Bookmark", icon: "star", action: () => void toggleBookmark(path) },
+      { label: "Version history…", icon: "history", action: () => void historyDialog(path) },
+      { label: S.shares.some((x) => x.path === path) ? "Sharing…" : "Share…", icon: "share", action: () => void shareDialog(path) },
+      "-",
+      { label: "Make flashcards", icon: "check", action: () => void studyNote("cards", path) },
+      { label: "Summarise", icon: "list", action: () => void studyNote("summary", path) },
+      { label: "Explain simply", icon: "help", action: () => void studyNote("explain", path) },
+      { label: "Three questions", icon: "chat", action: () => void studyNote("questions", path) },
+      { label: "Cite source", icon: "link", action: () => void citeSource(path) },
+      "-",
+      { label: "Export as Word (.docx)", icon: "download", action: () => downloadBytes(`${title(path)}.docx`, markdownToDocx(draftOf(path).text, title(path)), "application/vnd.openxmlformats-officedocument.wordprocessingml.document") },
+      { label: "Present as slides", icon: "columns", action: () => present(draftOf(path).text, path) },
+      { label: "Pin to the board", icon: "list", action: () => void pinToBoard({ notebook: S.notebook!.canister.toText(), path, text: noteAsMarkdown(path) }) },
+      { label: "Print or save as PDF", icon: "download", action: () => { void open(path).then(() => { const p = pane(); if (p.view === "edit") { p.view = "preview"; render(); } setTimeout(() => window.print(), 300); }); } },
+      "-",
+      { label: "Delete", icon: "trash", danger: true, action: () => void deletePath(path) },
+    ]);
+  } else if (kind === "folder" && isAgentPath(path)) {
+    contextMenu(x, y, `/${path}`, [
+      { label: "Agents write here; you read, link and delete", icon: "lock", action: () => void 0 },
+      { label: "Manage agent keys", icon: "bot", action: () => { S.tab = "manage"; render(); } },
+      ...(path === AGENT_ROOT ? [] : ["-" as MenuItem, { label: "Delete folder", icon: "trash", danger: true, action: () => void deleteFolder(path) } as MenuItem]),
+    ]);
+  } else if (kind === "folder") {
+    contextMenu(x, y, `/${path}`, [
+      { label: "New note here", icon: "plus", action: () => void newNote(undefined, path) },
+      { label: "New note from template…", icon: "template", action: () => void newFromTemplate(path) },
+      { label: "New drawing here", icon: "edit", action: () => void newDrawing(path) },
+      { label: "New kanban board here", icon: "board", action: () => void newBoard(path) },
+      { label: "New Python notebook here", icon: "command", action: () => void newPyNotebook(path) },
+      { label: "New spreadsheet here", icon: "columns", action: () => void newSheetNote(path) },
+      { label: "New dashboard here", icon: "graph", action: () => void newDashNote(path) },
+      { label: "New flashcard deck here", icon: "check", action: () => void newQuiz("cards", path) },
+      { label: "New multiple-choice quiz here", icon: "list", action: () => void newQuiz("choice", path) },
+      { label: "New folder inside", icon: "folder", action: () => void newFolder(path) },
+      { label: "Export folder as Word (.docx)", icon: "download", action: () => { const ps = paths().filter((p) => p.startsWith(`${path}/`) && p.endsWith(".md")); downloadBytes(`${path.split("/").pop()}.docx`, markdownToDocx(ps.map((p) => `# ${title(p)}\n\n${frontmatter(draftOf(p).text).body}`).join("\n\n"), path), "application/vnd.openxmlformats-officedocument.wordprocessingml.document"); } },
+      { label: "Rename or move…", icon: "edit", action: () => void renameFolder(path) },
+      { label: S.shares.some((x) => x.path === path) ? "Sharing…" : "Share folder…", icon: "share", action: () => void shareDialog(path, "folder") },
+      "-",
+      { label: "Delete folder", icon: "trash", danger: true, action: () => void deleteFolder(path) },
+    ]);
+  } else {
+    contextMenu(x, y, S.notebook?.name ?? "Notebook", [
+      { label: "New note", icon: "plus", action: () => void newNote(undefined, "") },
+      { label: "New note from template…", icon: "template", action: () => void newFromTemplate("") },
+      { label: "Today's note", icon: "calendar", action: () => void openDaily() },
+      { label: "New drawing (Excalidraw)", icon: "edit", action: () => void newDrawing("") },
+      { label: "New folder", icon: "folder", action: () => void newFolder("") },
+      { label: "Agents and keys", icon: "bot", action: () => { S.tab = "manage"; render(); } },
+      "-",
+      { label: "Import Obsidian vault…", icon: "upload", action: importDialog },
+      { label: "Download notebook (.zip)", icon: "download", action: () => void downloadNotebook() },
+      { label: S.collapsed.size ? "Expand all folders" : "Collapse all folders", icon: "chevron", action: () => { if (S.collapsed.size) S.collapsed.clear(); else for (const f of S.folders) S.collapsed.add(f); store("nb-collapsed", JSON.stringify([...S.collapsed])); renderSide(); } },
+    ]);
+  }
+}
+// ---------- sharing one note ----------
+
+const shareLink = (path: string) => `${location.origin}${location.pathname}#/shared/${S.notebook!.canister.toText()}/${encodeURIComponent(path)}`;
+
+/** Share a note, a folder or the whole notebook: only me / anyone with the link / specific people, with reader and editor lists. */
+async function shareDialog(path: string, kind: "note" | "folder" | "notebook" = "note") {
+  const key = kind === "notebook" ? "" : path;
+  const current = S.shares.find((x) => x.path === key);
+  const scrim = document.createElement("div");
+  scrim.className = "scrim";
+  const mode = current ? (current.public ? "public" : "people") : "none";
+  const what = kind === "notebook" ? "the whole notebook" : kind === "folder" ? `the folder “${path}”` : `“${stem(path)}”`;
+  const link = kind === "note" ? shareLink(path) : `${location.origin}${location.pathname}#/shared/${S.notebook!.canister.toText()}/${encodeURIComponent(key || "/")}`;
+  scrim.innerHTML = `<form class="modal" role="dialog" aria-modal="true" aria-labelledby="sh-t">
+    <h2 id="sh-t">${icon("share")} Share ${esc(what)}</h2>
+    <label class="radio"><input type="radio" name="mode" value="none" ${mode === "none" ? "checked" : ""}> <b>Only me</b> <span class="muted small">the default: nobody else can read it</span></label>
+    <label class="radio"><input type="radio" name="mode" value="public" ${mode === "public" ? "checked" : ""}> <b>Anyone with the link</b> <span class="muted small">no sign-in needed to read</span></label>
+    <div class="field" data-pubrole ${mode === "public" ? "" : "hidden"} style="margin-left:26px"><span class="label">The link allows</span><select class="input" name="pubrole" style="max-width:260px"><option value="View" ${(current?.public_role ?? "Comment") === "View" ? "selected" : ""}>View only</option><option value="Comment" ${(current?.public_role ?? "Comment") === "Comment" ? "selected" : ""}>View and comment (signed in)</option><option value="Edit" ${current?.public_role === "Edit" ? "selected" : ""}>View, comment and edit (signed in)</option></select></div>
+    <label class="radio"><input type="radio" name="mode" value="people" ${mode === "people" ? "checked" : ""}> <b>Specific people</b> <span class="muted small">they sign in with Internet Identity and open the link</span></label>
+    <div data-people ${mode === "people" ? "" : "hidden"}>
+      <label class="field"><span class="label">Viewers (read only; principals, one per line)</span><textarea class="input code" name="principals" rows="2">${esc(current && !current.public ? current.principals.map((p) => p.toText()).join("\n") : "")}</textarea></label>
+      <label class="field nudge"><span class="label">Commenters (read and comment)</span><textarea class="input code" name="commenters" rows="2">${esc(current ? (current.commenters ?? []).map((p) => p.toText()).join("\n") : "")}</textarea></label>
+      <label class="field nudge"><span class="label">Editors (read, comment and change these notes)</span><textarea class="input code" name="editors" rows="2">${esc(current ? (current.editors ?? []).map((p) => p.toText()).join("\n") : "")}</textarea></label>
+    </div>
+    <div class="field nudge" data-links ${mode === "none" ? "hidden" : ""}><span class="label">Link</span><div class="cmd"><code>${esc(link)}</code><button type="button" class="btn btn-ghost" data-copy="${esc(link)}">${icon("copy")}</button></div>${kind === "note" ? `<div class="cmd" data-raw ${mode === "public" ? "" : "hidden"}><code>${esc(`${apiUrl(S.notebook!.canister.toText())}/s/${path}`)}</code><button type="button" class="btn btn-ghost" data-copy="${esc(`${apiUrl(S.notebook!.canister.toText())}/s/${path}`)}">${icon("copy")}</button></div>` : ""}</div>
+    <p class="small muted nudge">${kind === "note" ? "Links inside the note, embeds and attachments are not shared with it." : "Everything under it is covered, now and later. Editors can never write under Agents/."}</p>
+    <div class="actions">${kind === "note" ? `<button type="button" class="btn btn-ghost" data-x="gist" title="Post a snapshot of this note in the community chat and ask for opinions">${icon("chat")}Ask in chat</button><button type="button" class="btn btn-ghost" data-x="board" title="Post a snapshot of this note on the board">${icon("list")}Post on the board</button><span style="flex:1"></span>` : ""}<button type="button" class="btn" data-x="cancel">Cancel</button><button type="submit" class="btn btn-primary">Save</button></div>
+  </form>`;
+  const close = () => scrim.remove();
+  scrim.querySelector("[data-x=gist]")?.addEventListener("click", () => { close(); void shareGist({ notebook: S.notebook!.canister.toText(), path, text: S.drafts.get(path)?.text ?? note(path)?.content ?? "" }); });
+  scrim.querySelector("[data-x=board]")?.addEventListener("click", () => { close(); void pinToBoard({ notebook: S.notebook!.canister.toText(), path, text: noteAsMarkdown(path) }); });
+  scrim.addEventListener("click", (e) => {
+    if (e.target === scrim) close();
+    const c = (e.target as HTMLElement).closest<HTMLElement>("[data-copy]");
+    if (c) void copy(c.dataset.copy!).then(() => toast("Link copied.", "ok"));
+  });
+  scrim.querySelector("[data-x=cancel]")!.addEventListener("click", close);
+  scrim.addEventListener("change", () => {
+    const m = scrim.querySelector<HTMLInputElement>("[name=mode]:checked")!.value;
+    scrim.querySelector<HTMLElement>("[data-people]")!.hidden = m !== "people";
+    scrim.querySelector<HTMLElement>("[data-links]")!.hidden = m === "none";
+    scrim.querySelector<HTMLElement>("[data-pubrole]")!.hidden = m !== "public";
+    const raw = scrim.querySelector<HTMLElement>("[data-raw]");
+    if (raw) raw.hidden = m !== "public";
+  });
+  scrim.querySelector("form")!.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const m = scrim.querySelector<HTMLInputElement>("[name=mode]:checked")!.value;
+    const list = (name: string) => scrim.querySelector<HTMLTextAreaElement>(`[name=${name}]`)!.value.split(/\s+/).filter(Boolean).map((t) => Principal.fromText(t));
+    try {
+      if (m === "none") {
+        if (current) unwrap(await nb().unshare_note(key));
+        toast("No longer shared.", "ok");
+      } else {
+        const readers = m === "people" ? list("principals") : [];
+        const commenters = m === "people" ? list("commenters") : [];
+        const editors = m === "people" ? list("editors") : [];
+        const pubrole = scrim.querySelector<HTMLSelectElement>("[name=pubrole]")!.value as Role;
+        unwrap(await nb().set_share({ path: key, public: m === "public", public_role: m === "public" ? pubrole : Role.Comment, viewers: readers, commenters, editors }));
+        await copy(link);
+        const n = readers.length + commenters.length + editors.length;
+        toast(m === "public" ? `Anyone with the link can ${pubrole === "View" ? "view" : pubrole === "Comment" ? "view and comment" : "view, comment and edit"}. Link copied.` : `Shared with ${n} principal${n === 1 ? "" : "s"}. Link copied.`, "ok");
+      }
+      const r = await nb().shares();
+      S.shares = r.__kind__ === "Ok" ? r.Ok : S.shares;
+      close();
+      render();
+    } catch (err) {
+      toast(errMsg(err), "error");
+    }
+  });
+  document.body.append(scrim);
+}
+
+/** A shared note, folder or notebook: public ones need no sign-in, private ones a listed principal. */
+async function openShared(canister: string, path: string) {
+  const isFolder = path === "/" || path === "" || !/\.[a-z0-9]+$/i.test(path);
+  const key = path === "/" ? "" : path;
+  S.shared = { canister, path: key, loading: true };
+  render();
+  try {
+    const a = notebookOf(canister);
+    const info = await a.share_info(key);
+    S.shared.name = info?.[0];
+    const role = await a.my_role(key);
+    S.shared.role = role ?? undefined;
+    if (isFolder) {
+      const r = await a.list_shared(key);
+      if (r.__kind__ === "Err") S.shared.error = "Not shared with you.";
+      else {
+        S.shared.files = r.Ok.filter((f) => !isAttachment(f.path));
+        if (!S.shared.files.length) S.shared.error = S.identity ? "Nothing here is shared with you." : "This is shared with specific people. Sign in to see it.";
+      }
+    } else {
+      const [r, cm] = await Promise.all([a.read_shared(key), a.comments(key)]);
+      if (S.identity && r.__kind__ === "Ok") void (async () => {
+        try {
+          const [h, pr] = await Promise.all([a.ping(key), a.progress(key)]);
+          if (S.shared?.path !== key) return;
+          S.shared.here = h.__kind__ === "Ok" ? h.Ok.map((p) => p.toText()) : [];
+          S.shared.progress = pr.__kind__ === "Ok" ? pr.Ok : [];
+          S.shared.myProgress = S.shared.progress.find(([who]) => who.toText() === S.principal)?.[1] ?? 0;
+          render();
+        } catch { /* presence is best effort */ }
+      })();
+      if (r.__kind__ === "Err") S.shared.error = r.Err.__kind__ === "Unauthorized" ? (S.identity ? "This note is not shared with you." : "This note is shared with specific people. Sign in to read it.") : describe(r.Err);
+      else S.shared.note = r.Ok;
+      S.shared.comments = cm.__kind__ === "Ok" ? cm.Ok : [];
+    }
+  } catch (e) {
+    S.shared.error = errMsg(e);
+  }
+  S.shared.loading = false;
+  render();
+  afterRender();
+}
+
+function sharedPage(): string {
+  const sh = S.shared!;
+  const canEdit = sh.role === "Edit" && sh.note;
+  const up = sh.path.includes("/") ? sh.path.slice(0, sh.path.lastIndexOf("/")) : "";
+  const crumb = sh.note || sh.files ? `<p class="small muted"><a href="#/shared/${sh.canister}/${encodeURIComponent(up || "/")}" data-action="nav">${icon("links")} ${esc(up || "shared root")}</a></p>` : "";
+  let body: string;
+  if (sh.loading) body = `<p class="muted">Loading…</p>`;
+  else if (sh.error) body = `<div class="empty">${icon("lock", "big")}<p class="muted">${esc(sh.error)}</p>${S.identity ? "" : `<button type="button" class="btn btn-primary" data-action="sign-in">Sign in</button>`}</div>`;
+  else if (sh.files) {
+    const t = tree(sh.files.map((f) => f.path));
+    const rows = (f: Folder, depth: number): string => [
+      ...f.folders.map((sub) => `<div class="tree-row folder open" style="--d:${depth}">${icon("folder", "folder-ico")}<span class="name">${esc(sub.name)}</span></div>${rows(sub, depth + 1)}`),
+      ...f.files.map((p) => `<a class="tree-row file" style="--d:${depth}" href="#/shared/${sh.canister}/${encodeURIComponent(p)}" data-action="nav">${icon("file")}<span class="name">${esc(title(p))}</span></a>`),
+    ].join("");
+    body = `<div class="tree">${rows(t, 0)}</div>`;
+  } else {
+    const canComment = !!S.identity && (sh.role === "Comment" || sh.role === "Edit");
+    const comments = `<div class="band"><div class="band-title">Comments <span class="count">${sh.comments?.length ?? 0}</span></div><div class="threads">${threadsHtml(sh.comments ?? [], sh.path, { canComment, owner: false })}</div>${false ? `<form class="comment-form" data-form="comment"><input class="input" name="ctext" placeholder="Leave a comment for the author" maxlength="2000" required><button type="submit" class="btn btn-primary">Send</button></form>` : `<p class="small muted">Sign in to comment.</p>`}</div>`;
+    const isQuiz = sh.note && sh.note.path.endsWith(".md") && quizKind(sh.note.content);
+    const here = sh.here?.length ? `<span class="pill ok" title="${esc(sh.here.map((p) => shortPrincipal(p)).join(", "))}">${icon("eye")}${sh.here.length} here now</span>` : "";
+    const marks = ["", "Read", "Reviewing", "Known"];
+    const group = sh.progress?.length ? `<span class="small muted">Group: ${sh.progress.map(([who, st]) => `${shortPrincipal(who.toText())} ${marks[st] ?? ""}`).join(" · ")}</span>` : "";
+    const progressBar = S.identity ? `<div class="row tight nudge study-row">${here}<label class="switch">${icon("check")}My progress <select class="input" name="progress" style="padding:4px 8px">${marks.map((m, i) => `<option value="${i}" ${(sh.myProgress ?? 0) === i ? "selected" : ""}>${m || "—"}</option>`).join("")}</select></label>${group}</div>` : "";
+    if (isQuiz) {
+      const key = `shared:${sh.path}`;
+      if (draftOf(key).text !== sh.note!.content) S.drafts.set(key, { text: sh.note!.content, dirty: false, saving: false });
+      body = `${progressBar}<div class="qz shared-qz" data-quiz="${esc(key)}">${quizHtml(key, sh.note!.content)}</div>${comments}`;
+    } else body = canEdit
+      ? `${progressBar}<p class="small muted">${icon("edit")} You can edit this note. ${sh.dirty ? "Unsaved changes." : "Changes save a second after you stop typing."}</p><div class="editor-panes view-edit shared-edit"><div class="cm-host" data-cm="${esc(sh.path)}"></div></div>${comments}`
+      : `${progressBar}<article class="md shared-note">${renderMarkdown(sh.note!.content, { self: sh.path, resolve: () => undefined, note: () => undefined, attachment: () => undefined })}</article>${comments}`;
+  }
+  return `<div class="page">
+    <header class="topbar">${brand()}<span class="right"><span class="kicker">${sh.name ? `Shared from “${esc(sh.name)}”` : "Shared"}</span>${themeBtn()}</span></header>
+    <section class="card">
+      ${crumb}
+      <h1 class="shared-title">${esc(sh.files ? (sh.path || sh.name || "Shared notes") : title(sh.path))}</h1>
+      ${sh.note ? `<p class="small muted">${esc(sh.path)} · updated ${when(sh.note.modified)}${sh.note.agent ? ` · written by agent ${esc(sh.note.agent)}` : ""}</p>` : ""}
+      ${body}
+      <p class="small muted nudge">${S.identity ? `<a href="#/" data-action="nav">Your notebooks</a>` : "Notebooks: markdown notes in a canister you own. Sign in to make your own."}</p>
+    </section>
+  </div>`;
+}
+let sharedSaveTimer = 0;
+async function saveShared() {
+  const sh = S.shared;
+  if (!sh?.note || !sh.dirty) return;
+  const content = draftOf(sh.path).text;
+  try {
+    const r = await notebookOf(sh.canister).write_shared(sh.path, content);
+    if (r.__kind__ === "Err") throw new Error(describe(r.Err));
+    sh.note.content = content;
+    sh.dirty = false;
+    document.querySelector(".shared-edit")?.previousElementSibling?.replaceChildren(document.createTextNode("You can edit this note. Saved."));
+  } catch (e) {
+    toast(errMsg(e), "error");
+  }
+}
+
+// ---------- agents (Manage) ----------// ---------- agents (Manage) ----------
+
+async function issueAgentKey() {
+  const name = S.newAgent.trim();
+  if (!name) return;
+  try {
+    const key = unwrap(await nb().create_agent_key(name));
+    S.issued = { name, key };
+    S.newAgent = "";
+    const r = await nb().agent_keys();
+    S.agentKeys = r.__kind__ === "Ok" ? r.Ok : S.agentKeys;
+    toast(`Key for ${name} issued. Copy the skill now; the key is not shown again.`, "ok");
+  } catch (e) {
+    toast(errMsg(e), "error");
+  }
+  render();
+}
+let skillText = "";
+async function agentSkill(k: { name: string; key: string }): Promise<string> {
+  if (!skillText) skillText = await (await fetch("/skill.md")).text();
+  return skillText.replaceAll("__URL__", apiUrl(S.notebook!.canister.toText())).replaceAll("__NOTEBOOK__", S.notebook!.name).replaceAll("__AGENT__", k.name).replaceAll("__KEY__", k.key);
+}
+function clipperCard(): string {
+  const key = S.clipperKey;
+  const url = `${location.protocol}//${S.notebook!.canister.toText()}.${isLocal ? `localhost:${location.port}` : "icp0.io"}`;
+  const bm = key ? `javascript:(async()=>{const s=String(getSelection()||'');const t=document.title.replace(/[#^[\\]|\\\\/:]/g,' ');const b='---\\nsource: '+location.href+'\\nclipped: '+new Date().toISOString().slice(0,10)+'\\n---\\n# '+t+'\\n\\n'+(s?'> '+s.replace(/\\n/g,'\\n> ')+'\\n\\n':'')+'['+t+']('+location.href+')\\n';const r=await fetch('${url}/v1/write',{method:'POST',headers:{authorization:'Bearer ${key}','content-type':'application/json'},body:JSON.stringify({path:'Inbox/'+t.slice(0,80)+'.md',content:b})});alert(r.ok?'Clipped to Lab':'Clip failed: '+await r.text())})()` : "";
+  return `<div class="card band">
+    <h2>${icon("link")} Web clipper and mail</h2>
+    <p class="muted small">A key scoped to <code>Inbox/</code> lets a bookmarklet save the page you are on (title, link, selection) as a note, and lets a mail relay file messages under <code>Inbox/Mail</code>. Scoped keys can still write under Agents/ and nothing else.</p>
+    ${key ? `<p class="small">Drag this to your bookmarks bar, then click it on any page:</p><p><a class="btn btn-primary" href="${esc(bm)}" onclick="return false" title="Drag me to the bookmarks bar">${icon("link")}Clip to Notebooks</a> <button type="button" class="btn btn-ghost" data-action="copy-cmd" data-value="${esc(bm)}">${icon("copy")}Copy the bookmarklet</button></p><p class="small muted">Mail in: <code>python3 scripts/mail_in.py ${esc(url)} &lt;key&gt; &lt; message.eml</code>, or from a forwarding rule on a machine of yours. The key is shown once; make another if you lose it.</p>` : `<button type="button" class="btn" data-action="clipper-key" ${S.busy ? "disabled" : ""}>${icon("plus")}Make an Inbox key</button>`}
+  </div>`;
+}
+function agentsCard(): string {
+  const live = S.agentKeys.filter((k) => !k.revoked);
+  return `<div class="card band">
+    <h2>${icon("bot")} Agents</h2>
+    <p class="muted small">Give an AI agent a key and it can read every note and write new ones under the locked <code>${AGENT_ROOT}/</code> folder, where you can read, link and delete but not edit. Agent notes are stamped with the agent's name and drawn as green diamonds in the graph. Issue a key, copy the skill, paste it into Claude Code, Codex or any agent, and ask it to explore what you have been writing.</p>
+    <form class="row tight" data-form="agent"><input class="input" name="newAgent" value="${esc(S.newAgent)}" placeholder="agent name, e.g. claude" required aria-label="Agent name" style="max-width:260px"><button type="submit" class="btn btn-primary" ${S.busy ? "disabled" : ""}>${icon("plus")}Issue key</button></form>
+    ${S.issued ? `<div class="issued nudge"><div class="band-title">Key for ${esc(S.issued.name)}, shown once</div><div class="cmd"><code>${esc(S.issued.key)}</code><button type="button" class="btn btn-ghost" data-action="copy-key">${icon("copy")}Key</button></div><div class="row tight nudge"><button type="button" class="btn btn-primary" data-action="copy-skill">${icon("copy")}Copy agent skill</button><a class="btn" href="/skill.md" target="_blank" rel="noopener">${icon("file")}View skill.md</a><span class="small muted">The skill carries the URL and key; paste it where your agent reads skills or prompts.</span></div></div>` : ""}
+    ${live.length ? `<div class="runs nudge">${live.map((k) => `<div class="run"><span><b>${esc(k.name)}</b> <span class="small muted">· ${String(k.writes)} note${k.writes === 1n ? "" : "s"} written${k.last_used > 0n ? ` · last seen ${ago(k.last_used)}` : " · never used"}</span></span><span class="small muted">${when(k.created_at)}</span><button type="button" class="btn btn-ghost btn-danger" data-action="revoke-key" data-name="${esc(k.name)}">Revoke</button></div>`).join("")}</div>` : `<p class="small muted nudge">No agent keys yet.</p>`}
+    <div class="cmd nudge"><span class="small muted">API</span><code>${esc(apiUrl(S.notebook!.canister.toText()))}</code><button type="button" class="btn btn-ghost" data-action="copy-cmd" data-value="${esc(apiUrl(S.notebook!.canister.toText()))}">${icon("copy")}</button></div>
+  </div>`;
+}
+function publishCard(): string {
+  const v = S.notebook!;
+  const folders = ["", ...S.folders.filter((f) => !isAgentPath(f))];
+  const site = `${apiUrl(v.canister.toText())}/p/`;
+  return `<div class="card band">
+    <h2>${icon("globe")} Publish</h2>
+    <p class="muted small">Publish a folder, or the whole notebook, as a public website served by this canister: a crawlable page per note with navigation, backlinks and a graph on the index. Agent notes and attachments stay private.</p>
+    <form class="row tight" data-form="publish"><select class="input" name="pubfolder" aria-label="Folder to publish" style="max-width:280px">${folders.map((f) => `<option value="${esc(f)}" ${S.published === f ? "selected" : ""}>${f ? `/${esc(f)}` : "Whole notebook"}</option>`).join("")}</select><button type="submit" class="btn btn-primary">${icon("globe")}${S.published === null ? "Publish" : "Update"}</button>${S.published !== null ? `<button type="button" class="btn btn-danger" data-action="unpublish">Unpublish</button>` : ""}</form>
+    ${S.published !== null ? `<div class="cmd nudge"><span class="small muted">Live at</span><code><a href="${esc(site)}" target="_blank" rel="noopener">${esc(site)}</a></code><button type="button" class="btn btn-ghost" data-action="copy-cmd" data-value="${esc(site)}">${icon("copy")}</button></div>` : ""}
+  </div>`;
+}
+function snapshotsCard(): string {
+  const list = S.snapshots === undefined ? `<p class="small muted">Loading…</p>` : S.snapshots.length ? S.snapshots.map((sn) => `<div class="snap-row"><span>${icon("shield")}${when(sn.taken_at)}</span><span class="muted">${kb(sn.total_size)}</span><span class="grow"></span><button type="button" class="btn" data-action="snap-restore" data-id="${esc(hex(sn.id))}">Restore</button><button type="button" class="btn btn-ghost btn-danger" data-action="snap-delete" data-id="${esc(hex(sn.id))}">Delete</button></div>`).join("") : `<p class="small muted">No snapshot yet.</p>`;
+  return `<div class="card band">
+    <h2>${icon("shield")} Snapshots</h2>
+    <p class="muted small">A snapshot is a full copy of the canister, kept by the Internet Computer itself. Take one before a big import or a cleanup; restoring rolls everything back to that moment. One snapshot is kept; a new one replaces it.</p>
+    <div class="row tight"><button type="button" class="btn btn-primary" data-action="snap-take" ${S.busy ? "disabled" : ""}>${icon("shield")}${S.busy === "snap" ? "Working…" : "Take snapshot"}</button><button type="button" class="btn btn-ghost" data-action="snap-refresh">${icon("refresh")}Refresh</button></div>
+    ${list}
+  </div>`;
+}
+/** Frozen, or fewer than 30 days of idle burn above the freezing line. */
+const urgent = (h?: Health) => !!h && (h.frozen || h.cycles < h.freeze_at + h.idle_cycles_burned_per_day * 30n);
+/** When each note was created, across every notebook, for the activity grid on the list page. */
+async function loadActivity() {
+  const created: bigint[] = [];
+  const reviews = new Map<string, number>();
+  let goal = 0;
+  S.dueByNotebook = new Map();
+  await Promise.all((S.notebooks ?? []).map(async (v) => {
+    try {
+      const api = notebookOf(v.canister.toText());
+      const [r, st] = await Promise.all([api.list(), api.get_settings()]);
+      if (r.__kind__ === "Ok") for (const m of r.Ok) if (m.path.endsWith(".md") && !m.agent) created.push(m.created);
+      const settings = parseSettings(st.__kind__ === "Ok" && st.Ok ? (JSON.parse(st.Ok) as Partial<Settings>) : {});
+      for (const [k, n] of Object.entries(settings.study)) reviews.set(k, (reviews.get(k) ?? 0) + n);
+      goal = Math.max(goal, settings.goals.cardsPerDay ?? 0);
+      // due cards: the decks are the notes with `quiz:` in them
+      const pr = await api.search_notes("type: project", 50);
+      if (pr.__kind__ === "Ok" && pr.Ok.length) {
+        let active = 0, done = 0;
+        for (const h of pr.Ok) { const n = await api.read(h.path); if (n.__kind__ === "Ok" && (frontmatter(n.Ok.content).data.type ?? "").trim().toLowerCase() === "project") ((frontmatter(n.Ok.content).data.status ?? "active").trim() === "done" ? done++ : active++); }
+        if (active + done) S.projectsByNotebook.set(v.canister.toText(), { active, done });
+      }
+      const hits = await api.search_notes("quiz: cards", 50);
+      if (hits.__kind__ === "Ok") {
+        const today = new Date();
+        let due = 0;
+        for (const h of hits.Ok) {
+          const n = await api.read(h.path);
+          if (n.__kind__ !== "Ok" || quizKind(n.Ok.content) !== "cards") continue;
+          const sched = settings.srs[h.path] ?? {};
+          due += parseCards(n.Ok.content).filter((c) => isDue(sched[cardKey(c.front)], today)).length;
+        }
+        if (due) S.dueByNotebook.set(v.canister.toText(), due);
+      }
+    } catch { /* frozen or gone */ }
+  }));
+  const counts = countByDay(created);
+  for (const [k, n] of reviews) counts.set(k, (counts.get(k) ?? 0) + n);
+  S.activityGoal = goal;
+  S.activity = counts;
+  if (!S.notebook && !S.market && !S.admin) render();
+}
+function activityGrid(): string {
+  if (S.mobile || !S.notebooks?.length) return "";
+  const counts = S.activity;
+  const today = new Date();
+  const weeks = gridWeeks(today, counts ?? new Map());
+  const total = counts ? [...weeks.flat()].reduce((n, c) => n + (c?.count ?? 0), 0) : 0;
+  const months: string[] = [];
+  let lastM = -1;
+  for (const col of weeks) {
+    const first = col.find((c) => c);
+    const m = first ? first.date.getMonth() : -1;
+    months.push(first && m !== lastM && first.date.getDate() <= 7 ? first.date.toLocaleString(undefined, { month: "short" }) : "");
+    if (first) lastM = m;
+  }
+  const shade = (n: number) => (S.activityGoal ? (n <= 0 ? 0 : n >= S.activityGoal ? 4 : Math.max(1, Math.ceil((n / S.activityGoal) * 3))) : level(n));
+  const cells = weeks.map((col, w) => col.map((c, d) => c ? `<i class="ac l${shade(c.count)}" style="grid-column:${w + 1};grid-row:${d + 1}" title="${c.count} note${c.count === 1 ? "" : "s"} on ${c.date.toLocaleDateString(undefined, { weekday: "short", year: "numeric", month: "short", day: "numeric" })}"></i>` : "").join("")).join("");
+  const st = counts ? streak(today, counts) : 0;
+  return `<footer class="activity" aria-label="Notes created over the last year">
+    <div class="activity-in">
+      <div class="activity-head"><b>${counts ? `${total} note${total === 1 ? "" : "s"} and reviews in the last year` : "Counting your notes…"}</b><span class="row tight">${[...S.dueByNotebook.entries()].length ? `<span class="pill low">${icon("check")}${[...S.dueByNotebook.values()].reduce((a, b) => a + b, 0)} cards due today</span>${[...S.dueByNotebook.entries()].map(([id, n]) => `<a class="btn btn-ghost" href="#/notebook/${id}" data-action="nav">Review ${n} in ${esc(S.notebooks?.find((v) => v.canister.toText() === id)?.name ?? "")}</a>`).join("")}` : ""}${[...S.projectsByNotebook.values()].reduce((a, b) => a + b.active, 0) ? `<span class="small muted">${[...S.projectsByNotebook.values()].reduce((a, b) => a + b.active, 0)} project${[...S.projectsByNotebook.values()].reduce((a, b) => a + b.active, 0) === 1 ? "" : "s"} active</span>` : ""}${store("nb-last") ? `<a class="btn btn-ghost" href="${esc(store("nb-last")!)}" data-action="nav">${icon("move")}Resume where you left off</a>` : ""}<span class="small muted">${st ? `${st}-day streak` : "Write or review today to start a streak"}${S.activityGoal ? ` · shaded against ${S.activityGoal} a day` : ""}</span></span></div>
+      <div class="activity-body">
+        <div class="ac-days"><span></span><span>Mon</span><span></span><span>Wed</span><span></span><span>Fri</span><span></span></div>
+        <div class="ac-scroll"><div class="ac-months">${months.map((m) => `<span>${m}</span>`).join("")}</div><div class="ac-grid">${cells}</div></div>
+        <div class="ac-legend"><span class="small muted">Less</span><i class="ac l0"></i><i class="ac l1"></i><i class="ac l2"></i><i class="ac l3"></i><i class="ac l4"></i><span class="small muted">More</span></div>
+      </div>
+    </div>
+  </footer>`;
+}
+
+async function loadHealth(id: string): Promise<Health | undefined> {
+  try {
+    const r = await registry().notebook_status(Principal.fromText(id));
+    if (r.__kind__ === "Err") return undefined;
+    S.health.set(id, r.Ok);
+    return r.Ok;
+  } catch {
+    return undefined;
+  }
+}
+const daysUntilFreeze = (h: Health) => (h.idle_cycles_burned_per_day ? Number((h.cycles - h.freeze_at) / h.idle_cycles_burned_per_day) : Infinity);
+/** The urgent pop-up: the notebook is frozen (or about to be) and needs ICP now. Top-ups go through the registry, which still works when the notebook cannot take calls. */
+function freezeModal(id: string, h: Health) {
+  const name = S.notebooks?.find((v) => v.canister.toText() === id)?.name ?? "This notebook";
+  const scrim = document.createElement("div");
+  scrim.className = "scrim";
+  const days = h.frozen ? Number(h.days_left) : daysUntilFreeze(h);
+  const body = h.frozen
+    ? `<p><b>${esc(name)}</b> is frozen: its cycles fell under the 90-day line, so it refuses every call and your notes are unreachable. Nothing is lost yet, but the network deletes a frozen canister when its cycles run out, in about <b>${days} day${days === 1 ? "" : "s"}</b>. A top-up revives it at once.</p>`
+    : `<p><b>${esc(name)}</b> is about to freeze: at its current burn it has about <b>${days} day${days === 1 ? "" : "s"}</b> before the cycles drop under the 90-day line and it stops answering. Frozen canisters keep their data for 90 days, then they are deleted.</p>`;
+  scrim.innerHTML = `<form class="modal freeze" role="dialog" aria-modal="true" aria-labelledby="fz-t">
+    <h2 id="fz-t" class="danger">${icon("bolt")} ${h.frozen ? "Frozen: top up now" : "Running out of cycles"}</h2>
+    ${body}
+    <div class="stats tight"><div class="stat"><div class="label">Cycles left</div><div class="num danger">${tc(h.cycles)}</div></div><div class="stat"><div class="label">Freezes below</div><div class="num">${tc(h.freeze_at)}</div></div><div class="stat"><div class="label">Burn per day</div><div class="num">${tc(h.idle_cycles_burned_per_day)}</div></div></div>
+    <label class="field"><span class="label">Amount to convert (paid from ${payLabel()})</span><span class="row tight"><input class="input" name="v" inputmode="decimal" value="${esc(S.topupAmount)}" required style="flex:1">${tokenSelect("fztoken", S.payToken)}</span></label>
+    <p class="small muted" data-fz-status>${useOisy ? "Your OISY wallet opens to approve the amount plus one fee for the registry; the registry converts it into this notebook's cycles." : "Your local account approves the amount for the registry, which converts it into this notebook's cycles."}</p>
+    <div class="actions"><button type="button" class="btn" data-x="cancel">${h.frozen ? "Not now" : "Later"}</button><button type="submit" class="btn btn-primary">${icon("bolt")}Top up now</button></div>
+  </form>`;
+  const close = () => scrim.remove();
+  scrim.querySelector("[data-x=cancel]")!.addEventListener("click", close);
+  scrim.querySelector("form")!.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const inp = scrim.querySelector<HTMLInputElement>("[name=v]")!;
+    const btn = scrim.querySelector<HTMLButtonElement>("[type=submit]")!;
+    const status = scrim.querySelector<HTMLElement>("[data-fz-status]")!;
+    const t = tokenOf(scrim.querySelector<HTMLSelectElement>("[name=fztoken]")?.value ?? S.payToken);
+    btn.disabled = true;
+    try {
+      const amount = parseAmt(inp.value, t);
+      if (amount <= t.fee * 2n) throw new Error("Enter an amount above a couple of ledger fees.");
+      const cycles = await payFor(Principal.fromText(id), t.symbol, amount, (m) => (status.textContent = m));
+      close();
+      toast(`${fmtAmt(amount, t)} became ${tc(cycles)} for ${name}.`, "ok");
+      const fresh = await loadHealth(id);
+      if (h.frozen && fresh && !fresh.frozen && S.notebook?.canister.toText() === id) await openNotebook(id);
+      else render();
+    } catch (err) {
+      status.textContent = errMsg(err);
+      btn.disabled = false;
+    }
+  });
+  document.body.append(scrim);
+  scrim.querySelector<HTMLInputElement>("[name=v]")?.focus();
+}
+
+function autoTopupCard(): string {
+  const a = S.autoTopup;
+  return `<form class="band" data-form="autotopup">
+    <div class="band-title">Automatic top-up</div>
+    <p class="small muted">When cycles fall under the threshold, the canister pulls ICP from ${useOisy ? "your OISY wallet" : "your account"} (an ICRC-2 allowance you approve once${useOisy ? " in the OISY popup" : ""}) and converts it. Approve a larger allowance to cover several top-ups.${a?.payer ? ` Pulling from <code>${esc(shortPrincipal(a.payer.toText()))}</code>.` : ""}</p>
+    <div class="row tight"><label class="switch"><input type="checkbox" name="at_on" ${a?.enabled ? "checked" : ""}> Enabled</label><label class="field"><span class="label">Below (TC)</span><input class="input" name="at_thr" type="number" step="0.1" min="0.1" value="${a ? (Number(a.threshold) / 1e12).toFixed(1) : "1.0"}" style="width:110px"></label><label class="field"><span class="label">Pull (ICP)</span><input class="input" name="at_amt" type="number" step="0.01" min="0.01" value="${a ? icp(a.amount_e8s) : "0.5"}" style="width:110px"></label><label class="field"><span class="label">Approve allowance (ICP)</span><input class="input" name="at_allow" type="number" step="0.1" min="0" value="5" style="width:130px"></label><button type="submit" class="btn btn-primary" ${S.busy ? "disabled" : ""}>Save</button></div>
+    ${a?.last_run ? `<p class="small muted nudge">Last run ${ago(a.last_run)}: ${esc(a.last_result)}</p>` : ""}
+  </form>`;
+}
+const hex = (b: Uint8Array | number[]) => [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+const unhex = (h: string) => Uint8Array.from(h.match(/../g)!.map((x) => parseInt(x, 16)));
+
+const stars = (avg: number) => "★★★★★☆☆☆☆☆".slice(5 - Math.round(avg), 10 - Math.round(avg));
+function attestHtml(a?: Attestation): string {
+  if (!a) return `<p class="small muted">Not judged yet. The judge scores coverage, depth, linking, organisation and freshness; listing a notebook runs it automatically.</p>`;
+  return `<div class="attest"><span class="grade g-${esc(a.grade)}">${esc(a.grade)}</span><div><b>${a.score}/100</b> <span class="small muted">· judge ${esc(a.judge)} · ${ago(a.at)}</span><div class="small">${esc(a.summary)}</div></div></div>`;
+}
+/** Manage: the notebook as an ICRC-7 token, its attestation, and the listing form. */
+function sellCard(): string {
+  const v = S.notebook!;
+  const l = S.listing;
+  const id = S.tokenId;
+  return `<div class="card band">
+    <h2>${icon("tag")} Sell or give away</h2>
+    <p class="muted small">This notebook is token <b>#${id === undefined ? "…" : String(id)}</b> of the <code>Notebooks</code> ICRC-7 collection at the registry. Whoever holds the token owns the canister: a sale or a transfer moves the controllers and the owner with it, and the new owner's agents and payer start from scratch.</p>
+    <div class="band-title">Quality attestation<button type="button" class="btn btn-ghost" data-action="attest" ${S.busy ? "disabled" : ""}>${icon("refresh")}${S.attest ? "Judge again" : "Run the judge"}</button></div>
+    ${attestHtml(S.attest)}
+    ${l ? `<div class="band-title">For sale</div><p class="small">Listed ${ago(l.listing.listed_at)} for <b>${fmtAmt(l.listing.price, tokenOf(l.listing.token))}</b>${l.rating_count ? ` · ${stars(l.rating_avg)} ${l.rating_avg.toFixed(1)} (${String(l.rating_count)})` : ""}${l.listing.blurb ? `<br><span class="muted">${esc(l.listing.blurb)}</span>` : ""}</p><div class="row tight"><a class="btn" href="#/market" data-action="nav">${icon("tag")}See it on the market</a><button type="button" class="btn btn-danger" data-action="delist" ${S.busy ? "disabled" : ""}>Remove the listing</button></div>`
+      : `<form class="band" data-form="list"><div class="band-title">Put it up for sale</div><div class="row tight"><label class="field"><span class="label">Price</span><input class="input" name="price" inputmode="decimal" placeholder="1" required style="max-width:140px"></label><label class="field"><span class="label">Token</span>${tokenSelect("listtoken", S.payToken)}</label><label class="field" style="flex:1;min-width:200px"><span class="label">Blurb</span><input class="input" name="blurb" maxlength="500" placeholder="What is in it and who it is for"></label></div><p class="small muted">Buyers pay in that token through OISY; the registry keeps ${(S.marketFee / 100).toFixed(1)}% and you get the rest in the same token. The judge's verdict and buyer ratings show beside the listing.</p><button type="submit" class="btn btn-primary" ${S.busy ? "disabled" : ""}>${icon("tag")}${S.busy === "list" ? "Listing…" : "List for sale"}</button></form>`}
+    <p class="small muted nudge">Give it away instead: any ICRC-7 wallet can transfer token #${id === undefined ? "…" : String(id)}, or ask on Manage → Snapshots for a copy first.</p>
+  </div>`;
+}
+
+// --- the market
+
+async function loadMarket() {
+  S.market = { listings: S.market?.listings ?? [], bought: S.market?.bought ?? new Set(), loading: true };
+  render();
+  try {
+    const ls = await registry().listings();
+    S.market.listings = ls;
+    if (!S.tokens.length) S.tokens = await registry().tokens();
+    const mine = ls.filter((l) => l.listing.seller.toText() !== S.principal);
+    const b = await Promise.all(mine.map((l) => registry().bought(l.listing.canister).catch(() => false)));
+    S.market.bought = new Set(mine.filter((_, i) => b[i]).map((l) => l.listing.canister.toText()));
+  } catch (e) {
+    toast(errMsg(e), "error");
+  }
+  S.market.loading = false;
+  render();
+}
+function marketPage(): string {
+  const m = S.market!;
+  const shown = m.decksOnly ? m.listings.filter((l) => (l.attestation?.decks ?? 0n) > 0n) : m.listings;
+  const cards = shown.map((l) => {
+    const t = tokenOf(l.listing.token);
+    const mine = l.listing.seller.toText() === S.principal;
+    const a = l.attestation;
+    return `<div class="nb-card listing">
+      <span class="name">${icon("book")}${esc(l.name)}${a ? `<span class="grade g-${esc(a.grade)}" title="${esc(a.summary)}">${esc(a.grade)} · ${a.score}</span>` : ""}</span>
+      ${l.listing.blurb ? `<span class="small">${esc(l.listing.blurb)}</span>` : ""}
+      <span class="meta"><span class="pill ok">${fmtAmt(l.listing.price, t)}</span>${a ? `<span>${String(a.notes)} notes · ${String(a.words)} words${a.decks ? ` · ${String(a.decks)} deck${a.decks === 1n ? "" : "s"}` : ""}</span>` : ""}</span>
+      <span class="small muted">${l.rating_count ? `<span class="stars">${stars(l.rating_avg)}</span> ${l.rating_avg.toFixed(1)} from ${String(l.rating_count)} buyer${l.rating_count === 1n ? "" : "s"}` : "No ratings yet"} · seller ${shortPrincipal(l.listing.seller.toText())}</span>
+      ${a ? `<span class="small faint">Judge ${esc(a.judge)}: ${esc(a.summary)}</span>` : ""}
+      <span class="row tight">${mine ? `<span class="pill">Yours</span>` : `<button type="button" class="btn btn-primary" data-action="buy" data-id="${l.listing.canister.toText()}" ${S.busy ? "disabled" : ""}>${icon("bolt")}Buy for ${fmtAmt(l.listing.price, t)}</button>`}<button type="button" class="btn btn-ghost" data-action="see-ratings" data-id="${l.listing.canister.toText()}">Ratings</button></span>
+    </div>`;
+  }).join("");
+  return `<div class="page">
+    <header class="topbar">${brand()}<span class="right">${pageNav()}${themeBtn()}</span></header>
+    <section class="card"><h2>${icon("tag")} Notebook market</h2><p class="muted small">Whole notebooks for sale as ICRC-7 tokens. Buying moves the canister to you: its notes, history, attachments and cycles. Each listing carries the judge's verdict and ratings from people who bought it. Pay through OISY in ICP, ckBTC, ckETH, ckUSDC or ckUSDT.</p>
+    <div class="row tight"><button type="button" class="tag-chip ${m.decksOnly ? "" : "active"}" data-action="market-filter" data-decks="0">All notebooks</button><button type="button" class="tag-chip ${m.decksOnly ? "active" : ""}" data-action="market-filter" data-decks="1">${icon("check")}Decks and quizzes</button></div>
+    ${m.loading && !m.listings.length ? `<p class="muted">Loading…</p>` : shown.length ? `<div class="nb-grid">${cards}</div>` : `<p class="muted">${m.decksOnly ? "No notebooks with decks or quizzes for sale right now." : "Nothing for sale right now. List one of yours from Manage → Sell."}</p>`}
+    ${[...m.bought].length ? `<div class="band"><div class="band-title">Notebooks you bought</div><p class="small muted">Rate them 1 to 5 stars; your rating shows on the listing if it is sold on.</p>${[...m.bought].map((c) => `<div class="row tight"><code>${c}</code><button type="button" class="btn" data-action="rate" data-id="${c}">${icon("star")}Rate</button></div>`).join("")}</div>` : ""}
+    </section></div>`;
+}
+async function buyListing(id: string) {
+  const l = S.market?.listings.find((x) => x.listing.canister.toText() === id);
+  if (!l) return;
+  const t = tokenOf(l.listing.token);
+  if ((await ask({ title: `Buy “${l.name}” for ${fmtAmt(l.listing.price, t)}?`, body: `The price plus one ${t.symbol} fee is approved in ${payLabel()}; the registry pays the seller and hands the canister to you.`, ok: "Buy" })) === null) return;
+  await act("buy", async () => {
+    const payer = await approvePayment(Principal.fromText(REGISTRY), l.listing.price + t.fee, t);
+    const r = await registry().buy(l.listing.canister, payer.toText() === S.principal ? null : payer);
+    if (r.__kind__ === "Err") throw new Error(r.Err);
+    S.notebooks = undefined;
+    void loadNotebooks();
+    void loadMarket();
+    return `“${r.Ok.name}” is yours. It is in your notebooks now.`;
+  });
+}
+async function rateDialog(id: string) {
+  const starsV = await ask({ title: "Rate this notebook", label: "Stars", value: "5", choices: [5, 4, 3, 2, 1].map((n) => ({ value: String(n), label: `${"★".repeat(n)}${"☆".repeat(5 - n)}` })), ok: "Next" });
+  if (starsV === null) return;
+  const comment = await ask({ title: "A few words for other buyers", label: "Comment (optional)", value: "", placeholder: "What was it worth to you?", ok: "Submit rating" });
+  if (comment === null) return;
+  await act("rate", async () => {
+    const r = await registry().rate(Principal.fromText(id), Number(starsV), comment);
+    if (r.__kind__ === "Err") throw new Error(r.Err);
+    void loadMarket();
+    return "Thanks, your rating is on the listing.";
+  });
+}
+async function showRatings(id: string) {
+  const rs = await registry().ratings(Principal.fromText(id));
+  const body = rs.length ? rs.map((r) => `${"★".repeat(r.stars)}${"☆".repeat(5 - r.stars)} ${r.comment || "(no comment)"} — ${shortPrincipal(r.rater.toText())}, ${ago(r.at)}`).join("\n") : "No ratings yet.";
+  await ask({ title: "Buyer ratings", body, ok: "Close" });
+}
+
+function sharesCard(): string {
+  return `<div class="card band">
+    <h2>${icon("share")} Shared notes</h2>
+    <p class="muted small">Share a note from its menu, a folder from the folder's menu, or the whole notebook here: public (anyone with the link, no sign-in) or with specific principals as viewers, commenters or editors; a link can allow viewing, commenting or editing. Links follow renames.</p>
+    <div class="row tight"><button type="button" class="btn" data-action="share-notebook">${icon("share")}Share whole notebook…</button></div>
+    ${S.shares.length ? `<div class="runs nudge">${S.shares.map((x) => { const kind = x.path === "" ? "notebook" : note(x.path) ? "note" : "folder"; const link = kind === "note" ? shareLink(x.path) : `${location.origin}${location.pathname}#/shared/${S.notebook!.canister.toText()}/${encodeURIComponent(x.path || "/")}`; return `<div class="run"><span><b>${esc(x.path === "" ? "Whole notebook" : kind === "folder" ? `/${x.path}` : stem(x.path))}</b> <span class="small muted">· ${kind} · ${x.public ? "public" : `${x.principals.length} reader${x.principals.length === 1 ? "" : "s"}, ${(x.editors ?? []).length} editor${(x.editors ?? []).length === 1 ? "" : "s"}`}</span></span><span class="row-actions"><button type="button" class="btn btn-ghost" data-action="copy-cmd" data-value="${esc(link)}">${icon("copy")}Link</button><button type="button" class="btn btn-ghost" data-action="share" data-path="${esc(x.path)}" data-kind="${kind}">${icon("edit")}</button></span></div>`; }).join("")}</div>` : `<p class="small muted">Nothing shared.</p>`}
+  </div>`;
+}
+
+// ---------- help & support ----------
+
+const STATUS: Record<string, string> = { Open: "Open", InProgress: "In progress", Done: "Done", WontFix: "Won't fix" };
+const statusOf = (b: Bug) => b.status as string;
+const toStatus = (k: string): BugStatus => k as BugStatus;
+
+/** Report a bug (title + detail) and see your earlier reports with the admin's answer. */
+async function helpDialog() {
+  if (!S.identity) {
+    if (await ask({ title: "Help and support", body: "Sign in first so we can follow up on your report (your principal is the only thing attached).", ok: "Sign in" }).then((v) => v !== null)) await signIn();
+    if (!S.identity) return;
+  }
+  const mine = await registry().my_bugs().catch(() => [] as Bug[]);
+  const scrim = document.createElement("div");
+  scrim.className = "scrim";
+  const context = `page=${S.tab}${S.notebook ? ` notebook=${S.notebook.canister.toText()}` : ""}${cur() ? ` note=${cur()}` : ""} ua=${navigator.userAgent.slice(0, 120)} ${innerWidth}x${innerHeight}`;
+  scrim.innerHTML = `<form class="modal wide" role="dialog" aria-modal="true" aria-labelledby="hlp-t">
+    <h2 id="hlp-t">${icon("help")} Help and support</h2>
+    <div class="segmented sub" role="radiogroup" aria-label="What are you sending"><label class="tab on"><input type="radio" name="kind" value="bug" checked hidden>${icon("bug")}<span class="lbl">Report a problem</span></label><label class="tab"><input type="radio" name="kind" value="idea" hidden>${icon("star")}<span class="lbl">Suggest an idea</span></label></div>
+    <p class="muted small nudge" data-kind-copy="bug">Something broken or confusing? Say what you did, what you expected and what happened. Where you were (${esc(context.split(" ua=")[0])}) is attached automatically.</p>
+    <p class="muted small nudge" data-kind-copy="idea" hidden>What would make this app better for you? Say what you are trying to do and how the idea helps. Ideas go to the same queue as reports and you can see the answer here.</p>
+    <label class="field"><span class="label">Title</span><input class="input" name="title" maxlength="120" placeholder="Save button does nothing on long notes" data-ph-bug="Save button does nothing on long notes" data-ph-idea="Let me pin a note to the top of the file tree" required autocomplete="off"></label>
+    <label class="field nudge"><span class="label">Detail</span><textarea class="input" name="detail" rows="6" maxlength="4000" placeholder="Steps, expected, actual. Paste any error text." data-ph-bug="Steps, expected, actual. Paste any error text." data-ph-idea="The problem it solves, how you imagine it working, anything you have seen elsewhere." required></textarea></label>
+    <div class="actions"><button type="button" class="btn" data-x="cancel">Close</button><button type="submit" class="btn btn-primary" data-send><span data-send-bug>${icon("bug")}Send report</span><span data-send-idea hidden>${icon("star")}Send idea</span></button></div>
+    ${mine.length ? `<div class="band-title nudge">Your reports and ideas</div><div class="runs">${mine.map((b) => `<div class="run bug-row"><span><span class="pill ${b.kind === "idea" ? "ok" : ""}" style="margin-right:6px">${b.kind === "idea" ? "idea" : "bug"}</span><b>${esc(b.title)}</b>${b.note ? `<div class="small muted">Admin: ${esc(b.note)}</div>` : ""}</span><span class="small muted">${when(b.created_at)}</span><span class="pill ${statusOf(b) === "Done" ? "ok" : statusOf(b) === "WontFix" ? "low" : ""}">${STATUS[statusOf(b)]}</span></div>`).join("")}</div>` : ""}
+  </form>`;
+  const close = () => scrim.remove();
+  scrim.addEventListener("click", (e) => e.target === scrim && close());
+  scrim.querySelector("[data-x=cancel]")!.addEventListener("click", close);
+  const kindOf = () => scrim.querySelector<HTMLInputElement>("[name=kind]:checked")!.value as "bug" | "idea";
+  scrim.addEventListener("change", (e) => {
+    if ((e.target as HTMLInputElement).name !== "kind") return;
+    const k = kindOf();
+    scrim.querySelectorAll<HTMLElement>(".segmented .tab").forEach((t) => t.classList.toggle("on", t.querySelector("input")!.value === k));
+    scrim.querySelectorAll<HTMLElement>("[data-kind-copy]").forEach((p) => (p.hidden = p.dataset.kindCopy !== k));
+    scrim.querySelectorAll<HTMLInputElement>("[data-ph-bug]").forEach((i) => (i.placeholder = k === "bug" ? i.dataset.phBug! : i.dataset.phIdea!));
+    scrim.querySelector<HTMLElement>("[data-send-bug]")!.hidden = k !== "bug";
+    scrim.querySelector<HTMLElement>("[data-send-idea]")!.hidden = k !== "idea";
+  });
+  scrim.querySelector("form")!.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const title = scrim.querySelector<HTMLInputElement>("[name=title]")!.value;
+    const detail = scrim.querySelector<HTMLTextAreaElement>("[name=detail]")!.value;
+    try {
+      const k = kindOf();
+      const r = await (k === "idea" ? registry().report_idea(title, detail, context) : registry().report_bug(title, detail, context));
+      if (r.__kind__ === "Err") throw new Error(r.Err);
+      close();
+      toast(k === "idea" ? `Thanks. Idea #${r.Ok.id} is in the queue; check back here for the answer.` : `Thanks. Report #${r.Ok.id} is in the queue; check back here for the answer.`, "ok");
+    } catch (err) {
+      toast(errMsg(err), "error");
+    }
+  });
+  document.body.append(scrim);
+  scrim.querySelector<HTMLInputElement>("[name=title]")!.focus();
+}
+
+async function loadAdmin() {
+  S.admin = { bugs: [], filter: S.admin?.filter ?? "Open", kind: S.admin?.kind, open: S.admin?.open, loading: true, repo: S.admin?.repo };
+  render();
+  try {
+    void registry().github_repo().then((repo) => { if (S.admin) { S.admin.repo = repo; render(); } }).catch(() => {});
+    const r = await registry().bugs();
+    if (r.__kind__ === "Err") throw new Error(r.Err);
+    S.admin.bugs = r.Ok;
+  } catch (e) {
+    toast(errMsg(e), "error");
+  }
+  S.admin.loading = false;
+  render();
+}
+
+function adminPage(): string {
+  const a = S.admin!;
+  const counts: Record<string, number> = { All: a.bugs.length, Open: 0, InProgress: 0, Done: 0, WontFix: 0 };
+  for (const b of a.bugs) counts[statusOf(b)]++;
+  const shown = a.bugs.filter((b) => (a.filter === "All" || statusOf(b) === a.filter) && (!a.kind || (b.kind ?? "bug") === a.kind));
+  const kinds = [["", "Bugs and ideas"], ["bug", "Bugs"], ["idea", "Ideas"]].map(([k, l]) => `<button type="button" class="tag-chip ${(a.kind ?? "") === k ? "active" : ""}" data-action="admin-kind" data-kind="${k}">${l}<span class="cnt">${a.bugs.filter((b) => !k || (b.kind ?? "bug") === k).length}</span></button>`).join("");
+  const chips = ["Open", "InProgress", "Done", "WontFix", "All"].map((k) => `<button type="button" class="tag-chip ${a.filter === k ? "active" : ""}" data-action="admin-filter" data-filter="${k}">${STATUS[k] ?? k}<span class="cnt">${counts[k]}</span></button>`).join("");
+  const rows = shown.map((b) => {
+    const openRow = a.open === b.id;
+    return `<div class="bug ${openRow ? "open" : ""}">
+      <div class="bug-head" data-action="admin-open" data-id="${b.id}"><span class="faint mono">#${b.id}</span>${b.kind === "idea" ? `<span class="pill ok" title="An idea">${icon("star")}idea</span>` : ""}<b>${esc(b.title)}</b><span class="grow"></span><span class="small muted">${ago(b.created_at)} · ${shortPrincipal(b.reporter.toText())}</span><span class="pill ${statusOf(b) === "Done" ? "ok" : statusOf(b) === "WontFix" ? "low" : statusOf(b) === "InProgress" ? "agent" : ""}">${STATUS[statusOf(b)]}</span></div>
+      ${openRow ? `<div class="bug-body">
+        <pre class="bug-detail">${esc(b.detail)}</pre>
+        <p class="small faint mono">${esc(b.context)}</p>
+        <p class="small muted">Reporter <code>${b.reporter.toText()}</code> · reported ${when(b.created_at)} · updated ${when(b.updated_at)}</p>
+        <form class="field" data-form="bug" data-id="${b.id}"><span class="label">Note to the reporter</span><textarea class="input" name="note" rows="2">${esc(b.note)}</textarea>
+          <div class="row tight nudge">${["Open", "InProgress", "Done", "WontFix"].map((k) => `<button type="submit" class="btn ${statusOf(b) === k ? "btn-primary" : ""}" name="status" value="${k}">${STATUS[k]}</button>`).join("")}<button type="button" class="btn btn-ghost" data-action="copy-cmd" data-value="${esc(`#${b.id} ${b.title}\n\n${b.detail}\n\n${b.context}`)}">${icon("copy")}Copy</button></div>
+        </form>
+      </div>` : ""}
+    </div>`;
+  }).join("");
+  return `<div class="page wide">
+    <header class="topbar">${brand()}<span class="right"><span class="kicker">Admin · reports and ideas</span>${pageNav()}${themeBtn()}</span></header>
+    <section class="card">
+      <div class="row"><h2>${icon("bug")} Reports</h2><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="admin-refresh">${icon("refresh")}Refresh</button></span></div>
+      <div class="tags" style="padding:4px 0 4px">${kinds}</div>
+      <div class="tags" style="padding:0 0 12px">${chips}</div>
+      ${a.loading ? `<p class="muted">Loading…</p>` : shown.length ? `<div class="bugs">${rows}</div>` : `<p class="muted">Nothing here.</p>`}
+      <form class="field nudge" data-form="admin-repo"><span class="label">GitHub repository for #developers (owner/name)</span><div class="row tight"><input class="input" name="repo" value="${esc(a.repo ?? "")}" placeholder="owner/name" style="max-width:320px"><button type="submit" class="btn">Save</button></div><span class="small muted">Only its contributors can post there; they prove a login by putting their principal in their GitHub bio.</span></form>
+      <p class="small muted nudge">Admins are the registry's controllers plus principals added with <code>icp canister call registry add_admin '(principal "…")'</code>. Click a report to work it; the note is shown to the reporter.</p>
+      ${account()}
+    </section>
+  </div>`;
+}
+
+function paneMenu(paneId: number, x: number, y: number) {
+  const p = pane(paneId);
+  contextMenu(x, y, `Pane${p.active ? ` · ${title(p.active)}` : ""}`, [
+    { label: "Split right", icon: "split", action: () => splitRight(paneId) },
+    { label: "New tab", icon: "plus", action: () => void newNote(undefined, undefined, paneId) },
+    { label: "New drawing", icon: "edit", action: () => void newDrawing() },
+    { label: "New spreadsheet", icon: "columns", action: () => void newSheetNote() },
+    { label: "New dashboard", icon: "graph", action: () => void newDashNote() },
+    "-",
+    { label: "Close tab", icon: "x", action: () => p.active && closeTab(paneId, p.active) },
+    { label: "Close other tabs", icon: "x", action: () => { p.tabs = p.active ? [p.active] : []; render(); } },
+    { label: "Close pane", icon: "trash", danger: S.panes.length > 1, action: () => { if (S.panes.length > 1) { S.panes = S.panes.filter((x) => x.id !== paneId); if (S.focused === paneId) S.focused = S.panes[0].id; } else { p.tabs = []; p.active = undefined; } syncHash(); render(); } },
+  ]);
+}
+
+// ---------- events ----------
+
+let copiedTimer = 0;
+let searchTimer = 0;
+function flashCopied(what: string) {
+  S.copied = what;
+  render();
+  clearTimeout(copiedTimer);
+  copiedTimer = window.setTimeout(() => ((S.copied = ""), render()), 2000);
+}
+
+async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
+  const pid = el.dataset.pane ? Number(el.dataset.pane) : undefined;
+  const newTab = !!(ev && (ev.metaKey || ev.ctrlKey || ev.button === 1));
+  switch (action) {
+    case "sign-in":
+      return signIn();
+    case "sign-out":
+      return signOut();
+    case "theme-menu": {
+      const r = el.getBoundingClientRect();
+      return themeMenu(r.right - 200, r.bottom + 4);
+    }
+    case "open-notebook":
+      return openNotebook(el.dataset.id!);
+    case "tab":
+      await saveAll();
+      S.tab = el.dataset.tab as Tab;
+      if (S.tab === "chat" && S.mobile) S.mobilePane = "note";
+      if (S.tab === "study") void loadAttempts();
+      if (S.tab === "work") checkReminders();
+      if (S.tab === "manage") {
+        void refreshInfo();
+        void loadSellInfo();
+        S.snapshots = undefined;
+        registry().list_snapshots(S.notebook!.canister).then((l) => { S.snapshots = l.__kind__ === "Ok" ? l.Ok : []; if (S.tab === "manage") render(); }).catch(() => { S.snapshots = []; });
+      }
+      return render();
+    case "mpane":
+      S.mobilePane = el.dataset.pane as MobilePane;
+      return render();
+    case "chat-folders":
+      S.chat.excluded = el.dataset.all === "1" ? new Set() : new Set(chatFolders());
+      store(`nb-chat-off-${S.notebook!.canister.toText()}`, JSON.stringify([...S.chat.excluded]));
+      return render();
+    case "chat-clear":
+      S.chat.messages = [];
+      return render();
+    case "attest":
+      return act("attest", async () => {
+        const r = await registry().attest(S.notebook!.canister);
+        if (r.__kind__ === "Err") throw new Error(r.Err);
+        S.attest = r.Ok;
+        return `Judged ${r.Ok.grade}, ${r.Ok.score}/100.`;
+      });
+    case "delist":
+      return act("delist", async () => {
+        const r = await registry().delist(S.notebook!.canister);
+        if (r.__kind__ === "Err") throw new Error(r.Err);
+        S.listing = undefined;
+        return "The listing is gone.";
+      });
+    case "buy":
+      return buyListing(el.dataset.id!);
+    case "market-filter": if (S.market) S.market.decksOnly = el.dataset.decks === "1"; return render();
+    case "rate":
+      return rateDialog(el.dataset.id!);
+    case "see-ratings":
+      return showRatings(el.dataset.id!);
+    case "manage-tab":
+      S.manageTab = el.dataset.tab as ManageTab;
+      store("nb-manage-tab", S.manageTab);
+      return render();
+    case "aside-mode":
+      S.asideMode = el.dataset.mode as "links" | "comments";
+      return renderSide();
+    case "comments":
+      S.asideMode = S.asideMode === "comments" && S.asideOpen ? "links" : "comments";
+      if (!S.asideOpen) { S.asideOpen = true; store("nb-aside", "1"); }
+      if (S.mobile) S.mobilePane = "links";
+      return render();
+    case "more-menu":
+      return moreMenu(el);
+    case "attest-note": {
+      const path = el.dataset.path!;
+      const kind = el.dataset.kind!;
+      const verdict = el.dataset.verdict!;
+      const detail = await ask({ title: `${kind === "compare" ? "English vs Lean" : "Lean check"}: ${verdict}`, label: "Note for others (optional)", placeholder: kind === "compare" ? "e.g. the Lean adds n ≥ 2, the paper does not" : "Lean version, Mathlib commit…", ok: "Attest" });
+      if (detail === null) return;
+      try {
+        const r = await nb().attest_note(path, kind, verdict, el.dataset.lean && el.dataset.lean !== path ? el.dataset.lean : null, detail);
+        if (r.__kind__ === "Err") throw new Error(describe(r.Err));
+        await loadAttestations(path);
+        renderSide();
+        refreshPreviews();
+        toast("Attested; it stays valid until the note or the Lean changes.", "ok");
+      } catch (e) { toast(errMsg(e), "error"); }
+      return;
+    }
+    case "noop": return;
+    case "ribbon-tab": {
+      const tab = el.dataset.tab as Tab;
+      if (S.notebook && !S.community && !S.market && !S.admin) return onAction("tab", el, ev!);
+      const id = S.notebook?.canister.toText() ?? store("nb-last")?.match(/notebook\/([a-z0-9-]+)/)?.[1] ?? S.notebooks?.[0]?.canister.toText();
+      if (!id) { location.hash = "#/"; return; }
+      S.tab = tab;
+      S.community = undefined; clearInterval(chatTimer); S.market = undefined; S.admin = undefined;
+      const same = S.notebook?.canister.toText() === id;
+      location.hash = `#/notebook/${id}`;
+      if (same) render();
+      return;
+    }
+    case "chat-channel": return loadCommunity(el.dataset.channel!);
+    case "board-topic": { const t = el.dataset.topic ?? ""; store("nb-board-topic", t); if (location.hash !== "#/board") { S.board!.topic = t || undefined; location.hash = "#/board"; return; } return loadBoard(t); }
+    case "board-sort": { S.board!.sort = el.dataset.sort as "hot" | "new" | "top"; store("nb-board-sort", S.board!.sort); return render(); }
+    case "board-new": return newPost();
+    case "board-vote": {
+      const b = S.board!; const dir = Number(el.dataset.dir);
+      if (el.dataset.kind === "post") { const r = await registry().vote_post(BigInt(el.dataset.id!), dir); if (r.__kind__ === "Err") return toast(r.Err, "error"); const i = b.posts.findIndex((p) => p.id === r.Ok.id); if (i >= 0) b.posts[i] = r.Ok; if (b.open?.id === r.Ok.id) b.open = r.Ok; }
+      else { const r = await registry().vote_comment(BigInt(el.dataset.post!), BigInt(el.dataset.id!), dir); if (r.__kind__ === "Err") return toast(r.Err, "error"); const i = b.comments.findIndex((c) => c.id === r.Ok.id); if (i >= 0) b.comments[i] = r.Ok; }
+      return render();
+    }
+    case "board-reply": { S.board!.replyTo = el.dataset.id ? BigInt(el.dataset.id) : undefined; render(); return document.querySelector<HTMLTextAreaElement>(".pcomment .pc-form textarea")?.focus(); }
+    case "board-del": {
+      if ((await ask({ title: "Delete this post?", body: "It and every comment on it are removed for good.", ok: "Delete", danger: true })) === null) return;
+      const r = await registry().delete_post(BigInt(el.dataset.id!)); if (r.__kind__ === "Err") return toast(r.Err, "error");
+      location.hash = "#/board"; return;
+    }
+    case "board-del-comment": {
+      const b = S.board!; const r = await registry().delete_post_comment(BigInt(el.dataset.post!), BigInt(el.dataset.id!)); if (r.__kind__ === "Err") return toast(r.Err, "error");
+      b.comments = await registry().post_comments(BigInt(el.dataset.post!)); return render();
+    }
+    case "board-share": {
+      const b = S.board!;
+      const ch = await ask({ title: "Discuss in chat", label: "Channel", choices: b.channels.map((c) => ({ value: c.name, label: `#${c.name}` })), value: b.open?.topic ?? "general", ok: "Drop it in" });
+      if (!ch) return;
+      const r = await registry().share_post(ch, BigInt(el.dataset.id!)); if (r.__kind__ === "Err") return toast(r.Err, "error");
+      return toast(`Shared in #${ch}.`, "ok");
+    }
+    case "chat-join": return joinCommunity();
+    case "rain": return makeRain();
+    case "wallet-add": return addIcp();
+    case "wallet-refresh": { const b = await icpBalance().catch(() => undefined); if (S.community && b !== undefined) { S.community.balance = b; renderChannels(); } return; }
+    case "chat-reply": { const c = S.community!; c.replyTo = c.messages.find((m) => m.id === BigInt(el.dataset.mid!)); render(); scrollChat(); return document.querySelector<HTMLTextAreaElement>("[name=chattext]")?.focus(); }
+    case "chat-reply-cancel": { S.community!.replyTo = undefined; render(); return scrollChat(); }
+    case "chat-edit": { const c = S.community!; const m = c.messages.find((x) => x.id === BigInt(el.dataset.mid!)); if (!m) return; c.editing = m.id; c.draft = m.text; c.replyTo = undefined; render(); scrollChat(); const ta = document.querySelector<HTMLTextAreaElement>("[name=chattext]"); if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); ta.style.height = "auto"; ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`; } return; }
+    case "chat-edit-cancel": { const c = S.community!; c.editing = undefined; c.draft = ""; render(); return scrollChat(); }
+    case "chat-pin": {
+      const c = S.community!; const m = c.messages.find((x) => x.id === BigInt(el.dataset.mid!)); if (!m) return;
+      const r = await registry().pin_message(c.channel, m.id, !m.pinned);
+      if (r.__kind__ === "Err") return toast(r.Err, "error");
+      replaceMessage(r.Ok);
+      c.pins = await registry().pinned(c.channel).then((x) => (x.__kind__ === "Ok" ? x.Ok : [])).catch(() => c.pins ?? []);
+      render(); return scrollChat();
+    }
+    case "chat-to-board": {
+      const c = S.community!; const m = c.messages.find((x) => x.id === BigInt(el.dataset.mid!)); if (!m) return;
+      const text = m.text.replace(/\s+/g, " ").trim();
+      return pinToBoard({ topic: c.channel, title: text.length > 90 ? `${text.slice(0, 87)}…` : text || (m.gist ? m.gist.title : m.poll ? "Poll" : "From the chat"), body: `@${m.handle} in #${c.channel}: ${m.text}`, ...(m.gist ? { notebook: m.gist.notebook.toText(), path: m.gist.path, text: m.gist.text } : {}) });
+    }
+    case "chat-pins": { const c = S.community!; c.showPins = !c.showPins; render(); return scrollChat(); }
+    case "chat-goto": { const el2 = document.querySelector<HTMLElement>(`.msgrow[data-mid="${el.dataset.mid}"]`); if (el2) { el2.scrollIntoView({ block: "center", behavior: "smooth" }); el2.classList.add("flash"); setTimeout(() => el2.classList.remove("flash"), 1500); } else toast("That message is older than what is loaded.", "info"); return; }
+    case "chat-del": {
+      const c = S.community!;
+      if ((await ask({ title: "Delete this message?", ok: "Delete", danger: true })) === null) return;
+      const r = await registry().delete_message(c.channel, BigInt(el.dataset.mid!));
+      if (r.__kind__ === "Err") return toast(r.Err, "error");
+      const m = c.messages.find((x) => x.id === BigInt(el.dataset.mid!)); if (m) { m.deleted = true; m.text = ""; }
+      return renderChat();
+    }
+    case "chat-new-channel": {
+      const name = await ask({ title: "New channel", label: "Name (letters, digits, dashes)", placeholder: "lean", ok: "Next" });
+      if (!name?.trim()) return;
+      const topic = await ask({ title: `#${name.trim().toLowerCase()}`, label: "Topic", placeholder: "What it is for", ok: "Create" });
+      if (topic === null) return;
+      const r = await registry().create_channel(name.trim(), topic);
+      if (r.__kind__ === "Err") return toast(r.Err, "error");
+      return loadCommunity(r.Ok.name);
+    }
+    case "chat-del-channel": {
+      ev?.stopPropagation();
+      const n = el.dataset.channel!;
+      if ((await ask({ title: `Delete #${n}?`, body: "Its messages stay in storage but the channel disappears from the list.", ok: "Delete", danger: true })) === null) return;
+      const r = await registry().delete_channel(n);
+      if (r.__kind__ === "Err") return toast(r.Err, "error");
+      return loadCommunity("general");
+    }
+    case "chat-online-toggle": return toggleSide("aside");
+    case "chat-side-toggle": return toggleSide("side");
+    case "chat-emoji": { const c = S.community!; c.picker = { mid: el.dataset.mid ? BigInt(el.dataset.mid) : undefined }; render(); return scrollChat(); }
+    case "chat-pick-close": { S.community!.picker = undefined; render(); return scrollChat(); }
+    case "chat-pick": {
+      const c = S.community!;
+      const emoji = el.dataset.emoji!;
+      const mid = c.picker?.mid;
+      c.picker = undefined;
+      if (mid !== undefined) return reactTo(mid, emoji);
+      const ta = document.querySelector<HTMLTextAreaElement>("[name=chattext]");
+      const at = ta?.selectionStart ?? c.draft.length;
+      c.draft = `${c.draft.slice(0, at)}${emoji}${c.draft.slice(at)}`;
+      render();
+      scrollChat();
+      const ta2 = document.querySelector<HTMLTextAreaElement>("[name=chattext]");
+      if (ta2) { ta2.focus(); ta2.setSelectionRange(at + emoji.length, at + emoji.length); ta2.style.height = "auto"; ta2.style.height = `${Math.min(ta2.scrollHeight, 160)}px`; }
+      return;
+    }
+    case "chat-react": return reactTo(BigInt(el.dataset.mid!), el.dataset.emoji!);
+    case "chat-vote": {
+      const c = S.community!;
+      const r = await registry().vote(c.channel, BigInt(el.dataset.mid!), Number(el.dataset.opt));
+      if (r.__kind__ === "Err") return toast(r.Err, "error");
+      return replaceMessage(r.Ok);
+    }
+    case "chat-plus": {
+      const r = el.getBoundingClientRect();
+      return contextMenu(r.left, r.top - 8, "", [
+        { label: "Create a poll", icon: "list", action: () => void createPoll() },
+        { label: "Share a note for opinions", icon: "file", action: () => void shareGist() },
+        S.community!.channels.find((x) => x.name === S.community!.channel)?.gate === "github"
+          ? { label: "Raise for an AI plan", icon: "bolt", action: () => void startPlanFund() }
+          : { label: "Raise cycles for a notebook", icon: "bolt", action: () => void startFund() },
+      ]);
+    }
+    case "gist-open": { S.community = undefined; clearInterval(chatTimer); location.hash = `#/notebook/${el.dataset.nb}/${el.dataset.path}`; return; }
+    case "gist-more": return el.closest(".gist")?.classList.toggle("open");
+    case "link-github": return linkGithub();
+    case "chat-jump": { S.community!.newCount = 0; return scrollChat(); }
+    case "present": return present(draftOf(el.dataset.path!).text, el.dataset.path);
+    case "show-next": return showStep(1);
+    case "show-prev": return showStep(-1);
+    case "show-close": return closeShow();
+    case "gist-present": { const m = S.community!.messages.find((x) => x.id === BigInt(el.dataset.mid!)); if (m?.gist) present(m.gist.text, undefined, true); return; }
+    case "gist-slide": {
+      const c = S.community!;
+      const mid = BigInt(el.dataset.mid!);
+      const m = c.messages.find((x) => x.id === mid);
+      if (!m?.gist) return;
+      c.gistSlide ??= new Map();
+      const n = splitSlides(m.gist.text).length;
+      c.gistSlide.set(mid, Math.max(0, Math.min(n - 1, (c.gistSlide.get(mid) ?? 0) + Number(el.dataset.d))));
+      const row = el.closest(".gist"); if (row) { row.outerHTML = gistHtml(m); afterRender(); }
+      return;
+    }
+    case "fund-donate": {
+      const c = S.community!;
+      const m = c.messages.find((x) => x.id === BigInt(el.dataset.mid!));
+      if (!m?.fund) return;
+      const v = await ask({ title: m.fund.plan ? `Chip in for @${m.handle}'s ${m.fund.plan}` : `Chip in for “${m.fund.name}”`, body: m.fund.plan ? `The ICP goes to @${m.handle}'s in-app wallet, minus one ledger fee.` : `The ICP leaves your wallet and is minted into the notebook's cycles at once; the owner never holds it. ${useOisy ? "" : "Locally your dev account approves the registry first."}`, label: "Amount (ICP)", value: "0.1", ok: "Chip in" });
+      if (v === null) return;
+      const amount = BigInt(Math.round(Number(v) * 1e8));
+      if (amount < 1_000_000n) return toast("Minimum is 0.01 ICP.", "error");
+      try {
+        await approvePayment(Principal.fromText(REGISTRY), amount + ICP_FEE);
+        const r = await registry().donate(c.channel, m.id, amount);
+        if (r.__kind__ === "Err") throw new Error(r.Err);
+        replaceMessage(r.Ok);
+        toast(m.fund.plan ? `${icp(amount)} ICP sent to @${m.handle}. Thank you.` : `${icp(amount)} ICP became cycles for “${m.fund.name}”. Thank you.`, "ok");
+        void icpBalance().then((b) => { c.balance = b; renderChannels(); }).catch(() => {});
+      } catch (e) { toast(errMsg(e), "error"); }
+      return;
+    }
+    case "fund-close": {
+      const c = S.community!;
+      if ((await ask({ title: "Close this fundraiser?", body: "What was raised is already in the notebook; no more donations are taken.", ok: "Close it" })) === null) return;
+      const r = await registry().close_fund(c.channel, BigInt(el.dataset.mid!));
+      if (r.__kind__ === "Err") return toast(r.Err, "error");
+      return replaceMessage(r.Ok);
+    }
+    case "chat-pane": { const w = document.querySelector(".workspace.community"); w?.classList.remove("m-files", "m-note", "m-links"); w?.classList.add(`m-${el.dataset.pane}`); document.querySelectorAll(".mobilebar .mtab").forEach((b) => b.setAttribute("aria-selected", String(b === el))); return; }
+    case "nav-home": location.hash = "#/"; return;
+    case "clipper-key":
+      return act("clipper", async () => {
+        const r = await nb().create_scoped_key(`clipper-${Date.now().toString(36).slice(-4)}`, "Inbox");
+        if (r.__kind__ === "Err") throw new Error(describe(r.Err));
+        S.clipperKey = r.Ok;
+        const k = await nb().agent_keys();
+        S.agentKeys = k.__kind__ === "Ok" ? k.Ok : S.agentKeys;
+        return "Inbox key made; drag the bookmarklet to your bar.";
+      });
+    case "mention": {
+      const name = el.dataset.name!;
+      const person = people(workNotes()).find((p) => p.name.toLowerCase() === name.toLowerCase());
+      if (person?.path) return open(person.path);
+      const r = el.getBoundingClientRect();
+      return contextMenu(r.left, r.bottom + 4, `@${name}`, [
+        { label: `Create a person note for ${name}`, icon: "person", action: () => void newNote(`People/${name}.md`, "People", undefined, fillTemplate(BUILTIN_TEMPLATES.Person, { title: name })) },
+        { label: `${person?.mentions.length ?? 0} mention${person?.mentions.length === 1 ? "" : "s"} · see them in Work`, icon: "briefcase", action: () => { S.tab = "work"; S.taskOwner = name; render(); } },
+      ]);
+    }
+    case "sheet-tab": {
+      const p = el.dataset.path!; const i = Number(el.dataset.i);
+      if ((sheetTab.get(p) ?? 0) === i && !S.mobile) { const n = await ask({ title: "Rename sheet", body: "Formulas that point at it by name are updated.", label: "Name", value: wbOf(p).sheets[i]?.name ?? "", ok: "Rename" }); if (n?.trim()) { renameSheet(p, i, n.trim()); void save(p); } return; }
+      sheetTab.set(p, i);
+      return refreshSheet(p);
+    }
+    case "sheet-add": { const p = el.dataset.path!; updateWorkbook(p, (wb) => { let n = wb.sheets.length + 1; while (wb.sheets.some((s) => s.name === `Sheet${n}`)) n++; wb.sheets.push(newSheet(`Sheet${n}`)); sheetTab.set(p, wb.sheets.length - 1); }, true); return void save(p); }
+    case "sheet-del": {
+      ev?.stopPropagation();
+      const p = el.dataset.path!; const i = Number(el.dataset.i);
+      const name = wbOf(p).sheets[i]?.name ?? "";
+      if ((await ask({ title: `Delete sheet “${name}”?`, body: "Formulas on other sheets that point at it will show #REF!.", ok: "Delete", danger: true })) === null) return;
+      updateWorkbook(p, (wb) => { if (wb.sheets.length > 1) wb.sheets.splice(i, 1); sheetTab.set(p, Math.max(0, Math.min(i, wb.sheets.length - 1))); }, true);
+      return void save(p);
+    }
+    case "sheet-rows": { const p = el.dataset.path!; updateWorkbook(p, (wb) => { const sh = wb.sheets[Math.min(sheetTab.get(p) ?? 0, wb.sheets.length - 1)]; const n = Math.max(sh.rows.length + 5, 25) + 15; while (sh.rows.length < n) sh.rows.push([]); }, true); return; }
+    case "sheet-chart": return chartDialog(el.dataset.path!);
+    case "sheet-chart-edit": return chartDialog(el.dataset.path!, el.dataset.id);
+    case "dash-add": return tileDialog(el.dataset.path!);
+    case "dash-del": { const p = el.dataset.path!; updateDash(p, (d) => { d.tiles = d.tiles.filter((t) => t.id !== el.dataset.id); }); return void save(p); }
+    case "dash-move": { const p = el.dataset.path!; updateDash(p, (d) => { const i = d.tiles.findIndex((t) => t.id === el.dataset.id); const j = i + Number(el.dataset.d); if (i < 0 || j < 0 || j >= d.tiles.length) return; [d.tiles[i], d.tiles[j]] = [d.tiles[j], d.tiles[i]]; }); return void save(p); }
+    case "dash-width": { const p = el.dataset.path!; updateDash(p, (d) => { const t = d.tiles.find((x) => x.id === el.dataset.id); if (t) t.w = t.w === 2 ? 1 : 2; }); return void save(p); }
+    case "sheet-chart-del": { const p = el.dataset.path!; updateWorkbook(p, (wb) => { for (const sh of wb.sheets) sh.charts = sh.charts.filter((c) => c.id !== el.dataset.id); }, true); return void save(p); }
+    case "sheet-export": {
+      const p = el.dataset.path!; const wb = wbOf(p); const sh = wb.sheets[Math.min(sheetTab.get(p) ?? 0, wb.sheets.length - 1)];
+      return downloadBytes(`${stem(p)} - ${sh.name}.csv`, toCsv(evaluate(wb).get(sh.name) ?? []), "text/csv");
+    }
+    case "nb-run": return void runCell(el.dataset.path!, Number(el.dataset.i));
+    case "nb-run-all": {
+      const p = el.dataset.path!;
+      const n = parseNotebook(draftOf(p).text).cells.length;
+      for (let i = 0; i < n; i++) { const r = await runCell(p, i); if (r?.error) break; }
+      return;
+    }
+    case "nb-restart": restartPython(); nbRunning.clear(); refreshNotebook(el.dataset.path!); return toast("Python restarted; variables are gone.", "ok");
+    case "nb-add": { const p = el.dataset.path!; const i = Number(el.dataset.i); updateNotebook(p, (nb) => void nbAddCell(nb, i, el.dataset.type as "code" | "markdown")); return document.querySelectorAll<HTMLTextAreaElement>(`.nbk[data-ipynb="${CSS.escape(p)}"] textarea[name=nbsrc]`)[i + 1]?.focus(); }
+    case "nb-del": { const p = el.dataset.path!; const i = Number(el.dataset.i); return updateNotebook(p, (nb) => void nb.cells.splice(i, 1)); }
+    case "nb-move": { const p = el.dataset.path!; return updateNotebook(p, (nb) => nbMoveCell(nb, Number(el.dataset.i), Number(el.dataset.d) as -1 | 1)); }
+    case "nb-type": { const p = el.dataset.path!; const i = Number(el.dataset.i); return updateNotebook(p, (nb) => { const c = nb.cells[i]; c.type = c.type === "code" ? "markdown" : "code"; c.outputs = []; c.count = null; }); }
+    case "nb-edit-md": { if (S.mobile) return; const p = el.dataset.path!; const id = el.dataset.cell ?? (el.closest<HTMLElement>("[data-cell]")?.dataset.cell ?? ""); const set = nbEditing.get(p) ?? new Set(); set.add(id); nbEditing.set(p, set); refreshNotebook(p); return document.querySelector<HTMLTextAreaElement>(`.nbk[data-ipynb="${CSS.escape(p)}"] [data-cell="${CSS.escape(id)}"] textarea`)?.focus(); }
+    case "new-meeting": return newMeeting();
+    case "weekly-review": {
+      const p = `Reviews/Week to ${dayKey(new Date())}.md`;
+      const content = weeklyReview(workNotes().map((n) => ({ ...n, created: note(n.path)!.created, modified: note(n.path)!.modified })), new Date());
+      if (note(p)) { onDraftInput(p, content); await save(p); return open(p); }
+      return newNote(p, "Reviews", undefined, content);
+    }
+    case "new-from-template": return newFromTemplate();
+    case "quick-capture": return quickCapture();
+    case "task-owner": S.taskOwner = el.dataset.owner ?? ""; return render();
+    case "follow-up": return followUp(el.dataset.path!, el);
+    case "actions-to-board": return actionsToBoard(el.dataset.path!);
+    case "new-person": { const n = el.dataset.name!; const p = `People/${n}.md`; if (note(p)) return open(p); return newNote(p, "People", undefined, fillTemplate(BUILTIN_TEMPLATES.Person, { title: n })); }
+    case "notify-allow": { if ("Notification" in window) await Notification.requestPermission(); return render(); }
+    case "sort-table": {
+      const path = el.dataset.path!;
+      const ti = Number(el.dataset.table);
+      const col = Number(el.dataset.col);
+      const desc = el.dataset.desc === "1";
+      const text = draftOf(path).text;
+      const lines = text.split("\n");
+      let seen = -1; let line = -1; let code = false;
+      for (let i = 0; i < lines.length; i++) { if (/^\s*```/.test(lines[i])) code = !code; if (!code && /^\s*\|/.test(lines[i]) && (i === 0 || !/^\s*\|/.test(lines[i - 1]))) { seen++; if (seen === ti) { line = i; break; } } }
+      if (line < 0) return;
+      onDraftInput(path, sortTable(text, line, col, desc));
+      return;
+    }
+    case "study-mode": { const p = pane(pid); p.study = !p.study; if (p.study && p.view === "edit") p.view = "preview"; if (p.study) S.studyIdx.set(p.id, 0); return render(); }
+    case "study-next": { const p = pane(pid); S.studyIdx.set(p.id, (S.studyIdx.get(p.id) ?? 0) + 1); return render(); }
+    case "study-prev": { const p = pane(pid); S.studyIdx.set(p.id, Math.max(0, (S.studyIdx.get(p.id) ?? 0) - 1)); return render(); }
+    case "study-cards": return studyNote("cards", el.dataset.path!);
+    case "pomodoro": S.pomodoro = S.pomodoro ? undefined : { end: Date.now() + POMO.work * 1000, phase: "work" }; return render();
+    case "side-toggle":
+      return toggleSide("side");
+    case "aside-toggle":
+      return toggleSide("aside");
+    case "freeze-modal": {
+      const id = S.notebook!.canister.toText();
+      const h = S.health.get(id) ?? (await loadHealth(id));
+      return h ? freezeModal(id, h) : toast("Could not read the notebook's health.", "error");
+    }
+    case "qz-flip": { const st = quizStates.get(el.dataset.path!); if (st) { st.flipped = !st.flipped; refreshQuiz(el.dataset.path!); } return; }
+    case "qz-rate": {
+      const path = el.dataset.path!;
+      const st = quizStates.get(path);
+      if (!st) return;
+      const r = el.dataset.r as Rating;
+      const card = parseCards(draftOf(path).text)[st.order[st.i]];
+      if (card) {
+        const m = srsFor(path);
+        const k = cardKey(card.front);
+        m[k] = srsReview(m[k], r, new Date());
+        saveSrs(path, m);
+        if (!isSharedKey(path)) {
+          const ds = S.settings.deckStats[path] ?? { reviews: 0, good: 0 };
+          ds.reviews++;
+          if (r !== "again") ds.good++;
+          S.settings.deckStats[path] = ds;
+          bumpStudy();
+        }
+      }
+      r === "again" ? st.again++ : st.good++;
+      st.i++;
+      st.flipped = false;
+      if (st.i >= st.order.length) void finishSession(path, st.good, st.order.length);
+      refreshQuiz(path);
+      if (!isSharedKey(path)) document.querySelectorAll<HTMLElement>(".rb-count").forEach((b) => (b.textContent = String(dueTotal())));
+      return;
+    }
+    case "qz-due": { const p = el.dataset.path!; deckSession(p, draftOf(p).text, true); return refreshQuiz(p); }
+    case "qz-all": { const p = el.dataset.path!; deckSession(p, draftOf(p).text, true, 0, true); return refreshQuiz(p); }
+    case "anki": {
+      const p = el.dataset.path!;
+      const blob = new Blob([ankiTsv(parseCards(draftOf(p).text), title(p))], { type: "text/plain" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `${title(p)}.txt`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      return toast("Anki file downloaded; File → Import in Anki.", "ok");
+    }
+    case "qz-pick": {
+      const st = quizStates.get(el.dataset.path!);
+      if (!st || st.checked) return;
+      const k = Number(el.dataset.opt);
+      const q = parseChoice(draftOf(el.dataset.path!).text)[st.order[st.i]];
+      if (q && q.correct.length === 1) st.picked.clear();
+      st.picked.has(k) ? st.picked.delete(k) : st.picked.add(k);
+      return refreshQuiz(el.dataset.path!);
+    }
+    case "qz-check": { const st = quizStates.get(el.dataset.path!); if (st && st.picked.size) { st.checked = true; const q = parseChoice(draftOf(el.dataset.path!).text)[st.order[st.i]]; if (q && graded(q, st.picked)) st.right++; refreshQuiz(el.dataset.path!); } return; }
+    case "qz-next": { const p = el.dataset.path!; const st = quizStates.get(p); if (st) { st.i++; st.checked = false; st.picked = new Set(); if (st.i >= st.order.length) { if (!isSharedKey(p)) bumpStudy(st.order.length); void finishSession(p, st.right, st.order.length); } refreshQuiz(p); } return; }
+    case "qz-restart": { const p = el.dataset.path!; const n = quizStates.get(p)?.n ?? 0; if (quizKind(draftOf(p).text) === "cards") deckSession(p, draftOf(p).text, true, 0, true); else quizState(p, n, true, 0); return refreshQuiz(p); }
+    case "qz-shuffle": { const p = el.dataset.path!; const n = quizStates.get(p)?.n ?? 0; const seed = Date.now() % 100000 || 1; if (quizKind(draftOf(p).text) === "cards") deckSession(p, draftOf(p).text, true, seed, true); else quizState(p, n, true, seed); return refreshQuiz(p); }
+    case "kb-del":
+      return updateBoard(el.dataset.path!, (b) => void b.lanes[Number(el.dataset.lane)]?.cards.splice(Number(el.dataset.idx), 1));
+    case "kb-add-lane": {
+      const name = await ask({ title: "New lane", label: "Name", placeholder: "In review", ok: "Add" });
+      if (name?.trim()) updateBoard(el.dataset.path!, (b) => void b.lanes.push({ title: name.trim(), cards: [], complete: false }));
+      return;
+    }
+    case "kb-lane-menu": {
+      const path = el.dataset.path!;
+      const li = Number(el.dataset.lane);
+      const lane = parseBoard(draftOf(path).text).lanes[li];
+      if (!lane) return;
+      const r = el.getBoundingClientRect();
+      return contextMenu(r.left, r.bottom + 4, lane.title, [
+        { label: lane.complete ? "Stop marking cards done" : "Mark cards here as done", icon: "check", action: () => updateBoard(path, (b) => { const l = b.lanes[li]; l.complete = !l.complete; for (const c of l.cards) c.done = l.complete; }) },
+        { label: "Move lane left", icon: "links", action: () => updateBoard(path, (b) => { if (li > 0) b.lanes.splice(li - 1, 0, b.lanes.splice(li, 1)[0]); }) },
+        { label: "Move lane right", icon: "move", action: () => updateBoard(path, (b) => { if (li < b.lanes.length - 1) b.lanes.splice(li + 1, 0, b.lanes.splice(li, 1)[0]); }) },
+        "-",
+        { label: "Delete lane", icon: "trash", danger: true, action: () => void (async () => { if (!lane.cards.length || (await ask({ title: `Delete “${lane.title}” and its ${lane.cards.length} cards?`, ok: "Delete", danger: true })) !== null) updateBoard(path, (b) => void b.lanes.splice(li, 1)); })() },
+      ]);
+    }
+    case "open":
+      return open(el.dataset.path!, { newTab });
+    case "wiki":
+      return follow(el.dataset.target!, newTab);
+    case "tag":
+      S.tag = el.dataset.tag ?? "";
+      S.query = "";
+      S.tab = "notes";
+      if (S.mobile) S.mobilePane = "files";
+      return render();
+    case "fold": {
+      const p = el.dataset.path!;
+      S.collapsed.has(p) ? S.collapsed.delete(p) : S.collapsed.add(p);
+      store("nb-collapsed", JSON.stringify([...S.collapsed]));
+      return renderSide();
+    }
+    case "row-menu": {
+      const r = el.getBoundingClientRect();
+      return menuFor(el.dataset.kind as "file" | "folder", el.dataset.path!, r.left - 160, r.bottom + 4);
+    }
+    case "root-menu": {
+      const r = el.getBoundingClientRect();
+      return menuFor("root", "", r.left - 160, r.bottom + 4);
+    }
+    case "new":
+      return newNote();
+    case "tab-new":
+      return newNote(undefined, undefined, pid);
+    case "tab-open":
+      return open(el.dataset.tab!, { paneId: pid });
+    case "tab-close":
+      return closeTab(pid!, el.dataset.tab!);
+    case "pane-menu": {
+      const r = el.getBoundingClientRect();
+      return paneMenu(pid!, r.right - 200, r.bottom + 4);
+    }
+    case "download":
+      return downloadNotebook();
+    case "share":
+      return shareDialog(el.dataset.path!, (el.dataset.kind as "note" | "folder" | "notebook" | undefined) ?? "note");
+    case "help":
+      return helpDialog();
+    case "nb-menu": {
+      const r = el.getBoundingClientRect();
+      const items: MenuItem[] = (S.notebooks ?? []).map((n) => ({ label: n.name, icon: "book", checked: n.canister.toText() === S.notebook?.canister.toText(), action: () => { if (n.canister.toText() !== S.notebook?.canister.toText()) void saveAll().then(() => openNotebook(n.canister.toText())); } }));
+      items.push("-", { label: "New notebook…", icon: "plus", action: () => void ask({ title: "New notebook", label: "Name", placeholder: "Research", ok: "Create" }).then((v) => { if (v?.trim()) { S.newNotebook = v.trim(); void saveAll().then(() => { location.hash = "#/"; void createNotebook(); }); } }) }, { label: "All notebooks", icon: "updown", action: () => { void saveAll(); location.hash = "#/"; } }, { label: "Manage this notebook", icon: "bolt", action: () => { S.tab = "manage"; render(); } });
+      return contextMenu(r.left, r.top - 8 - items.length * 34, "Notebooks", items);
+    }
+    case "today":
+      return openDaily();
+    case "bookmark":
+      return toggleBookmark(el.dataset.path!);
+    case "props-toggle":
+      S.propsOpen = !S.propsOpen;
+      store("nb-props", S.propsOpen ? "1" : "0");
+      return render();
+    case "prop-add": {
+      const form = el.closest<HTMLElement>("[data-props]")!;
+      const data = propsFromForm(form);
+      let k = "property";
+      for (let i = 2; k in data; i++) k = `property${i}`;
+      data[k] = "";
+      onDraftInput(form.dataset.props!, setFrontmatter(draftOf(form.dataset.props!).text, data));
+      render();
+      return (document.querySelector<HTMLInputElement>(`[name=pkey][data-key="${CSS.escape(k)}"]`))?.select();
+    }
+    case "prop-del": {
+      const form = el.closest<HTMLElement>("[data-props]")!;
+      const data = propsFromForm(form);
+      delete data[el.dataset.key!];
+      onDraftInput(form.dataset.props!, setFrontmatter(draftOf(form.dataset.props!).text, data));
+      return render();
+    }
+    case "admin-refresh":
+      return loadAdmin();
+    case "admin-kind": { S.admin!.kind = el.dataset.kind || undefined; return render(); }
+    case "admin-filter":
+      S.admin!.filter = el.dataset.filter!;
+      return render();
+    case "admin-open":
+      S.admin!.open = S.admin!.open === BigInt(el.dataset.id!) ? undefined : BigInt(el.dataset.id!);
+      return render();
+    case "copy-key":
+      await copy(S.issued!.key);
+      return toast("Key copied.", "ok");
+    case "copy-skill":
+      await copy(await agentSkill(S.issued!));
+      return toast("Agent skill copied. Paste it into your agent.", "ok");
+    case "revoke-key":
+      if (!(await confirmDialog(`Revoke the key for ${el.dataset.name}?`, "The agent stops working at once. Its notes stay.", "Revoke"))) return;
+      try {
+        unwrap(await nb().revoke_agent_key(el.dataset.name!));
+        const r = await nb().agent_keys();
+        S.agentKeys = r.__kind__ === "Ok" ? r.Ok : S.agentKeys;
+        toast(`Revoked ${el.dataset.name}.`, "ok");
+      } catch (e) {
+        toast(errMsg(e), "error");
+      }
+      return render();
+    case "import":
+      return importDialog();
+    case "restore":
+      return restoreDialog();
+    case "sync":
+      return syncQueue();
+    case "share-notebook":
+      return shareDialog("", "notebook");
+    case "del-comment":
+      try {
+        const r = await (S.shared ? notebookOf(S.shared.canister) : nb()).delete_comment(BigInt(el.dataset.id!));
+        if (r.__kind__ === "Err") throw new Error(describe(r.Err));
+        if (S.shared) return openShared(S.shared.canister, S.shared.path);
+        S.comments = S.comments.filter((c) => c.id !== BigInt(el.dataset.id!) && c.parent !== BigInt(el.dataset.id!));
+        renderSide();
+      } catch (e) {
+        toast(errMsg(e), "error");
+      }
+      return render();
+    case "unpublish":
+      try {
+        unwrap(await nb().set_published(null));
+        S.published = null;
+        toast("Unpublished.", "ok");
+      } catch (e) {
+        toast(errMsg(e), "error");
+      }
+      return render();
+    case "snap-refresh":
+    case "snap-take":
+    case "snap-restore":
+    case "snap-delete": {
+      const c = S.notebook!.canister;
+      try {
+        if (action === "snap-take") {
+          S.busy = "snap";
+          render();
+          const r = await registry().take_snapshot(c, S.snapshots?.[0] ? S.snapshots[0].id : null);
+          if (r.__kind__ === "Err") throw new Error(r.Err);
+          toast("Snapshot taken.", "ok");
+        } else if (action === "snap-restore") {
+          if (!(await confirmDialog("Restore this snapshot?", "The notebook is stopped, rolled back to the snapshot, and started again. Everything written since is lost.", "Restore"))) return;
+          S.busy = "snap";
+          render();
+          const r = await registry().restore_snapshot(c, unhex(el.dataset.id!));
+          if (r.__kind__ === "Err") throw new Error(r.Err);
+          toast("Restored. Reloading the notebook.", "ok");
+          await loadNotebook();
+        } else if (action === "snap-delete") {
+          const r = await registry().delete_snapshot(c, unhex(el.dataset.id!));
+          if (r.__kind__ === "Err") throw new Error(r.Err);
+        }
+        const l = await registry().list_snapshots(c);
+        S.snapshots = l.__kind__ === "Ok" ? l.Ok : [];
+      } catch (e) {
+        toast(errMsg(e), "error");
+      }
+      S.busy = "";
+      return render();
+    }
+    case "attach-open":
+      return openAttachment(el.dataset.target!);
+    case "heading": {
+      const path = el.dataset.path ?? el.closest<HTMLElement>("[data-preview-path]")?.dataset.previewPath ?? cur();
+      if (!path) return;
+      pendingScroll = { path, target: el.dataset.heading! };
+      const p = pane();
+      if (p.view === "edit") { p.view = "split"; render(); }
+      return scrollPending();
+    }
+    case "palette":
+      return openPalette();
+    case "menu-current": {
+      const r = el.getBoundingClientRect();
+      const p = pane(pid);
+      return p.active && menuFor("file", p.active, r.right - 220, r.bottom + 4);
+    }
+    case "view":
+      return cycleView(pid);
+    case "depth":
+      S.localDepth = S.localDepth >= 3 ? 1 : S.localDepth + 1;
+      store("nb-local-depth", String(S.localDepth));
+      return renderSide();
+    case "graph-fit":
+      return graph?.fit();
+    case "refresh-info":
+      return refreshInfo();
+    case "copy-principal":
+      await copy(S.principal);
+      return flashCopied("principal");
+    case "copy-acct":
+      await copy(el.dataset.value!);
+      return flashCopied("acct");
+    case "copy-cmd":
+      await copy(el.dataset.value!);
+      return toast("Command copied.", "ok");
+  }
+}
+
+document.addEventListener("click", (ev) => {
+  if (!(ev.target as HTMLElement).closest(".ctx-menu")) closeMenu();
+  const t = ev.target as HTMLElement;
+  // a task checkbox in reading view flips its [ ] in the source
+  if (t instanceof HTMLInputElement && t.type === "checkbox" && t.closest(".preview")) {
+    const pv = t.closest<HTMLElement>(".preview")!;
+    const path = pv.dataset.previewPath!;
+    const i = [...pv.querySelectorAll("input[type=checkbox]")].indexOf(t);
+    onDraftInput(path, toggleTask(draftOf(path).text, i));
+    return;
+  }
+  const paneEl = t.closest<HTMLElement>(".pane[data-pane]");
+  if (paneEl && Number(paneEl.dataset.pane) !== S.focused) {
+    S.focused = Number(paneEl.dataset.pane);
+    document.querySelectorAll(".pane.focused").forEach((p) => p.classList.remove("focused"));
+    if (S.panes.length > 1) paneEl.classList.add("focused");
+    syncHash();
+    renderSide();
+  }
+  const el = t.closest<HTMLElement>("[data-action]");
+  if (!el || el.dataset.action === "nav" || (el as HTMLButtonElement).disabled) return;
+  if (el.tagName === "A") ev.preventDefault();
+  void onAction(el.dataset.action!, el, ev);
+});
+document.addEventListener("auxclick", (ev) => {
+  if (ev.button !== 1) return;
+  const el = (ev.target as HTMLElement).closest<HTMLElement>('[data-action="open"], [data-action="wiki"], [data-action="tab-open"]');
+  if (!el) return;
+  ev.preventDefault();
+  if (el.dataset.action === "tab-open") closeTab(Number(el.dataset.pane), el.dataset.tab!);
+  else void onAction(el.dataset.action!, el, ev);
+});
+document.addEventListener("contextmenu", (ev) => {
+  const t = ev.target as HTMLElement;
+  const tabEl = t.closest<HTMLElement>(".tabitem[data-tab]");
+  if (tabEl) {
+    ev.preventDefault();
+    const pid = Number(tabEl.dataset.pane);
+    const path = tabEl.dataset.tab!;
+    return contextMenu(ev.clientX, ev.clientY, path, [
+      { label: "Split right", icon: "split", action: () => moveTab(pid, path, pid, undefined, true) },
+      { label: "Close tab", icon: "x", action: () => closeTab(pid, path) },
+      { label: "Close other tabs", icon: "x", action: () => { const p = pane(pid); p.tabs = [path]; p.active = path; render(); } },
+      "-",
+      { label: "Rename…", icon: "edit", action: () => void ask({ title: "Rename note", label: "Name (folder/name)", value: stem(path), ok: "Rename" }).then((v) => { if (v) void renamePath(path, v); }) },
+      { label: "Delete", icon: "trash", danger: true, action: () => void deletePath(path) },
+    ]);
+  }
+  const row = t.closest<HTMLElement>(".tree-row[data-kind]");
+  const inTree = t.closest("[data-tree], .side");
+  if (!row && !inTree) return;
+  if (!S.notes || S.query.trim() || S.tag) return;
+  ev.preventDefault();
+  if (row) menuFor(row.dataset.kind as "file" | "folder", row.dataset.path!, ev.clientX, ev.clientY);
+  else menuFor("root", "", ev.clientX, ev.clientY);
+});
+
+// tabs and tree files are draggable: between panes, to reorder, onto a pane's drop zone to split, or into a folder
+let drag: { from?: number; path: string; folder?: boolean } | undefined;
+document.addEventListener("dragstart", (ev) => {
+  const card = (ev.target as HTMLElement).closest<HTMLElement>(".kb-card[data-kb-card]");
+  if (card) {
+    kbDrag = { path: card.dataset.path!, lane: Number(card.dataset.lane), idx: Number(card.dataset.idx) };
+    ev.dataTransfer?.setData("text/plain", "");
+    ev.dataTransfer!.effectAllowed = "move";
+    card.classList.add("dragging");
+    return;
+  }
+  const el = (ev.target as HTMLElement).closest<HTMLElement>(".tabitem[data-tab], .tree-row.file[data-path], .tree-row.folder[data-path]");
+  if (!el) return;
+  if (el.dataset.kind === "folder" && isAgentPath(el.dataset.path!)) return ev.preventDefault();
+  drag = el.dataset.tab ? { from: Number(el.dataset.pane), path: el.dataset.tab } : { path: el.dataset.path!, folder: el.dataset.kind === "folder" };
+  ev.dataTransfer?.setData("text/plain", drag.path);
+  ev.dataTransfer!.effectAllowed = "move";
+  document.body.classList.add("dragging-tab");
+});
+document.addEventListener("dragend", () => {
+  kbDrag = undefined;
+  drag = undefined;
+  document.querySelectorAll(".kb-card.dragging, .kb-cards.over").forEach((e) => e.classList.remove("dragging", "over"));
+  document.body.classList.remove("dragging-tab");
+  document.querySelectorAll(".drop-before, .drop-into").forEach((e) => e.classList.remove("drop-before", "drop-into"));
+});
+document.addEventListener("dragover", (ev) => {
+  if (kbDrag) {
+    const zone = (ev.target as HTMLElement).closest<HTMLElement>(".kb-cards[data-kb-drop]");
+    if (!zone) return;
+    ev.preventDefault();
+    document.querySelectorAll(".kb-cards.over").forEach((e) => e.classList.remove("over"));
+    zone.classList.add("over");
+    return;
+  }
+  if (!drag && ev.dataTransfer?.types.includes("Files") && (ev.target as HTMLElement).closest(".side")) {
+    ev.preventDefault();
+    return;
+  }
+  if (!drag) return;
+  const t = ev.target as HTMLElement;
+  const target = t.closest<HTMLElement>(".tabitem[data-tab], [data-tabbar], [data-dropzone], .tree-row.folder[data-path], [data-tree]");
+  if (!target || (drag.folder && !target.matches(".tree-row.folder, [data-tree]"))) return;
+  if (target.matches(".tree-row.folder") && isAgentPath(target.dataset.path!)) return;
+  ev.preventDefault();
+  document.querySelectorAll(".drop-before, .drop-into").forEach((e) => e.classList.remove("drop-before", "drop-into"));
+  target.classList.add(target.classList.contains("tabitem") ? "drop-before" : "drop-into");
+});
+document.addEventListener("drop", (ev) => {
+  if (kbDrag) {
+    const zone = (ev.target as HTMLElement).closest<HTMLElement>(".kb-cards[data-kb-drop]");
+    if (!zone) return;
+    ev.preventDefault();
+    const d = kbDrag;
+    kbDrag = undefined;
+    const over = (ev.target as HTMLElement).closest<HTMLElement>(".kb-card[data-kb-card]");
+    const idx = over ? Number(over.dataset.idx) + (ev.clientY > over.getBoundingClientRect().top + over.offsetHeight / 2 ? 1 : 0) : zone.querySelectorAll(".kb-card").length;
+    updateBoard(d.path, (b) => moveCard(b, { lane: d.lane, idx: d.idx }, { lane: Number(zone.dataset.lane), idx }));
+    return;
+  }
+  if (!drag && ev.dataTransfer?.files.length && (ev.target as HTMLElement).closest(".side") && S.notes) {
+    ev.preventDefault();
+    const dt = ev.dataTransfer;
+    void (async () => {
+      const files = await filesFromDrop(dt);
+      const overwrite = await ask({ title: `Import ${files.length} file${files.length === 1 ? "" : "s"}?`, label: "If a note already exists", choices: [{ value: "skip", label: "Keep mine, skip the import" }, { value: "overwrite", label: "Overwrite with the imported file" }], ok: "Import" });
+      if (overwrite !== null) await importFiles(files, overwrite === "overwrite");
+    })();
+    return;
+  }
+  if (!drag) return;
+  const t = ev.target as HTMLElement;
+  const d = drag;
+  const folderRow = t.closest<HTMLElement>(".tree-row.folder[data-path]");
+  const treeArea = t.closest<HTMLElement>("[data-tree]");
+  if (folderRow || treeArea) {
+    // dropped in the file tree: move the note or folder there
+    ev.preventDefault();
+    drag = undefined;
+    document.body.classList.remove("dragging-tab");
+    document.querySelectorAll(".drop-into").forEach((e) => e.classList.remove("drop-into"));
+    const into = folderRow ? folderRow.dataset.path! : "";
+    if (isAgentPath(into) || isAgentPath(d.path)) return toast(`${AGENT_ROOT}/ is written by agents only.`, "error");
+    const name = d.path.split("/").pop()!;
+    const target = into ? `${into}/${name}` : name;
+    if (target === d.path || into === dir(d.path)) return;
+    if (d.folder) {
+      if (into === d.path || into.startsWith(`${d.path}/`)) return toast("A folder cannot move into itself.", "error");
+      return void renameFolder(d.path, target);
+    }
+    return void renamePath(d.path, target);
+  }
+  const zone = t.closest<HTMLElement>("[data-dropzone]");
+  const tabEl = t.closest<HTMLElement>(".tabitem[data-tab]");
+  const bar = t.closest<HTMLElement>("[data-tabbar]");
+  if (!zone && !tabEl && !bar) return;
+  ev.preventDefault();
+  if (zone) moveTab(d.from, d.path, Number(zone.dataset.dropzone), undefined, true);
+  else if (tabEl) {
+    const to = Number(tabEl.dataset.pane);
+    const idx = pane(to).tabs.indexOf(tabEl.dataset.tab!);
+    moveTab(d.from, d.path, to, idx);
+  } else moveTab(d.from, d.path, Number(bar!.dataset.pane));
+  drag = undefined;
+  document.body.classList.remove("dragging-tab");
+});
+
+document.addEventListener("input", (ev) => {
+  const el = ev.target as HTMLInputElement | HTMLTextAreaElement;
+  const v = el.value;
+  switch (el.name) {
+    case "newNotebook": S.newNotebook = v; break;
+    case "newDesc": S.newDesc = v; break;
+    case "newAgent": S.newAgent = v; break;
+    case "topupAmount": S.topupAmount = v; break;
+    case "nbsrc": { const ta = el as HTMLTextAreaElement; const p = ta.dataset.path!; const i = Number(ta.dataset.i); ta.rows = Math.max(2, v.split("\n").length); updateNotebook(p, (nb) => { nb.cells[i].source = v; }, false); break; }
+    case "taskdone": { const p = el.dataset.path!; const line = Number(el.dataset.line); onDraftInput(p, toggleTaskLine(draftOf(p).text, line)); void save(p); setTimeout(render, 300); break; }
+    case "ics": { const inp = el as HTMLInputElement; if (inp.files?.length) void importIcs(inp.files).then(render); inp.value = ""; break; }
+    case "cell": { const inp = el as HTMLInputElement; if (v !== inp.dataset.raw) { const si = Number(inp.dataset.s), r = Number(inp.dataset.r), c = Number(inp.dataset.c); updateWorkbook(inp.dataset.path!, (wb) => { const sh = wb.sheets[si]; while (sh.rows.length <= r) sh.rows.push([]); while (sh.rows[r].length <= c) sh.rows[r].push(""); sh.rows[r][c] = v; }); } break; }
+    case "notify": { store("nb-notify", (el as HTMLInputElement).checked ? "1" : "0"); if ((el as HTMLInputElement).checked) { store("nb-mention-seen", store("nb-mention-seen") ?? "0"); void checkMentions(); } renderOnline(); break; }
+    case "csv": { const inp = el as HTMLInputElement; if (inp.files?.[0]) void importCsv(inp.dataset.path!, inp.files[0]); inp.value = ""; break; }
+    case "kbdone":
+      updateBoard(el.dataset.path!, (b) => { const c = b.lanes[Number(el.dataset.lane)]?.cards[Number(el.dataset.idx)]; if (c) c.done = (el as HTMLInputElement).checked; });
+      break;
+    case "paytoken": S.payToken = v; store("nb-pay-token", v); break;
+    case "progress": if (S.shared) { const st = Number(v); S.shared.myProgress = st; void notebookOf(S.shared.canister).set_progress(S.shared.path, st).then(() => toast(st ? "Progress saved for the group." : "Mark cleared.", "ok")); } break;
+    case "chattext": if (S.community) { S.community.draft = v; el.style.height = "auto"; el.style.height = `${Math.min(el.scrollHeight, 160)}px`; } break;
+    case "chatq": S.chat.input = v; el.style.height = "auto"; el.style.height = `${Math.min(el.scrollHeight, 200)}px`; break;
+    case "chatfolder": {
+      const f = (el as HTMLInputElement).value;
+      const on = (el as HTMLInputElement).checked;
+      for (const g of [...chatFolders(), ...S.chat.excluded]) if (g === f || (f && g.startsWith(`${f}/`))) on ? S.chat.excluded.delete(g) : S.chat.excluded.add(g);
+      store(`nb-chat-off-${S.notebook!.canister.toText()}`, JSON.stringify([...S.chat.excluded]));
+      render();
+      break;
+    }
+    case "query":
+      S.query = v;
+      S.tag = "";
+      S.serverHits = undefined;
+      if (S.notes && S.notes.length > 1500 && v.trim()) {
+        clearTimeout(searchTimer);
+        searchTimer = window.setTimeout(async () => {
+          const r = await nb().search_notes(v, 50);
+          if (r.__kind__ === "Ok" && S.query === v) { S.serverHits = r.Ok; renderSide(); }
+        }, 250);
+      }
+      renderSide();
+      break;
+    case "ghosts":
+      S.graphGhosts = (el as HTMLInputElement).checked;
+      store("nb-graph-ghosts", S.graphGhosts ? "1" : "0");
+      applyGraph();
+      break;
+    case "gq": S.graphStyle.query = v; applyGraph(); break;
+    case "gcolor": S.graphStyle.colorBy = v as "none" | "folder" | "tag"; store("nb-graph-color", v); applyGraph(); break;
+    case "gattach": S.graphStyle.hideAttachments = (el as HTMLInputElement).checked; store("nb-graph-noattach", S.graphStyle.hideAttachments ? "1" : "0"); applyGraph(); break;
+    case "gorphans": S.graphStyle.orphans = (el as HTMLInputElement).checked; applyGraph(); break;
+    case "pkey":
+    case "pval": {
+      const form = el.closest<HTMLElement>("[data-props]");
+      if (form) onDraftInput(form.dataset.props!, setFrontmatter(draftOf(form.dataset.props!).text, propsFromForm(form)));
+      break;
+    }
+    case "photo": {
+      const inp = el as HTMLInputElement;
+      const host = document.querySelector<HTMLElement>(`.cm-host[data-cm="${CSS.escape(inp.dataset.path!)}"]`);
+      if (inp.files?.length) void addImages([...inp.files], inp.dataset.path!, host ? editors.get(host) : undefined);
+      inp.value = "";
+      break;
+    }
+    case "draft":
+      onDraftInput((el as HTMLTextAreaElement).dataset.path!, v);
+      break;
+  }
+});
+document.addEventListener("change", (ev) => {
+  const el = ev.target as HTMLInputElement;
+  if (el.name === "kbtitle") {
+    const v = el.value.trim();
+    if (v) updateBoard(el.dataset.path!, (b) => { const l = b.lanes[Number(el.dataset.lane)]; if (l) l.title = v; });
+    return;
+  }
+  if (el.name === "title") {
+    const p = pane(Number(el.dataset.pane));
+    if (!p.active) return;
+    const v = el.value.trim();
+    // a bare name renames in place; a path with "/" moves the note
+    const target = v.includes("/") || !dir(p.active) ? v : `${dir(p.active)}/${v}`;
+    if (p.active.endsWith(".excalidraw.md") && !target.endsWith(".excalidraw") && !target.endsWith(".md")) void renamePath(p.active, `${target}.excalidraw.md`);
+    else if (!p.active.endsWith(".md") && !target.includes(".")) void renamePath(p.active, `${target}.${p.active.split(".").pop()}`);
+    else void renamePath(p.active, target);
+  }
+});
+document.addEventListener("dblclick", (ev) => {
+  const td = (ev.target as HTMLElement).closest<HTMLElement>("td[data-cell]");
+  if (td) {
+    const [ti, ri, ci] = td.dataset.cell!.split(":").map(Number);
+    const path = td.dataset.path!;
+    void ask({ title: "Edit cell", value: td.textContent ?? "", ok: "Save" }).then((v) => {
+      if (v === null) return;
+      const text = draftOf(path).text;
+      const lines = text.split("\n");
+      let seen = -1; let start = -1; let code = false;
+      for (let i = 0; i < lines.length; i++) { if (/^\s*```/.test(lines[i])) code = !code; if (!code && /^\s*\|/.test(lines[i]) && (i === 0 || !/^\s*\|/.test(lines[i - 1]))) { seen++; if (seen === ti) { start = i; break; } } }
+      if (start >= 0) onDraftInput(path, setCell(text, start + 2 + ri, ci, v));
+    });
+    return;
+  }
+  const card = (ev.target as HTMLElement).closest<HTMLElement>(".kb-card[data-kb-card]");
+  if (!card || (ev.target as HTMLElement).closest("input, a, button")) return;
+  const path = card.dataset.path!;
+  const li = Number(card.dataset.lane);
+  const ci = Number(card.dataset.idx);
+  const c = parseBoard(draftOf(path).text).lanes[li]?.cards[ci];
+  if (!c) return;
+  void ask({ title: "Edit card", value: c.text, multiline: true, ok: "Save" }).then((v) => { if (v !== null && v.trim()) updateBoard(path, (b) => { const k = b.lanes[li]?.cards[ci]; if (k) k.text = v.trim(); }); });
+});
+document.addEventListener("paste", (ev) => {
+  const cellEl = ev.target as HTMLInputElement;
+  if (cellEl?.name === "cell") {
+    const text = ev.clipboardData?.getData("text/plain") ?? "";
+    if (!/[\t\n]/.test(text.trim())) return; // a single value pastes normally
+    ev.preventDefault();
+    const rows = text.includes("\t") ? text.replace(/\r/g, "").split("\n").filter((l) => l !== "").map((l) => l.split("\t")) : parseCsv(text);
+    const p = cellEl.dataset.path!, si = Number(cellEl.dataset.s), r0 = Number(cellEl.dataset.r), c0 = Number(cellEl.dataset.c);
+    updateWorkbook(p, (wb) => { const sh = wb.sheets[si]; rows.forEach((row, i) => { while (sh.rows.length <= r0 + i) sh.rows.push([]); row.forEach((v, j) => { while (sh.rows[r0 + i].length <= c0 + j) sh.rows[r0 + i].push(""); sh.rows[r0 + i][c0 + j] = v; }); }); }, true);
+    void save(p);
+    toast(`Pasted ${rows.length} row${rows.length === 1 ? "" : "s"}.`, "ok");
+    return;
+  }
+  const host = (ev.target as HTMLElement).closest<HTMLElement>(".cm-host");
+  const ed = host && editors.get(host);
+  const text = ev.clipboardData?.getData("text/plain") ?? "";
+  if (!ed || !text.includes("\t")) return;
+  const table = tsvToTable(text);
+  if (!table) return;
+  ev.preventDefault();
+  ed.view.dispatch(ed.view.state.replaceSelection(`\n${table}`));
+  toast("Pasted as a table.", "ok");
+});
+document.addEventListener("focusout", (ev) => {
+  const ta = ev.target as HTMLTextAreaElement;
+  if (ta?.name === "cell") { const inp = ta as unknown as HTMLInputElement; commitCell(inp); inp.value = fmt(evaluate(wbOf(inp.dataset.path!)).get(wbOf(inp.dataset.path!).sheets[Number(inp.dataset.s)]?.name ?? "")?.[Number(inp.dataset.r)]?.[Number(inp.dataset.c)] ?? null); return; }
+  if (ta?.name !== "nbsrc") return;
+  const p = ta.dataset.path!; const i = Number(ta.dataset.i);
+  const nb = parseNotebook(draftOf(p).text);
+  if (nb.cells[i]?.type === "markdown" && nb.cells[i].source.trim()) { nbEditing.get(p)?.delete(nb.cells[i].id); setTimeout(() => refreshNotebook(p), 50); }
+});
+document.addEventListener("dblclick", (ev) => {
+  const md = (ev.target as HTMLElement).closest<HTMLElement>(".md-cell:not(.editing)");
+  if (md && !(ev.target as HTMLElement).closest("a, button")) { void onAction("nb-edit-md", md, ev as MouseEvent); return; }
+});
+document.addEventListener("focusin", (ev) => {
+  const ta = ev.target as HTMLElement;
+  if ((ta as HTMLInputElement).name === "cell") { const inp = ta as HTMLInputElement; inp.value = inp.dataset.raw ?? ""; inp.select(); }
+  const pid = ta.closest<HTMLElement>(".pane[data-pane]")?.dataset.pane;
+  if (pid && Number(pid) !== S.focused) {
+    S.focused = Number(pid);
+    syncHash();
+  }
+});
+document.addEventListener("keydown", (ev) => {
+  const mod = isMac ? ev.metaKey : ev.ctrlKey;
+  const t = ev.target as HTMLElement;
+  if (S.show) {
+    if (ev.key === "Escape") { ev.preventDefault(); return closeShow(); }
+    if (["ArrowRight", "ArrowDown", "PageDown", " ", "Enter"].includes(ev.key)) { ev.preventDefault(); return showStep(1); }
+    if (["ArrowLeft", "ArrowUp", "PageUp"].includes(ev.key)) { ev.preventDefault(); return showStep(-1); }
+    if (ev.key === "Home") { ev.preventDefault(); return showStep(-1e9); }
+    if (ev.key === "End") { ev.preventDefault(); return showStep(1e9); }
+    return;
+  }
+  if (ev.key === "Escape") {
+    closeMenu();
+    closePalette();
+    const dialogs = document.querySelectorAll(".scrim");
+    if (dialogs.length && !t.closest("form.modal [data-x=cancel]")) dialogs[dialogs.length - 1].querySelector<HTMLElement>("[data-x=cancel]")?.click();
+    return;
+  }
+  if ((t as HTMLTextAreaElement).name === "nbsrc") {
+    const ta = t as HTMLTextAreaElement;
+    if (ev.key === "Enter" && ev.shiftKey) {
+      ev.preventDefault();
+      const p = ta.dataset.path!; const i = Number(ta.dataset.i);
+      const nb = parseNotebook(draftOf(p).text);
+      if (nb.cells[i]?.type === "markdown") { nbEditing.get(p)?.delete(nb.cells[i].id); refreshNotebook(p); }
+      else void runCell(p, i).then(() => document.querySelectorAll<HTMLTextAreaElement>(`.nbk[data-ipynb="${CSS.escape(p)}"] textarea[name=nbsrc]`)[i + 1]?.focus());
+      return;
+    }
+    if (ev.key === "Tab" && !ev.metaKey && !ev.ctrlKey) { ev.preventDefault(); const s0 = ta.selectionStart; ta.setRangeText("    ", s0, ta.selectionEnd, "end"); ta.dispatchEvent(new Event("input", { bubbles: true })); return; }
+    return;
+  }
+  if ((t as HTMLInputElement).name === "cell") {
+    const inp = t as HTMLInputElement;
+    const go = (dr: number, dc: number) => { ev.preventDefault(); commitCell(inp); const n = cellAt(inp, dr, dc); if (n) { n.focus(); n.value = n.dataset.raw ?? ""; n.select(); } else inp.blur(); };
+    if (ev.key === "Enter") return go(ev.shiftKey ? -1 : 1, 0);
+    if (ev.key === "Escape") { inp.value = inp.dataset.raw ?? ""; return inp.blur(); }
+    if (ev.key === "ArrowDown") return go(1, 0);
+    if (ev.key === "ArrowUp") return go(-1, 0);
+    if (ev.key === "ArrowRight" && inp.selectionEnd === inp.value.length) return go(0, 1);
+    if (ev.key === "ArrowLeft" && inp.selectionStart === 0) return go(0, -1);
+    return;
+  }
+  if ((t as HTMLTextAreaElement).name === "chattext" && S.community) {
+    const c = S.community;
+    if (ev.key === "ArrowUp" && !c.draft && c.editing === undefined) { const mine = [...c.messages].reverse().find((m) => m.author.toText() === S.principal && !m.deleted && !m.poll && !m.gist && !m.fund); if (mine) { ev.preventDefault(); const i = document.createElement("i"); i.dataset.mid = mine.id.toString(); return void onAction("chat-edit", i, ev as unknown as MouseEvent); } }
+    if (ev.key === "Escape" && c.editing !== undefined) { ev.preventDefault(); return void onAction("chat-edit-cancel", t, ev as unknown as MouseEvent); }
+  }
+  if (ev.key === "Enter" && !ev.shiftKey && (t as HTMLTextAreaElement).name === "chattext") {
+    ev.preventDefault();
+    return void onAction("noop", t, ev as unknown as MouseEvent), t.closest("form")?.requestSubmit();
+  }
+  if (ev.key === "Enter" && !ev.shiftKey && (t as HTMLTextAreaElement).name === "chatq") {
+    ev.preventDefault();
+    return void askNotes();
+  }
+  if (mod && ev.shiftKey && (ev.key === "{" || ev.key === "[") && (S.notebook || S.community || S.board)) {
+    ev.preventDefault();
+    return toggleSide("side");
+  }
+  if (mod && ev.shiftKey && (ev.key === "}" || ev.key === "]") && (S.notebook || S.community || S.board)) {
+    ev.preventDefault();
+    return toggleSide("aside");
+  }
+  if (mod && ev.shiftKey && ev.key.toLowerCase() === "n" && S.notebook) {
+    ev.preventDefault();
+    return void quickCapture();
+  }
+  if (mod && ev.shiftKey && ev.key.toLowerCase() === "h") {
+    ev.preventDefault();
+    return toggleHighlight();
+  }
+  if (mod && ev.key.toLowerCase() === "s") {
+    ev.preventDefault();
+    void saveAll();
+  } else if (mod && S.notebook && S.notes && ["k", "o", "p"].includes(ev.key.toLowerCase()) && !ev.shiftKey) {
+    ev.preventDefault();
+    openPalette();
+  } else if (mod && ev.shiftKey && ev.key.toLowerCase() === "d" && S.notebook && S.notes) {
+    ev.preventDefault();
+    void openDaily();
+  } else if (mod && ev.shiftKey && ev.key.toLowerCase() === "p" && S.notebook && S.notes) {
+    ev.preventDefault();
+    openPalette(">");
+  } else if (mod && ev.key.toLowerCase() === "n" && S.notebook && S.notes) {
+    ev.preventDefault();
+    void newNote();
+  } else if (mod && ev.key.toLowerCase() === "e" && cur() && !isExcalidraw(cur()!)) {
+    ev.preventDefault();
+    cycleView(S.focused);
+  } else if (mod && ev.key.toLowerCase() === "w" && cur()) {
+    ev.preventDefault();
+    closeTab(S.focused, cur()!);
+  } else if (mod && ev.key === "\\" && cur()) {
+    ev.preventDefault();
+    splitRight(S.focused);
+  } else if (ev.key === "Enter" && t.getAttribute?.("name") === "title") {
+    (t as HTMLInputElement).blur();
+  } else if (t instanceof HTMLTextAreaElement && t.name === "draft" && !mod && !ev.altKey) {
+    if (ev.key === "Enter" && !ev.shiftKey) {
+      const e = continueList(t.value, t.selectionStart);
+      if (e) {
+        ev.preventDefault();
+        applyEdit(t, e);
+      }
+    } else if (ev.key === "Tab") {
+      ev.preventDefault();
+      applyEdit(t, indentLines(t.value, t.selectionStart, t.selectionEnd, ev.shiftKey));
+    }
+  }
+});
+document.addEventListener("submit", (ev) => {
+  const f = ev.target as HTMLFormElement;
+  if (!f.dataset.form) return;
+  ev.preventDefault();
+  if (S.busy) return;
+  switch (f.dataset.form) {
+    case "create-notebook":
+      return void createNotebook();
+    case "chat":
+      return void askNotes();
+    case "board-comment":
+      return void (async () => {
+        const b = S.board!;
+        const ta = f.querySelector<HTMLTextAreaElement>("[name=ptext]")!;
+        const r = await registry().comment_post(BigInt(f.dataset.post!), f.dataset.parent ? BigInt(f.dataset.parent) : null, expandShortcodes(ta.value.trim()));
+        if (r.__kind__ === "Err") return toast(r.Err, "error");
+        b.replyTo = undefined;
+        b.comments = await registry().post_comments(r.Ok.post);
+        if (b.open) { b.open = (await registry().get_post(b.open.id)) ?? b.open; }
+        render();
+      })();
+    case "chat-post":
+      return void (async () => {
+        const c = S.community!;
+        const text = expandShortcodes(c.draft.trim());
+        if (!text) return;
+        try {
+          if (c.editing !== undefined) {
+            const r = await registry().edit_message(c.channel, c.editing, text);
+            if (r.__kind__ === "Err") throw new Error(r.Err);
+            c.editing = undefined; c.draft = "";
+            replaceMessage(r.Ok); render(); scrollChat();
+            return;
+          }
+          const r = await registry().post(c.channel, text, c.replyTo?.id ?? null);
+          if (r.__kind__ === "Err") throw new Error(r.Err);
+          c.draft = "";
+          c.replyTo = undefined;
+          c.messages.push(r.Ok);
+          markChatSeen(c.channel, r.Ok.id);
+          render();
+          scrollChat();
+          document.querySelector<HTMLTextAreaElement>("[name=chattext]")?.focus();
+        } catch (e) { toast(errMsg(e), "error"); }
+      })();
+    case "nb-meta":
+      return void act("meta", async () => {
+        const emoji = f.querySelector<HTMLInputElement>("[name=emoji]")!.value.trim();
+        const desc = f.querySelector<HTMLInputElement>("[name=desc]")!.value.trim();
+        const r = await registry().set_notebook_meta(S.notebook!.canister, emoji || null, desc || null);
+        if (r.__kind__ === "Err") throw new Error(r.Err);
+        S.notebook = r.Ok;
+        S.notebooks = (S.notebooks ?? []).map((x) => (x.canister.toText() === r.Ok.canister.toText() ? r.Ok : x));
+        return "Card updated.";
+      });
+    case "goals": {
+      const n = Number(f.querySelector<HTMLInputElement>("[name=notesPerWeek]")!.value);
+      const c = Number(f.querySelector<HTMLInputElement>("[name=cardsPerDay]")!.value);
+      S.settings.goals = { notesPerWeek: n > 0 ? n : undefined, cardsPerDay: c > 0 ? c : undefined };
+      void saveSettings().then(() => toast("Goals saved.", "ok"));
+      return render();
+    }
+    case "list":
+      return void act("list", async () => {
+        const t = tokenOf(f.querySelector<HTMLSelectElement>("[name=listtoken]")!.value);
+        const price = parseAmt(f.querySelector<HTMLInputElement>("[name=price]")!.value, t);
+        const blurb = f.querySelector<HTMLInputElement>("[name=blurb]")!.value.trim();
+        const r = await registry().list_notebook(S.notebook!.canister, t.symbol, price, blurb);
+        if (r.__kind__ === "Err") throw new Error(r.Err);
+        S.listing = r.Ok;
+        S.attest = r.Ok.attestation ?? S.attest;
+        return `Listed for ${fmtAmt(price, t)}.`;
+      });
+    case "kb-add": {
+      const inp = f.querySelector<HTMLInputElement>("[name=kbnew]")!;
+      const text = inp.value.trim();
+      if (!text) return;
+      const li = Number(f.dataset.lane);
+      updateBoard(f.dataset.path!, (b) => { const l = b.lanes[li]; if (l) l.cards.push({ text, done: l.complete }); });
+      document.querySelector<HTMLInputElement>(`.kb[data-kanban="${CSS.escape(f.dataset.path!)}"] [data-lane="${li}"] [name=kbnew]`)?.focus();
+      return;
+    }
+    case "agent":
+      return void issueAgentKey();
+    case "publish":
+      return void (async () => {
+        try {
+          const folder = f.querySelector<HTMLSelectElement>("[name=pubfolder]")!.value;
+          unwrap(await nb().set_published(folder));
+          S.published = folder;
+          toast(`Published at ${apiUrl(S.notebook!.canister.toText())}/p/`, "ok");
+        } catch (e) {
+          toast(errMsg(e), "error");
+        }
+        render();
+      })();
+    case "autotopup":
+      return void act("autotopup", async () => {
+        const on = f.querySelector<HTMLInputElement>("[name=at_on]")!.checked;
+        const thr = BigInt(Math.round(Number(f.querySelector<HTMLInputElement>("[name=at_thr]")!.value) * 1e12));
+        const amt = BigInt(Math.round(Number(f.querySelector<HTMLInputElement>("[name=at_amt]")!.value) * 1e8));
+        const allow = Number(f.querySelector<HTMLInputElement>("[name=at_allow]")!.value);
+        if (on && allow > 0) {
+          const payer = await approvePayment(S.notebook!.canister, BigInt(Math.round(allow * 1e8)));
+          unwrap(await nb().set_auto_topup_payer(payer));
+        }
+        S.autoTopup = unwrap(await nb().set_auto_topup(on, thr, amt));
+        return on ? `Automatic top-up on: under ${(Number(thr) / 1e12).toFixed(1)} TC the canister pulls ${icp(amt)} ICP.` : "Automatic top-up off.";
+      });
+    case "note-comment":
+      return void (async () => {
+        const inp = f.querySelector<HTMLInputElement>("[name=ctext]")!;
+        try {
+          const r = await nb().comment(f.dataset.path!, inp.value);
+          if (r.__kind__ === "Err") throw new Error(describe(r.Err));
+          S.comments = [...S.comments, r.Ok];
+          renderSide();
+        } catch (e) {
+          toast(errMsg(e), "error");
+        }
+      })();
+    case "reply":
+      return void (async () => {
+        const inp = f.querySelector<HTMLInputElement>("[name=ctext]")!;
+        try {
+          const api = S.shared ? notebookOf(S.shared.canister) : nb();
+          const r = await api.reply(BigInt(f.dataset.parent!), inp.value);
+          if (r.__kind__ === "Err") throw new Error(describe(r.Err));
+          if (S.shared) return openShared(S.shared.canister, S.shared.path);
+          S.comments = [...S.comments, r.Ok];
+          renderSide();
+        } catch (e) {
+          toast(errMsg(e), "error");
+        }
+      })();
+    case "comment":
+      return void (async () => {
+        const text = f.querySelector<HTMLInputElement>("[name=ctext]")!.value;
+        try {
+          const r = await notebookOf(S.shared!.canister).comment(S.shared!.path, text);
+          if (r.__kind__ === "Err") throw new Error(describe(r.Err));
+          await openShared(S.shared!.canister, S.shared!.path);
+        } catch (e) {
+          toast(errMsg(e), "error");
+        }
+      })();
+    case "admin-repo":
+      return void (async () => {
+        const repo = f.querySelector<HTMLInputElement>("[name=repo]")!.value;
+        const r = await registry().set_github_repo(repo);
+        if (r.__kind__ === "Err") return toast(r.Err, "error");
+        if (S.admin) S.admin.repo = repo.trim();
+        toast("Saved.", "ok");
+      })();
+    case "bug":
+      return void (async () => {
+        const status = ((ev as SubmitEvent).submitter as HTMLButtonElement | null)?.value ?? "Open";
+        const note = f.querySelector<HTMLTextAreaElement>("[name=note]")!.value;
+        try {
+          const r = await registry().update_bug(BigInt(f.dataset.id!), toStatus(status), note);
+          if (r.__kind__ === "Err") throw new Error(r.Err);
+          const i = S.admin!.bugs.findIndex((b) => b.id === r.Ok.id);
+          if (i >= 0) S.admin!.bugs[i] = r.Ok;
+          toast(`#${r.Ok.id} is now ${STATUS[status]}.`, "ok");
+        } catch (e) {
+          toast(errMsg(e), "error");
+        }
+        render();
+      })();
+    case "topup":
+      return void act("topup", async () => {
+        const t = tokenOf(S.payToken);
+        const amount = parseAmt(S.topupAmount, t);
+        if (amount <= t.fee * 2n) throw new Error("Enter an amount above a couple of ledger fees");
+        const cycles = await payFor(S.notebook!.canister, t.symbol, amount, (m) => toast(m, "info"));
+        void refreshInfo();
+        return `${fmtAmt(amount, t)} became ${tc(cycles)} of runway.`;
+      });
+  }
+});
+const sharedRoute = () => location.hash.match(/^#\/shared\/([a-z0-9-]+)\/(.*)$/);
+window.addEventListener("hashchange", () => {
+  const sh = sharedRoute();
+  if (sh) return void openShared(sh[1], decodeURIComponent(sh[2]));
+  if (location.hash !== "#/community" && S.community) { S.community = undefined; clearInterval(chatTimer); } // leaving the community for any other page
+  if (!location.hash.startsWith("#/board") && S.board) S.board = undefined;
+  const bm = /^#\/board(?:\/(\d+))?$/.exec(location.hash);
+  if (bm) { if (S.identity) return void loadBoard(undefined, bm[1] ? BigInt(bm[1]) : undefined); location.hash = "#/"; return; }
+  if (location.hash === "#/admin") {
+    if (S.isAdmin) return void loadAdmin();
+    toast("Admins only.", "error");
+    location.hash = "#/";
+    return;
+  }
+  if (location.hash === "#/market") {
+    if (S.identity) return void loadMarket();
+    location.hash = "#/";
+    return;
+  }
+  if (location.hash === "#/community") {
+    if (S.identity) return void loadCommunity();
+    location.hash = "#/";
+    return;
+  }
+  if (location.hash === "#/capture") return void captureRoute();
+  if (S.market) {
+    S.market = undefined;
+    render();
+    if (!location.hash.startsWith("#/notebook/")) return;
+  }
+  if (S.admin) {
+    S.admin = undefined;
+    render();
+    if (!location.hash.startsWith("#/notebook/")) return;
+  }
+  if (S.shared) {
+    S.shared = undefined;
+    render();
+    if (S.identity && !S.notebooks) void loadNotebooks();
+    if (!location.hash.startsWith("#/notebook/")) return;
+  }
+  if (!location.hash.startsWith("#/notebook/")) {
+    void saveAll();
+    S.notebook = undefined;
+    S.notes = undefined;
+    render();
+    void loadNotebooks();
+    return;
+  }
+  // a notebook link typed or followed while on the list, or a link into another notebook
+  const m = location.hash.match(/^#\/notebook\/([a-z0-9-]+)(?:\/(.+))?/);
+  if (m && S.identity) {
+    const path = m[2] ? decodeURIComponent(m[2]) : undefined;
+    if (S.notebook?.canister.toText() !== m[1]) void (async () => { if (!S.notebooks) await loadNotebooks(); await openNotebook(m[1], path); })();
+    else if (path && path !== cur() && note(path)) void open(path);
+  }
+});
+setInterval(() => {
+  if (!S.shared?.note || !S.identity || document.hidden) return;
+  const sh = S.shared;
+  void notebookOf(sh.canister).ping(sh.path).then((h) => { if (h.__kind__ === "Ok" && S.shared?.path === sh.path) { const now = h.Ok.map((p) => p.toText()); if (now.join() !== (S.shared.here ?? []).join()) { S.shared.here = now; render(); } } }).catch(() => {});
+}, 45_000);
+setInterval(async () => {
+  if (!S.notebook || S.frozen || S.fromCache || document.hidden) return;
+  try {
+    const r = await nb().all_comments();
+    if (r.__kind__ !== "Ok") return;
+    const before = S.comments.map((x) => x.id.toString()).join(",");
+    const after = r.Ok.map((x) => x.id.toString()).join(",");
+    if (before !== after) { S.comments = r.Ok; renderSide(); }
+  } catch { /* next tick */ }
+}, 60_000);
+window.addEventListener("beforeunload", (ev) => {
+  if ([...S.drafts.values()].some((d) => d.dirty)) {
+    void saveAll();
+    ev.preventDefault();
+  }
+});
+mobileQuery.addEventListener("change", (e) => {
+  S.mobile = e.matches;
+  render();
+});
+
+// ---------- boot ----------
+
+registerSW({ immediate: true });
+render();
+currentIdentity().then(async (id) => {
+  if (id) {
+    S.identity = id;
+    S.principal = id.getPrincipal().toText();
+  }
+  const sh = sharedRoute();
+  if (sh) return openShared(sh[1], decodeURIComponent(sh[2]));
+  if (!id) return;
+  render();
+  await loadNotebooks();
+  setTimeout(() => void checkRain(), 1500);
+  if (location.hash === "#/admin") {
+    S.isAdmin = await registry().is_admin().catch(() => false);
+    if (S.isAdmin) return loadAdmin();
+    location.hash = "#/";
+  }
+  if (location.hash === "#/market") return loadMarket();
+  if (location.hash === "#/community") return loadCommunity();
+  { const bm = /^#\/board(?:\/(\d+))?$/.exec(location.hash); if (bm) return loadBoard(undefined, bm[1] ? BigInt(bm[1]) : undefined); }
+  if (location.hash === "#/capture") return captureRoute();
+  const m = location.hash.match(/^#\/notebook\/([a-z0-9-]+)(?:\/(.+))?/);
+  if (m) void openNotebook(m[1], m[2] ? decodeURIComponent(m[2]) : undefined);
+});

@@ -1,0 +1,333 @@
+type AgentKey = record {
+  revoked : bool;
+  name : text;
+  created_at : nat64;
+  // a folder this key may also write under (the clipper's Inbox/, a mail relay's Inbox/Mail); Agents/ is always allowed
+  scope : opt text;
+  writes : nat64;
+  last_used : nat64;
+};
+type Attempt = record {
+  at : nat64;
+  id : nat64;
+  who : principal;
+  total : nat32;
+  path : text;
+  score : nat32;
+};
+type AttestationView = record {
+  // the note (and the Lean note it refers to) are unchanged since this was made
+  fresh : bool;
+  attestation : NoteAttestation;
+};
+// What a quality judge needs: counts over the markdown notes and a short sample of each.
+type Audit = record {
+  resolved_links : nat64;
+  orphans : nat64;
+  agent_notes : nat64;
+  links : nat64;
+  with_headings : nat64;
+  // (path, first 300 characters) for up to 12 notes, largest first
+  samples : vec record { text; text };
+  newest_modified : nat64;
+  oldest_created : nat64;
+  notes : nat64;
+  words : nat64;
+  // flashcard decks and quizzes (`quiz:` in the front matter)
+  decks : nat64;
+  with_tags : nat64;
+};
+type AutoTopUp = record {
+  // top up when cycles fall under this
+  threshold : nat;
+  last_result : text;
+  enabled : bool;
+  // how much ICP to pull from the owner's approved allowance each time
+  amount_e8s : nat64;
+  // the account the allowance was approved from (an OISY wallet, usually); the owner when absent
+  payer : opt principal;
+  last_run : nat64;
+};
+type Comment = record {
+  at : nat64;
+  id : nat64;
+  path : text;
+  "text" : text;
+  author : principal;
+  // the comment this one answers; replies form a thread under a top-level comment
+  parent : opt nat64;
+};
+type DepositState = record {
+  last_result : text;
+  btc_address : opt text;
+  last_run : nat64;
+};
+type FileMeta = record {
+  created : nat64;
+  modified : nat64;
+  agent : opt text;
+  path : text;
+  size : nat64;
+};
+type FolderRenamed = record {
+  moved : nat32;
+  // notes whose `[[links]]` were rewritten
+  relinked : vec text;
+};
+type Hit = record { path : text; snippet : text };
+type HttpRequest = record {
+  url : text;
+  method : text;
+  body : blob;
+  headers : vec record { text; text };
+};
+type HttpResponse = record {
+  body : blob;
+  headers : vec record { text; text };
+  upgrade : opt bool;
+  status_code : nat16;
+};
+type Imported = record {
+  written : nat32;
+  // (path, reason) for files that were refused
+  failed : vec record { text; text };
+};
+type Info = record {
+  files : nat64;
+  owner : principal;
+  name : text;
+  total_topped_up_e8s : nat64;
+  created_at : nat64;
+  // ICP ledger account (hex) that converts to cycles for this canister; send from any wallet
+  topup_account_id : text;
+  cycles : nat;
+  total_cycles_from_topups : nat;
+  bytes : nat64;
+  registry : principal;
+  pending_topups : nat64;
+};
+type Init = record { owner : principal; name : text; registry : principal };
+type Note = record {
+  created : nat64;
+  modified : nat64;
+  content : text;
+  // the agent key that wrote it, for notes under `Agents/`
+  agent : opt text;
+  path : text;
+};
+type NoteAttestation = record {
+  at : nat64;
+  by : principal;
+  id : nat64;
+  agent : opt text;
+  lean_hash : opt text;
+  kind : text;
+  lean_path : opt text;
+  path : text;
+  detail : text;
+  verdict : text;
+  note_hash : text;
+};
+type NotebookError = variant {
+  Invalid : text;
+  NotFound;
+  // only the owner may read or write a notebook
+  Unauthorized;
+  Exists;
+};
+type Page = record {
+  // pass back as `after` to continue; absent when this was the last page
+  next : opt text;
+  notes : vec Note;
+};
+type Renamed = record {
+  file : FileMeta;
+  // notes whose `[[links]]` were rewritten to the new name
+  relinked : vec text;
+};
+type Result = variant { Ok : vec AgentKey; Err : NotebookError };
+type Result_1 = variant { Ok : vec Attempt; Err : NotebookError };
+type Result_10 = variant { Ok : vec text; Err : NotebookError };
+type Result_11 = variant { Ok : vec Revision; Err : NotebookError };
+type Result_12 = variant { Ok : vec FileMeta; Err : NotebookError };
+type Result_13 = variant { Ok : vec AttestationView; Err : NotebookError };
+type Result_14 = variant { Ok : vec principal; Err : NotebookError };
+type Result_15 = variant {
+  Ok : vec record { principal; nat8 };
+  Err : NotebookError;
+};
+type Result_16 = variant { Ok : Note; Err : NotebookError };
+type Result_17 = variant { Ok : vec Note; Err : NotebookError };
+type Result_18 = variant { Ok : Page; Err : NotebookError };
+type Result_19 = variant { Ok : Renamed; Err : NotebookError };
+type Result_2 = variant { Ok : vec Comment; Err : NotebookError };
+type Result_20 = variant { Ok : FolderRenamed; Err : NotebookError };
+type Result_21 = variant { Ok : vec Hit; Err : NotebookError };
+type Result_22 = variant { Ok : AutoTopUp; Err : NotebookError };
+type Result_23 = variant { Ok : Share; Err : NotebookError };
+type Result_24 = variant { Ok : vec Share; Err : NotebookError };
+type Result_25 = variant { Ok : Attempt; Err : NotebookError };
+type Result_26 = variant { Ok : TopUp; Err : text };
+type Result_27 = variant { Ok : FileMeta; Err : NotebookError };
+type Result_28 = variant { Ok : Imported; Err : NotebookError };
+type Result_3 = variant { Ok : NoteAttestation; Err : NotebookError };
+type Result_4 = variant { Ok : Audit; Err : NotebookError };
+type Result_5 = variant { Ok : text; Err : NotebookError };
+type Result_6 = variant { Ok : Comment; Err : NotebookError };
+type Result_7 = variant { Ok; Err : NotebookError };
+type Result_8 = variant { Ok : nat32; Err : NotebookError };
+type Result_9 = variant { Ok : DepositState; Err : NotebookError };
+type Revision = record {
+  // who saved it: the owner, an editor, or an agent
+  by : principal;
+  seq : nat64;
+  modified : nat64;
+  agent : opt text;
+  size : nat64;
+};
+// What someone may do with a shared note, lowest to highest.
+type Role = variant { Edit; View; Comment };
+type Share = record {
+  // readers who may also edit the notes covered (never under Agents/); optional so shares
+  // saved before editors existed still decode
+  editors : opt vec principal;
+  // a note path, a folder path, or "" for the whole notebook
+  path : text;
+  // anyone, signed in or not, can read it
+  public : bool;
+  created_at : nat64;
+  // readers (besides the owner)
+  principals : vec principal;
+  // what anyone with the link may do when `public`; missing means Comment (how public shares worked before roles)
+  public_role : opt Role;
+  // readers who may also comment (readers in `principals` are view-only)
+  commenters : opt vec principal;
+};
+type ShareArgs = record {
+  editors : vec principal;
+  path : text;
+  public : bool;
+  viewers : vec principal;
+  public_role : opt Role;
+  commenters : vec principal;
+};
+type TopUp = record {
+  at : nat64;
+  status : TopUpStatus;
+  block_index : nat64;
+  // the payer, or this canister for ICP sent straight to the account
+  from : principal;
+  amount_e8s : nat64;
+  cycles : nat;
+};
+type TopUpStatus = variant { Failed : text; Completed; Pending };
+service : (Init) -> {
+  agent_keys : () -> (Result) query;
+  // Every attempt in the notebook, newest first (owner).
+  all_attempts : () -> (Result_1) query;
+  // Every comment in the notebook, newest first (owner).
+  all_comments : () -> (Result_2) query;
+  // Attempts on one note (owner) or your own (anyone).
+  attempts : (text) -> (Result_1) query;
+  // Vouch for a note as the owner or anyone the note is shared with (commenters and editors).
+  attest_note : (text, text, text, opt text, text) -> (Result_3);
+  // Structure of the notebook for the registry's quality judge (owner or registry).
+  audit : () -> (Result_4) query;
+  auto_topup : () -> (AutoTopUp) query;
+  // A Bitcoin address owned by this canister: bitcoin sent there becomes ckBTC, then cycles.
+  btc_address : () -> (Result_5);
+  comment : (text, text) -> (Result_6);
+  comments : (text) -> (Result_2) query;
+  // Issue an agent key (shown once). Agents send it as `Authorization: Bearer <key>`.
+  create_agent_key : (text) -> (Result_5);
+  // A key that may also write under one folder of yours, for a web clipper or a mail relay (owner).
+  create_scoped_key : (text, text) -> (Result_5);
+  delete : (text) -> (Result_7);
+  delete_comment : (nat64) -> (Result_7);
+  // Delete a folder with everything in it; returns how many files went.
+  delete_folder : (text) -> (Result_8);
+  deposits : () -> (Result_9) query;
+  // Every folder, sorted, including empty ones.
+  folders : () -> (Result_10) query;
+  get_settings : () -> (Result_5) query;
+  // Earlier versions of a note, newest first.
+  history : (text) -> (Result_11) query;
+  // Every request is upgraded to an update call: update responses need no certification, so the
+  // API works through any gateway.
+  http_request : (HttpRequest) -> (HttpResponse) query;
+  http_request_update : (HttpRequest) -> (HttpResponse);
+  info : () -> (Info) query;
+  // Every file in the notebook (metadata only), sorted by path.
+  list : () -> (Result_12) query;
+  // Files a sharee may read under `prefix` ("" for everything shared with them).
+  list_shared : (text) -> (Result_12) query;
+  // Create a folder (and its ancestors); creating an existing folder is fine.
+  mkdir : (text) -> (Result_5);
+  my_role : (text) -> (opt Role) query;
+  // Attestations on a note with whether each still matches the current content (anyone who can read it).
+  note_attestations : (text) -> (Result_13) query;
+  // "I am looking at this note": kept two minutes, so a group sees who is here.
+  ping : (text) -> (Result_14);
+  // Everyone's mark on a note, for the group (anyone who can read the note).
+  progress : (text) -> (Result_15) query;
+  published : () -> (opt text) query;
+  read : (text) -> (Result_16) query;
+  // The whole notebook (attachments listed without content), so the client can index links,
+  // tags and search locally.
+  read_all : () -> (Result_17) query;
+  // Notes after `after` (exclusive), up to `limit` of them or ~1.5 MB, whichever first.
+  read_page : (opt text, nat32) -> (Result_18) query;
+  // Read a shared note: public shares need no sign-in; private ones need a listed principal.
+  read_shared : (text) -> (Result_16) query;
+  // Move or rename a file; `[[links]]` to a renamed note are rewritten in every other note.
+  rename : (text, text) -> (Result_19);
+  // Move or rename a folder: every file under it moves, and `[[links]]` follow.
+  rename_folder : (text, text) -> (Result_20);
+  // Answer a comment; the reply inherits the note and needs the same permission as commenting there.
+  reply : (nat64, text) -> (Result_6);
+  // One earlier version in full; restore it by writing it back.
+  revision : (text, nat64) -> (Result_16) query;
+  revoke_agent_key : (text) -> (Result_7);
+  search_notes : (text, nat32) -> (Result_21) query;
+  set_auto_topup : (bool, nat, nat64) -> (Result_22);
+  // Which account the automatic top-up pulls from (the one that approved the allowance).
+  set_auto_topup_payer : (opt principal) -> (Result_22);
+  // Mark where you are with a note: 1 read, 2 reviewing, 3 known (0 clears).
+  set_progress : (text, nat8) -> (Result_7);
+  // Publish `folder` ("" for the whole notebook, except Agents/ and attachments) at /p/; `None` unpublishes.
+  set_published : (opt text) -> (Result_7);
+  set_settings : (text) -> (Result_7);
+  // Share with explicit permissions: what the link allows (view, comment or edit; editing needs a
+  // sign-in) and who may view, comment or edit. Replaces an earlier share of the same path.
+  set_share : (ShareArgs) -> (Result_23);
+  // Share a note, a folder, or the whole notebook ("") with readers and editors.
+  share : (text, bool, vec principal, vec principal) -> (Result_23);
+  // What a viewer may know about a share: the notebook's name, whether it is public, and their role.
+  share_info : (text) -> (opt record { text; bool }) query;
+  // Share a note with everyone (`public`) or with `principals` (readers); replaces an earlier share.
+  share_note : (text, bool, vec principal) -> (Result_23);
+  shares : () -> (Result_24) query;
+  // A finished quiz or deck session on a shared note; the owner sees who scored what.
+  submit_attempt : (text, nat32, nat32) -> (Result_25);
+  // Convert everything that arrived since the last run, now instead of at the next 10-minute tick.
+  sweep_deposits : () -> (Result_5);
+  // Convert whatever ICP sits on the account (minus one fee) into cycles now.
+  sweep_topups : () -> (Result_26);
+  // Pull `amount_e8s` the caller approved on the ICP ledger and turn it into this canister's cycles.
+  top_up : (nat64) -> (Result_26);
+  // Pull `amount_e8s` that `payer` (an OISY wallet, for instance) approved for this canister on the
+  // ICP ledger and convert it; the ledger's allowance is the authorization, the owner just triggers it.
+  top_up_from : (principal, nat64) -> (Result_26);
+  topups : (nat32) -> (vec TopUp) query;
+  // Hand the notebook to a new owner. Only the registry calls this, after a sale or an ICRC-7
+  // transfer it brokered. Agent keys and the auto top-up payer belonged to the old owner, so they go.
+  transfer_owner : (principal) -> (Result_7);
+  unshare_note : (text) -> (Result_7);
+  who_is_here : (text) -> (Result_14) query;
+  // Create or overwrite a file.
+  write : (text, text) -> (Result_27);
+  // Import many files at once (a vault upload); bad names are reported, not fatal.
+  write_many : (vec record { text; text }, bool) -> (Result_28);
+  // An editor's write to a shared note (owner-style rules apply; never under Agents/).
+  write_shared : (text, text) -> (Result_27);
+}
