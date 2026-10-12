@@ -176,7 +176,7 @@ export function coastFireWorkbook(): string {
       ["Saving each year until you coast", "15000", "Stops once you reach your Coast FIRE number"], ["", "", ""], ["Results", "", ""],
       ["FIRE number", "=ROUND(B5/B7, 0)", "Needed at retirement"], ["Coast FIRE number today", "=ROUND(B11/(1+B6)^(B3-B2), 0)", "Grows to the FIRE number by retirement with no more saving"],
       ["Invested now grows to", "=ROUND(B4*(1+B6)^(B3-B2), 0)", "By retirement, saving nothing more"], ["Coasting already?", `=IF(B4>=B12, "Yes", "Not yet")`, ""],
-      ["Still needed today", "=MAX(0, B12-B4)", ""], ["Coast age", `=IFERROR(INDEX(Projection!B2:B${YEARS + 1}, MATCH(1, Projection!E2:E${YEARS + 1})), "Not within ${YEARS} years")`, "When you can stop saving"],
+      ["Still needed today", "=MAX(0, B12-B4)", ""], ["Coast age", `=IFERROR(IF(INDEX(Projection!B2:B${YEARS + 1}, MATCH(1, Projection!E2:E${YEARS + 1}))>B3, "Not before retirement", INDEX(Projection!B2:B${YEARS + 1}, MATCH(1, Projection!E2:E${YEARS + 1}))), "Not before retirement")`, "When you can stop saving"],
     ]),
     sheet("Projection", [["Year", "Age", "Invested", "Coast number at this age", "Coasting"], ...proj], [{ id: "coast", type: "line", title: "Invested and the Coast FIRE number", labels: `B2:B${YEARS + 1}`, values: [`C2:C${YEARS + 1}`, `D2:D${YEARS + 1}`], legend: "bottom" }]),
   ] });

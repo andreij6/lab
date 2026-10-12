@@ -130,6 +130,10 @@ test("money templates: 50/30/20, zero-based, FIRE and Coast FIRE compute", async
   let inv = 50000, age = 30;
   while (inv < 1_000_000 / 1.05 ** (60 - age)) { inv = inv * 1.05 + 15000; age++; }
   assert.equal(byLabel(coast, "Coast age"), age);
+  // saving too little to coast before retiring says so instead of giving a later age
+  const wb = parseWorkbook(MONEY_TEMPLATES.find((t) => t.path === "Money/Coast FIRE.sheet")!.make());
+  wb.sheets[0].rows[3][1] = "7"; wb.sheets[0].rows[1][1] = "37";
+  assert.equal(byLabel(evaluate(wb).get("Coast"), "Coast age"), "Not before retirement");
 });
 
 test("charts read a column letter or a range", async () => {

@@ -3707,11 +3707,15 @@ function sheetHtml(path: string, text: string): string {
     const f = cellText(raw, v);
     return `<td><input class="cell ${typeof v === "number" ? "num" : ""} ${f.startsWith("#") && raw.startsWith("=") ? "err" : ""} ${raw.startsWith("=") ? "fx" : ""}" name="cell" data-path="${esc(path)}" data-s="${si}" data-r="${r}" data-c="${c}" data-raw="${esc(raw)}" value="${esc(f)}" title="${raw.startsWith("=") ? esc(raw) : ""}" aria-label="${colName(c)}${r + 1}" autocomplete="off" spellcheck="false" ${ro ? "readonly" : ""}></td>`;
   };
+  // each column as wide as its longest entry (10 to 40 characters), so labels are not cut off
+  const width = (c: number) => Math.min(40, Math.max(10, ...sh.rows.map((row, r) => [...cellText(row[c] ?? "", vals[r]?.[c] ?? null)].length + 2)));
+  const widths = Array.from({ length: ncols }, (_, c) => width(c));
+  const cols = `<colgroup><col style="width:44px">${widths.map((w) => `<col style="width:${w}ch">`).join("")}</colgroup>`;
   const head = `<tr><th class="rn"></th>${Array.from({ length: ncols }, (_, c) => `<th>${colName(c)}</th>`).join("")}</tr>`;
   const body = Array.from({ length: nrows }, (_, r) => `<tr><th class="rn">${r + 1}</th>${Array.from({ length: ncols }, (_, c) => cell(r, c)).join("")}</tr>`).join("");
   const charts = sh.charts.map((ch) => `<figure class="sheet-chart" data-chart="${esc(ch.id)}">${chartSvg(vals, ch)}${ro ? "" : `<span class="chart-tools"><button type="button" class="btn btn-ghost icon-btn" data-action="sheet-chart-edit" data-path="${esc(path)}" data-id="${esc(ch.id)}" title="Edit chart" aria-label="Edit chart">${icon("edit")}</button><button type="button" class="btn btn-ghost icon-btn" data-action="sheet-chart-del" data-path="${esc(path)}" data-id="${esc(ch.id)}" title="Remove chart" aria-label="Remove chart">${icon("x")}</button></span>`}</figure>`).join("");
   return `<div class="sheet-tabs">${wb.sheets.map((x, i) => `<button type="button" class="stab ${i === si ? "on" : ""}" data-action="sheet-tab" data-path="${esc(path)}" data-i="${i}" title="${i === si ? "Click to rename" : x.name}">${esc(x.name)}${ro || wb.sheets.length < 2 ? "" : `<span class="stab-x" data-action="sheet-del" data-path="${esc(path)}" data-i="${i}" title="Delete sheet">${icon("x")}</span>`}</button>`).join("")}${ro ? "" : `<button type="button" class="stab add" data-action="sheet-add" data-path="${esc(path)}" title="Add a sheet">${icon("plus")}</button>`}</div>
-    <div class="grid-wrap"><table class="grid" data-grid><thead>${head}</thead><tbody>${body}</tbody></table>${ro ? "" : `<button type="button" class="btn btn-ghost more-rows" data-action="sheet-rows" data-path="${esc(path)}">${icon("plus")}20 rows</button>`}</div>
+    <div class="grid-wrap"><table class="grid" data-grid style="table-layout:fixed;width:calc(${widths.reduce((a, b) => a + b, 0)}ch + 44px)">${cols}<thead>${head}</thead><tbody>${body}</tbody></table>${ro ? "" : `<button type="button" class="btn btn-ghost more-rows" data-action="sheet-rows" data-path="${esc(path)}">${icon("plus")}20 rows</button>`}</div>
     ${charts ? `<div class="sheet-charts">${charts}</div>` : ""}`;
 }
 function refreshSheet(path: string) {
