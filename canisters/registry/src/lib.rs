@@ -341,6 +341,10 @@ fn set_wallet(wallet: Option<Principal>) -> Result<(), String> {
     });
     Ok(())
 }
+/// Where ICP for someone lands: their registered wallet, else their sign-in principal.
+fn wallet_of(p: Principal) -> Principal {
+    WALLETS.with_borrow(|w| w.get(&p)).unwrap_or(p)
+}
 #[query]
 fn my_wallet() -> Option<Principal> {
     WALLETS.with_borrow(|w| w.get(&msg_caller()))
@@ -1853,7 +1857,7 @@ async fn donate(channel: String, id: u64, amount_e8s: u64) -> Result<Message, St
     if f.plan.is_some() {
         // a plan: the ICP goes to the contributor's wallet, minus one ledger fee
         charge(me, amount_e8s).await?;
-        let arg = icrc_ledger_types::icrc1::transfer::TransferArg { from_subaccount: None, to: Account { owner: m.author, subaccount: None }, fee: Some(Nat::from(ICP_FEE)), created_at_time: None, memo: None, amount: Nat::from(amount_e8s.saturating_sub(ICP_FEE)) };
+        let arg = icrc_ledger_types::icrc1::transfer::TransferArg { from_subaccount: None, to: Account { owner: wallet_of(m.author), subaccount: None }, fee: Some(Nat::from(ICP_FEE)), created_at_time: None, memo: None, amount: Nat::from(amount_e8s.saturating_sub(ICP_FEE)) };
         let r: Result<Nat, icrc_ledger_types::icrc1::transfer::TransferError> = Call::unbounded_wait(LEDGER, "icrc1_transfer").with_arg(&arg).await.map_err(|e| format!("ledger: {e}"))?.candid().map_err(|e| e.to_string())?;
         r.map_err(|e| format!("transfer failed: {e:?}"))?;
     } else {
@@ -2149,7 +2153,7 @@ async fn rain(channel: String, total_e8s: u64, count: u8) -> Result<Rain, String
     }
     let mut recipients = vec![];
     for p in chosen {
-        let arg = icrc_ledger_types::icrc1::transfer::TransferArg { from_subaccount: None, to: Account { owner: p, subaccount: None }, fee: Some(Nat::from(ICP_FEE)), created_at_time: None, memo: None, amount: Nat::from(each) };
+        let arg = icrc_ledger_types::icrc1::transfer::TransferArg { from_subaccount: None, to: Account { owner: wallet_of(p), subaccount: None }, fee: Some(Nat::from(ICP_FEE)), created_at_time: None, memo: None, amount: Nat::from(each) };
         let r: Result<Nat, icrc_ledger_types::icrc1::transfer::TransferError> = Call::unbounded_wait(LEDGER, "icrc1_transfer").with_arg(&arg).await.map_err(|e| format!("ledger: {e}"))?.candid().map_err(|e| e.to_string())?;
         if r.is_ok() {
             let handle = MEMBERS.with_borrow(|x| x.get(&p).map(|c| c.0.handle)).unwrap_or_default();

@@ -234,7 +234,7 @@ const S = {
   pomodoro: undefined as { end: number; phase: "work" | "break" } | undefined,
   taskOwner: "" as string,
   clipperKey: undefined as string | undefined,
-  community: undefined as { channel: string; channels: Channel[]; messages: Message[]; online: Online[]; member?: Member; balance?: bigint; loading: boolean; draft: string; replyTo?: Message; unread: Record<string, number>; showOnline: boolean; showChannels: boolean; picker?: { mid?: bigint }; editing?: bigint; pins?: Message[]; showPins?: boolean; fee?: bigint; error?: string; github?: string; repo?: string; firstUnseen?: bigint; atBottom?: boolean; newCount?: number; gistSlide?: Map<bigint, number> } | undefined,
+  community: undefined as { channel: string; channels: Channel[]; messages: Message[]; online: Online[]; member?: Member; balance?: bigint; loading: boolean; draft: string; wallet?: string; replyTo?: Message; unread: Record<string, number>; showOnline: boolean; showChannels: boolean; picker?: { mid?: bigint }; editing?: bigint; pins?: Message[]; showPins?: boolean; fee?: bigint; error?: string; github?: string; repo?: string; firstUnseen?: bigint; atBottom?: boolean; newCount?: number; gistSlide?: Map<bigint, number> } | undefined,
   show: undefined as { slides: string[]; i: number; self?: string; dead?: boolean } | undefined,
   mentions: 0, // @mentions of me in the community since I last looked
   org: { q: "", selected: new Set<string>(), triage: false, triageIdx: 0 } as { q: string; sort?: { key: string; dir: number }; selected: Set<string>; triage: boolean; triageIdx: number },
@@ -1455,10 +1455,11 @@ async function loadCommunity(channel?: string) {
   S.community = c;
   render();
   try {
-    const [chs, mem, gh, repo, fee] = await Promise.all([registry().channels(), registry().my_membership(), registry().my_github(), registry().github_repo(), registry().message_fee().catch(() => 20_000n)]);
+    const [chs, mem, wallet, gh, repo, fee] = await Promise.all([registry().channels(), registry().my_membership(), registry().my_wallet().catch(() => null), registry().my_github(), registry().github_repo(), registry().message_fee().catch(() => 20_000n)]);
     c.fee = fee;
     c.channels = chs;
     c.member = mem ?? undefined;
+    c.wallet = wallet?.toText();
     c.github = gh ?? undefined;
     c.repo = repo;
     if (!chs.some((x) => x.name === c.channel)) c.channel = "general";
@@ -1517,19 +1518,16 @@ async function refreshUnread() {
 const verifiedNow = (m?: Member) => !!m && (S.notebooks?.length ?? 1) > 0;
 function channelsHtml(): string {
   const c = S.community!;
-  const status = c.member ? (verifiedNow(c.member) ? `Chatting as <b>@${esc(c.member.handle)}</b>` : "You need a notebook to chat: create one first.") : "Anyone with a notebook can join.";
-  const joinBtn = c.member ? `<button type="button" class="btn btn-ghost" data-action="chat-join" title="Change your handle">${icon("edit")}Handle</button>` : `<button type="button" class="btn btn-primary" data-action="chat-join">${icon("check")}Join</button>`;
-  const wallet = useOisy
-    ? `<div class="wallet"><div class="pane-title">You</div><div class="small muted">${status}</div><div class="row tight nudge">${joinBtn}</div>
-      <div class="small faint">New messages (${icp(c.fee ?? 20_000n)} ICP), rain, donations and board posts are paid from your OISY wallet${S.oisyAccount ? ` ${esc(shortPrincipal(S.oisyAccount))}` : ""}. It asks once to approve about 100 messages.</div></div>`
-    : `<div class="wallet">
-      <div class="pane-title">Your wallet</div>
-      <div class="wallet-bal"><b>${c.balance === undefined ? "…" : `${icp(c.balance)} ICP`}</b><button type="button" class="btn btn-ghost icon-btn" data-action="wallet-refresh" title="Refresh" aria-label="Refresh balance">${icon("refresh")}</button></div>
-      <div class="small muted">${status}</div>
-      <div class="row tight nudge"><button type="button" class="btn" data-action="wallet-add" title="Locally: shows the command that funds your development account">${icon("bolt")}Add ICP</button>${joinBtn}</div>
-      <div class="small faint mono" title="Locally, messages are paid from this principal">${esc(shortPrincipal(S.principal))}<button type="button" class="btn btn-ghost icon-btn" data-action="copy-principal" aria-label="Copy principal">${icon("copy")}</button></div>
+  // setup until you have a handle and (with OISY) a connected wallet; after that the panel goes away
+  const needsWallet = useOisy && !c.wallet;
+  const setup = !c.member || needsWallet || !verifiedNow(c.member);
+  const wallet = !setup ? "" : `<div class="wallet setup"><div class="pane-title">Get set up to chat</div>
+      ${!c.member ? `<div class="small muted">Anyone with a notebook can join. Pick a handle others see.</div><div class="row tight nudge"><button type="button" class="btn btn-primary" data-action="chat-join">${icon("check")}Join</button></div>`
+        : !verifiedNow(c.member) ? `<div class="small muted">You need a notebook to chat: create one first.</div>`
+        : `<div class="small muted">Chatting as <b>@${esc(c.member.handle)}</b>. Connect OISY to pay for messages (${icp(c.fee ?? 20_000n)} ICP each) and to receive rain.</div><div class="row tight nudge"><button type="button" class="btn btn-primary" data-action="chat-connect">${icon("bolt")}Connect OISY</button></div><div class="small faint">One approval covers about 100 messages.</div>`}
+      ${!useOisy && c.member ? `<div class="small faint mono">Locally, ${esc(shortPrincipal(S.principal))} pays · ${c.balance === undefined ? "…" : `${icp(c.balance)} ICP`}</div>` : ""}
     </div>`;
-  return `<div class="pane-head"><span class="pane-title" style="padding:0">Channels</span>${S.isAdmin ? `<button type="button" class="btn btn-ghost icon-btn" data-action="chat-new-channel" title="New channel" aria-label="New channel">${icon("plus")}</button>` : ""}</div>
+  return `<div class="pane-head"><span class="pane-title" style="padding:0">Channels</span>${c.member && !setup ? `<button type="button" class="btn btn-ghost icon-btn" data-action="chat-join" title="Your handle: @${esc(c.member.handle)}" aria-label="Change your handle">${icon("edit")}</button>` : ""}${S.isAdmin ? `<button type="button" class="btn btn-ghost icon-btn" data-action="chat-new-channel" title="New channel" aria-label="New channel">${icon("plus")}</button>` : ""}</div>
     <div class="chans">${c.channels.map((ch) => `<button type="button" class="chan ${ch.name === c.channel ? "on" : ""}" data-action="chat-channel" data-channel="${esc(ch.name)}" title="${esc(ch.topic)}"><span class="hash">#</span>${esc(ch.name)}${ch.gate ? `<span class="gate-ico" title="Contributors only">${icon("lock")}</span>` : ""}${c.unread[ch.name] ? `<span class="unread">${c.unread[ch.name]}</span>` : ""}${S.isAdmin && ch.name !== "general" ? `<span class="chan-del" data-action="chat-del-channel" data-channel="${esc(ch.name)}" title="Delete channel">${icon("x")}</span>` : ""}</button>`).join("")}</div>
     ${wallet}`;
 }
@@ -4596,6 +4594,10 @@ async function approvePayment(spender: Principal, amountE8s: bigint, token?: Tok
       const w = await registry().set_wallet(Principal.fromText(owner));
       if (w.__kind__ === "Ok") store("nb-wallet-set", `${S.principal}:${owner}`);
     }
+    if (S.community && S.community.wallet !== owner) {
+      S.community.wallet = owner;
+      renderChannels();
+    }
     return Principal.fromText(owner);
   }
   const agent = HttpAgent.createSync({ identity: S.identity, rootKey: env.IC_ROOT_KEY });
@@ -5586,6 +5588,17 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
     case "chat-join": return joinCommunity();
     case "rain": return makeRain();
     case "wallet-add": return addIcp();
+    case "chat-connect": {
+      const c = S.community;
+      if (!c) return;
+      try {
+        const owner = await approvePayment(Principal.fromText(REGISTRY), CHAT_ALLOWANCE_E8S + ICP_FEE);
+        c.wallet = owner.toText();
+        toast("OISY connected: messages are paid from it and rain lands in it.", "ok");
+        renderChannels();
+      } catch (e) { toast(errMsg(e), "error"); }
+      return;
+    }
     case "wallet-refresh": { const b = await icpBalance().catch(() => undefined); if (S.community && b !== undefined) { S.community.balance = b; renderChannels(); } return; }
     case "chat-reply": { const c = S.community!; c.replyTo = c.messages.find((m) => m.id === BigInt(el.dataset.mid!)); render(); scrollChat(); return document.querySelector<HTMLTextAreaElement>("[name=chattext]")?.focus(); }
     case "chat-reply-cancel": { S.community!.replyTo = undefined; render(); return scrollChat(); }
