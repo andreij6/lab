@@ -4609,7 +4609,7 @@ async function drawPdf(el: HTMLElement, all = false) {
   try { bytes = await pdfBytesFor(el, false); } catch { bytes = undefined; }
   if (!bytes) {
     if (el.dataset.pdfAttach) return; // still loading; the preview re-renders when it arrives
-    body.innerHTML = `<button type="button" class="btn" data-action="pdf-load">${icon("file")}Show this PDF</button><span class="small muted">Your notebook fetches it once (a few cycles), then it is kept on this device.</span>`;
+    body.innerHTML = `<button type="button" class="btn" data-action="pdf-load">${icon("file")}Show this PDF</button><span class="small muted">Your notebook fetches it once (about 0.02 TC of its cycles), then it is kept on this device.</span>`;
     return;
   }
   body.innerHTML = `<span class="small muted">Drawing pages…</span>`;

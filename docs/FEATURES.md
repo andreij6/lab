@@ -193,7 +193,7 @@ For working professionals looking for a new job; turn it on in Manage → Notebo
 
 ## Documents from the web
 
-- **PDF embeds.** `![[https://….pdf]]` or `![title](https://….pdf)` (arXiv `/pdf/` links too) shows the pages in the note. The browser fetches it when the site allows; otherwise the notebook does, over HTTPS, following up to three redirects, up to 1.9 MB, paying a few cycles. Fetched PDFs stay on this device, so they open instantly and offline afterwards. The first three pages show; Show all draws the rest.
+- **PDF embeds.** `![[https://….pdf]]` or `![title](https://….pdf)` (arXiv `/pdf/` links too) shows the pages in the note. The browser fetches it when the site allows; otherwise the notebook does, over HTTPS, following up to three redirects, up to 1.9 MB, for about 0.02 TC of its cycles on mainnet (outcalls are priced by the 1.9 MB response cap, not the file size). Fetched PDFs stay on this device, so they open instantly and offline afterwards. The first three pages show; Show all draws the rest.
 - **Save a copy.** Keeps a PDF of up to 700 KB in the notebook next to the note, with one searchable note per page, and points the embed at the copy. PDFs already in the notebook (`![[paper.pdf]]`) show the same way. In community snapshots an embed shows only as its title.
 
 ## Software
