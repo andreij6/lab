@@ -3,6 +3,7 @@
 // Mermaid diagrams (rendered after insertion), block ids (^id), heading ids, markdown links to
 // notes and relative images as attachments. Output is sanitized with DOMPurify.
 import DOMPurify from "dompurify";
+import { parseTrackBlock, trackHtml } from "./outdoor.ts";
 import hljs from "highlight.js/lib/common";
 import katex from "katex";
 import "katex/dist/katex.min.css";
@@ -170,6 +171,7 @@ const md = new Marked(
         const l = (lang ?? "").split(/\s/)[0];
         const safe = escaped ? text : esc(text);
         if (l === "mermaid") return `<pre class="mermaid-src" data-mermaid>${safe}</pre>`;
+        if (l === "track") return trackHtml(parseTrackBlock(text));
         return `<pre><code class="hljs${l ? ` language-${esc(l)}` : ""}">${safe}\n</code></pre>`;
       },
       heading({ tokens, depth }: Tokens.Heading) {

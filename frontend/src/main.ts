@@ -6,7 +6,7 @@ import { Actor, HttpAgent, type Identity } from "@icp-sdk/core/agent";
 import { safeGetCanisterEnv } from "@icp-sdk/core/agent/canister-env";
 import { IDL } from "@icp-sdk/core/candid";
 import { Ed25519KeyIdentity } from "@icp-sdk/core/identity";
-import { createActor as registryActor, type Rain, type Channel, type Member, type Message, type Post, type PostComment, type Flag, type Online, type Attestation, type ListingView, type Token, type Health, type Bug, type BugStatus, type Registry, type Notebook as NotebookRec } from "./bindings/registry";
+import { createActor as registryActor, type Rain, type Channel, type Member, type Message, type Post, type PostComment, type Flag, type Watch, type Online, type Attestation, type ListingView, type Token, type Health, type Bug, type BugStatus, type Registry, type Notebook as NotebookRec } from "./bindings/registry";
 import { createActor as notebookActor, type AttestationView, type Attempt, Role, type DepositState, type AgentKey, type Comment, type Info, type Note, type Revision, type Share, type TopUp, type Notebook as NotebookApi, type NotebookError } from "./bindings/notebook";
 import type { SnapshotInfo } from "./bindings/registry";
 import { Principal } from "@icp-sdk/core/principal";
@@ -27,6 +27,8 @@ import { NEW_IPYNB, addCell as nbAddCell, isNotebookPath, moveCell as nbMoveCell
 import { pythonLoaded, restartPython, runPython } from "./pyodide";
 import { isSlides, splitSlides, SLIDES_TEMPLATE } from "./slides";
 import { QUERY_METHODS } from "./queries";
+import { applyRule, isFaded, keepLater, lint, ms as nsToMs, nextToResurface, periodPath, periodRollup, propertyColumns, renameProperty, renameTag, retarget as retargetLinks, runQuery, setProperty, splitAtHeadings, type Issue, type OrgNote, type Period, type PropColumn, type Resurface, type Rule } from "./organize";
+import { DECKS, GEAR_BASE_REF, localStamp, REVIEW_TEMPLATE, TRIP_TEMPLATE, applyReviewToGear, baseWeight, fieldEntry, foodWorkbook, gearWorkbook, isGearWorkbook, parseGpx, routeNote, waterWorkbook } from "./outdoor";
 import { NEW_WORKBOOK, PALETTES, addChart, chartSvg, colName, evaluate, fmt, isSheetPath, newSheet, parseCsv, parseRef, parseWorkbook, serializeWorkbook, sheetCsv, toCsv, type Chart, type ChartType, type Workbook } from "./sheet";
 import DOMPurify from "dompurify";
 import { MEETING_TEMPLATE, actionCards, decisions, isMeeting, isOverdue, markdownToDocx, meetingSummary, parseIcs, parseMeeting, parseTasks, people, reminders, setCell, sortTable, sortTasks, toggleTaskLine, tsvToTable, weeklyReview } from "./work";
@@ -149,9 +151,9 @@ const nb = (): NotebookApi => notebookOf(S.notebook!.canister.toText());
 
 // ---------- state ----------
 
-type Tab = "notes" | "chat" | "graph" | "manage" | "study" | "work";
-type Settings = { bookmarks: string[]; srs: Record<string, Record<string, Sched>>; deckStats: Record<string, { reviews: number; good: number }>; study: Record<string, number>; goals: { notesPerWeek?: number; cardsPerDay?: number } };
-const parseSettings = (j: Partial<Settings> | undefined): Settings => ({ bookmarks: Array.isArray(j?.bookmarks) ? j!.bookmarks : [], srs: j?.srs ?? {}, deckStats: j?.deckStats ?? {}, study: j?.study ?? {}, goals: j?.goals ?? {} });
+type Tab = "notes" | "chat" | "graph" | "manage" | "study" | "work" | "organize" | "trips";
+type Settings = { bookmarks: string[]; srs: Record<string, Record<string, Sched>>; deckStats: Record<string, { reviews: number; good: number }>; study: Record<string, number>; goals: { notesPerWeek?: number; cardsPerDay?: number }; searches: { name: string; q: string }[]; rules: Rule[]; resurface: Resurface; decayDays: number; hideFaded: boolean; kanbanArchiveDays: number };
+const parseSettings = (j: Partial<Settings> | undefined): Settings => ({ bookmarks: Array.isArray(j?.bookmarks) ? j!.bookmarks : [], srs: j?.srs ?? {}, deckStats: j?.deckStats ?? {}, study: j?.study ?? {}, goals: j?.goals ?? {}, searches: Array.isArray(j?.searches) ? j!.searches : [], rules: Array.isArray(j?.rules) ? j!.rules : [], resurface: j?.resurface ?? {}, decayDays: typeof j?.decayDays === "number" ? j.decayDays : 180, hideFaded: !!j?.hideFaded, kanbanArchiveDays: typeof j?.kanbanArchiveDays === "number" ? j.kanbanArchiveDays : 14 });
 type ManageTab = "finance" | "notebook" | "sharing" | "agents" | "market";
 const MANAGE_TABS: [ManageTab, string, string][] = [["finance", "Cycles & money", "bolt"], ["notebook", "Notebook", "book"], ["sharing", "Sharing", "share"], ["agents", "Agents", "bot"], ["market", "Market", "tag"]];
 type View = "edit" | "split" | "preview";
@@ -234,6 +236,9 @@ const S = {
   community: undefined as { channel: string; channels: Channel[]; messages: Message[]; online: Online[]; member?: Member; balance?: bigint; min: bigint; loading: boolean; draft: string; replyTo?: Message; unread: Record<string, number>; showOnline: boolean; showChannels: boolean; picker?: { mid?: bigint }; editing?: bigint; pins?: Message[]; showPins?: boolean; fee?: bigint; error?: string; github?: string; repo?: string; firstUnseen?: bigint; atBottom?: boolean; newCount?: number; gistSlide?: Map<bigint, number> } | undefined,
   show: undefined as { slides: string[]; i: number; self?: string; dead?: boolean } | undefined,
   mentions: 0, // @mentions of me in the community since I last looked
+  org: { q: "", selected: new Set<string>(), triage: false, triageIdx: 0 } as { q: string; sort?: { key: string; dir: number }; selected: Set<string>; triage: boolean; triageIdx: number },
+  trips: { mine: [] as Watch[], watching: [] as Watch[] },
+  conflicts: [] as { canister: string; path: string; mine: string; theirs: string }[],
   board: undefined as { topic?: string; sort: "hot" | "new" | "top"; posts: Post[]; open?: Post; comments: PostComment[]; channels: Channel[]; member?: Member; fee: bigint; loading: boolean; replyTo?: bigint; github?: string; showSide: boolean; showAside: boolean } | undefined,
   /** projects per notebook for the list page footer */
   projectsByNotebook: new Map<string, { active: number; done: number }>(),
@@ -383,6 +388,8 @@ const ICONS: Record<string, string> = {
   person: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
   "panel-left": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>',
   "panel-right": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/>',
+  mountain: '<path d="M3 20l6-10 4 6 3-4 5 8z"/><path d="M8.2 11.4l1.8 1.6 1.4-1.2"/>',
+  sliders: '<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
   bug: '<rect x="8" y="6" width="8" height="14" rx="4"/><path d="M12 6V3M6 10H3M21 10h-3M6 20l-2 2M18 20l2 2M6 15H3M21 15h-3"/>',
 };
 const icon = (n: string, cls = "") => `<svg class="ico ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n] ?? ""}</svg>`;
@@ -831,7 +838,7 @@ function routeSheet(el: HTMLElement) {
   const tab = (t: Tab, label: string, ic: string): R => ({ label, icon: ic, sub: true, on: inNb && S.tab === t, go: () => { const i = document.createElement("i"); i.dataset.tab = t; if (!inNb) { S.community = undefined; S.board = undefined; S.market = undefined; S.admin = undefined; location.hash = `#/notebook/${nbId}`; } void onAction("tab", i, new MouseEvent("click")); } });
   const routes: R[] = [
     { label: "Your notebooks", icon: "list", on: !S.notebook && !S.community && !S.board && !S.market && !S.admin, go: () => { location.hash = "#/"; } },
-    ...(S.notebook ? [{ label: S.notebook.name, icon: "book", on: inNb && S.tab === "notes", go: () => { if (!inNb) location.hash = `#/notebook/${nbId}`; else { const i = document.createElement("i"); i.dataset.tab = "notes"; void onAction("tab", i, new MouseEvent("click")); } } } as R, tab("chat", "Chat with your notes", "chat"), tab("graph", "Graph", "graph"), tab("study", "Study", "check"), tab("work", "Work", "briefcase"), tab("manage", "Manage", "bolt")] : []),
+    ...(S.notebook ? [{ label: S.notebook.name, icon: "book", on: inNb && S.tab === "notes", go: () => { if (!inNb) location.hash = `#/notebook/${nbId}`; else { const i = document.createElement("i"); i.dataset.tab = "notes"; void onAction("tab", i, new MouseEvent("click")); } } } as R, tab("chat", "Chat with your notes", "chat"), tab("graph", "Graph", "graph"), tab("study", "Study", "check"), tab("work", "Work", "briefcase"), tab("organize", "Organize", "sliders"), tab("trips", "Trips", "mountain"), tab("manage", "Manage", "bolt")] : []),
     { label: "Community", icon: "person", on: !!S.community, go: () => { location.hash = "#/community"; } },
     ...(flag("board") ? [{ label: "Board", icon: "list", on: !!S.board, go: () => { location.hash = "#/board"; } } as R] : []),
     ...(flag("market") ? [{ label: "Market", icon: "tag", on: !!S.market, go: () => { location.hash = "#/market"; } } as R] : []),
@@ -943,7 +950,7 @@ function notebooksPage(): string {
       </form></div>`;
   return `<div class="page ${S.mobile ? "" : "has-activity"}">
     <header class="topbar">${brand()}<span class="right"><span class="kicker">Your notebooks</span>${themeBtn()}</span></header>
-    <section class="card"><h2>Notebooks you own</h2><p class="muted small">Each one is its own canister that you control. Open one to write, or Manage to keep it running.</p>${cards}${account()}</section>
+    <section class="card"><div class="row"><h2>Notebooks you own</h2><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="keep-offline" title="Download every notebook to this device so it opens and edits without signal" ${S.offline ? "disabled" : ""}>${icon("download")}${store("nb-offline-at") ? `Offline copy from ${ago(BigInt(store("nb-offline-at")!) * 1_000_000n)} · refresh` : "Keep offline"}</button></span></div><p class="muted small">Each one is its own canister that you control. Open one to write, or Manage to keep it running.</p>${cards}${account()}</section>
   </div>${activityGrid()}`;
 }
 
@@ -970,6 +977,8 @@ function shell(body: string): string {
     : "";
   const alert = S.frozen
     ? `<div class="alert-bar">${icon("bolt")}This notebook is frozen: it cannot answer until it is topped up. ${S.notes?.length ? "You are seeing the last copy saved on this device." : ""} <button type="button" class="btn btn-ghost" data-action="freeze-modal">Top up</button></div>`
+    : S.conflicts.length
+    ? `<div class="alert-bar">${icon("split")}${S.conflicts.length} note${S.conflicts.length === 1 ? " was" : "s were"} changed here offline and elsewhere too. <button type="button" class="btn btn-ghost" data-action="conflicts-open">Choose versions</button></div>`
     : S.offline || S.fromCache
     ? `<div class="alert-bar">${icon("bolt")}You are offline${S.pendingWrites ? `; ${S.pendingWrites} change${S.pendingWrites === 1 ? "" : "s"} waiting to sync` : ""}.</div>`
     : low && S.tab !== "manage"
@@ -983,7 +992,7 @@ function ribbonHtml(i?: Info, low = false): string {
   const inNb = !!S.notebook && !S.community && !S.market && !S.admin;
   const rb = (tab: Tab, label: string, ic: string, extra = "") => `<button type="button" class="rb ${inNb && S.tab === tab ? "on" : ""}" data-action="ribbon-tab" data-tab="${tab}" title="${label}" aria-label="${label}" aria-pressed="${inNb && S.tab === tab}">${icon(ic)}${extra}</button>`;
   return `<nav class="ribbon" aria-label="Sections">
-      <div class="rb-group">${rb("notes", "Notes", "notes")}${rb("chat", "Chat with your notes", "chat")}${rb("graph", "Knowledge graph", "graph")}${rb("study", `Study${dueTotal() ? ` · ${dueTotal()} cards due` : ""}`, "check", dueTotal() ? `<i class="rb-count">${dueTotal()}</i>` : "")}${rb("work", `Work${overdueCount() ? ` · ${overdueCount()} overdue` : ""}`, "briefcase", overdueCount() ? `<i class="rb-count danger">${overdueCount()}</i>` : "")}</div>
+      <div class="rb-group">${rb("notes", "Notes", "notes")}${rb("chat", "Chat with your notes", "chat")}${rb("graph", "Knowledge graph", "graph")}${rb("study", `Study${dueTotal() ? ` · ${dueTotal()} cards due` : ""}`, "check", dueTotal() ? `<i class="rb-count">${dueTotal()}</i>` : "")}${rb("work", `Work${overdueCount() ? ` · ${overdueCount()} overdue` : ""}`, "briefcase", overdueCount() ? `<i class="rb-count danger">${overdueCount()}</i>` : "")}${rb("organize", "Organize: saved searches, triage, rules, tidy-up", "sliders")}${rb("trips", S.trips.watching.some((w) => w.overdue && !w.closed) ? "Trips · someone is overdue" : "Trips", "mountain", S.trips.watching.some((w) => w.overdue && !w.closed) ? `<i class="rb-dot"></i>` : "")}</div>
       <div class="rb-group bottom">${rb("manage", `Manage${i ? ` · ${tc(i.cycles)}` : ""}`, "bolt", low ? `<i class="rb-dot"></i>` : "")}<a class="rb ${S.community ? "on" : ""}" href="#/community" data-action="nav" title="Community${S.mentions ? ` · ${S.mentions} new mention${S.mentions === 1 ? "" : "s"}` : ""}" aria-label="Community">${icon("person")}${S.mentions ? `<i class="rb-badge">${S.mentions > 9 ? "9+" : S.mentions}</i>` : ""}</a>${flag("board") ? `<a class="rb ${S.board ? "on" : ""}" href="#/board" data-action="nav" title="Board: posts and discussion" aria-label="Board">${icon("list")}</a>` : ""}${flag("market") ? `<a class="rb ${S.market ? "on" : ""}" href="#/market" data-action="nav" title="Notebook market" aria-label="Notebook market">${icon("tag")}</a>` : ""}${S.isAdmin ? `<a class="rb ${S.admin ? "on" : ""}" href="#/admin" data-action="nav" title="Reports and ideas" aria-label="Reports and ideas">${icon("bug")}</a>` : ""}<button type="button" class="rb" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="rb" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button><button type="button" class="rb" data-action="sign-out" title="Sign out" aria-label="Sign out">${icon("out")}</button></div>
     </nav>`;
 }
@@ -991,10 +1000,10 @@ function shellBody(body: string, i: Info | undefined, low: boolean, alert: strin
   const ribbon = ribbonHtml(i, low);
   return `<div class="shell ${S.mobile ? "is-mobile" : ""}">${ribbon}<div class="shell-main">
     ${alert}
-    <header class="wsbar">${brand()}${S.mobile ? seg : `<span class="crumb"><b>${esc(S.notebook!.name)}</b><span class="faint">/</span><span>${S.tab === "notes" ? (cur() ? esc(title(cur()!)) : "Notes") : S.tab === "chat" ? "Chat" : S.tab === "graph" ? "Graph" : S.tab === "study" ? "Study" : S.tab === "work" ? "Work" : "Manage"}</span></span>`}
+    <header class="wsbar">${brand()}${S.mobile ? seg : `<span class="crumb"><b>${esc(S.notebook!.name)}</b><span class="faint">/</span><span>${S.tab === "notes" ? (cur() ? esc(title(cur()!)) : "Notes") : S.tab === "chat" ? "Chat" : S.tab === "graph" ? "Graph" : S.tab === "study" ? "Study" : S.tab === "work" ? "Work" : S.tab === "organize" ? "Organize" : S.tab === "trips" ? "Trips" : "Manage"}</span></span>`}
       <span class="right">${S.mobile ? "" : `<button type="button" class="btn btn-ghost" data-action="palette" title="Open or create a note (${MOD}K)">${icon("search")}<span class="kbd">${MOD}K</span></button>`}${S.mobile ? moreBtn() : ""}</span>
     </header>
-    ${panebar({ on: S.sideOpen, what: "the file pane", action: "side-toggle", off: S.tab === "graph" || S.tab === "manage" || S.tab === "study" || S.tab === "work" }, { on: S.asideOpen, what: "the right pane", action: "aside-toggle", off: S.tab === "graph" || S.tab === "manage" || S.tab === "study" || S.tab === "work" })}
+    ${panebar({ on: S.sideOpen, what: "the file pane", action: "side-toggle", off: S.tab === "graph" || S.tab === "manage" || S.tab === "study" || S.tab === "work" || S.tab === "organize" || S.tab === "trips" }, { on: S.asideOpen, what: "the right pane", action: "aside-toggle", off: S.tab === "graph" || S.tab === "manage" || S.tab === "study" || S.tab === "work" || S.tab === "organize" || S.tab === "trips" })}
     ${body}
     ${mobileNav}
   </div></div>`;
@@ -1031,7 +1040,7 @@ function folderHtml(f: Folder, depth: number): string {
     if (open) rows.push(folderHtml(sub, depth + 1));
   }
   const openTabs = new Set(S.panes.flatMap((p) => p.tabs));
-  for (const p of f.files) rows.push(`<div class="tree-row file ${p === cur() ? "active" : openTabs.has(p) ? "open-tab" : ""}" style="--d:${depth}" data-action="open" data-path="${esc(p)}" data-kind="file" title="${esc(p)}" draggable="true">${depth ? `<span class="guide" style="--d:${depth - 1}"></span>` : ""}<span class="chev-gap"></span>${icon(note(p)?.agent ? "bot" : isAttachment(p) ? "image" : isExcalidraw(p) ? "edit" : isNotebookPath(p) ? "command" : isSheetPath(p) ? "columns" : isDashPath(p) ? "graph" : "file")}<span class="name">${esc(title(p))}</span>${note(p)?.agent ? `<span class="agent-chip" title="written by ${esc(note(p)!.agent!)}">${esc(note(p)!.agent!)}</span>` : ""}${shareBadge(p)}${unreadComments(p) ? `<span class="unread" title="${unreadComments(p)} new comment${unreadComments(p) === 1 ? "" : "s"}">${icon("chat")}${unreadComments(p)}</span>` : ""}${draftOf(p).dirty ? `<span class="dot-dirty" title="Unsaved"></span>` : ""}${more("file", p)}</div>`);
+  for (const p of f.files) if (!(S.settings.hideFaded && faded(p) && p !== cur())) rows.push(`<div class="tree-row file ${faded(p) ? "faded" : ""} ${p === cur() ? "active" : openTabs.has(p) ? "open-tab" : ""}" style="--d:${depth}" data-action="open" data-path="${esc(p)}" data-kind="file" title="${esc(p)}" draggable="true">${depth ? `<span class="guide" style="--d:${depth - 1}"></span>` : ""}<span class="chev-gap"></span>${icon(note(p)?.agent ? "bot" : isAttachment(p) ? "image" : isExcalidraw(p) ? "edit" : isNotebookPath(p) ? "command" : isSheetPath(p) ? "columns" : isDashPath(p) ? "graph" : "file")}<span class="name">${esc(title(p))}</span>${note(p)?.agent ? `<span class="agent-chip" title="written by ${esc(note(p)!.agent!)}">${esc(note(p)!.agent!)}</span>` : ""}${shareBadge(p)}${unreadComments(p) ? `<span class="unread" title="${unreadComments(p)} new comment${unreadComments(p) === 1 ? "" : "s"}">${icon("chat")}${unreadComments(p)}</span>` : ""}${draftOf(p).dirty ? `<span class="dot-dirty" title="Unsaved"></span>` : ""}${more("file", p)}</div>`);
   return rows.join("");
 }
 const countFiles = (f: Folder): number => f.files.length + f.folders.reduce((n, s) => n + countFiles(s), 0);
@@ -1054,7 +1063,7 @@ function side(): string {
   }
   const tags = [...S.idx.tags.entries()].sort((a, b) => b[1].size - a[1].size || a[0].localeCompare(b[0]));
   return `<div class="pane-head"><button type="button" class="btn btn-ghost icon-btn" data-action="today" title="Today's note (${MOD}⇧D)" aria-label="Today's note">${icon("calendar")}</button><button type="button" class="btn btn-ghost icon-btn" data-action="root-menu" title="Notebook actions" aria-label="Notebook actions">${icon("more")}</button></div>
-    ${bookmarks}<div class="tree" data-tree>${body}</div>
+    ${bookmarks}${S.settings.searches.length && !S.query.trim() && !S.tag ? `<div class="pane-title">Saved searches</div>${S.settings.searches.map((x, i) => `<div class="bm-row" data-action="org-open" data-i="${i}" title="${esc(x.q)}">${icon("search")}<span class="name">${esc(x.name)}</span><span class="cnt small faint">${runQuery(orgNotes(), x.q).length}</span></div>`).join("")}` : ""}<div class="tree" data-tree>${body}</div>
     ${tags.length ? `<div class="pane-title">Tags</div><div class="tags">${tags.map(([t, ps]) => `<button type="button" class="tag-chip ${S.tag === t ? "active" : ""}" data-action="tag" data-tag="${esc(t)}">#${esc(t)}<span class="cnt">${ps.size}</span></button>`).join("")}</div>` : ""}
     <div class="side-foot"><button type="button" class="nb-switch" data-action="nb-menu" title="Switch notebook"><span class="updown">${icon("updown")}</span><b>${esc(S.notebook!.name)}</b>${shareBadge("")}</button><span class="right-actions"><button type="button" class="btn btn-ghost icon-btn" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="btn btn-ghost icon-btn" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button></span></div>`;
 }
@@ -1966,6 +1975,343 @@ const BUILTIN_TEMPLATES: Record<string, string> = {
   "Person": "---\ntype: person\nrole: \nteam: \n---\n# {{title}}\n\n## Context\n\n\n\n## Last 1:1\n\n\n\n## Open with them\n\n- [ ] \n",
   "Project": "---\ntype: project\nstatus: active\ngoal: \n---\n# {{title}}\n\n## Milestones\n\n- [ ] \n\n## Notes\n\n",
 };
+// --- the Organize tab: saved searches with property tables, triage, periodic notes, rules, tidy-up, refactors, resurfacing, decay
+
+const orgNotes = () => (S.notes ?? []).map((n) => ({ ...n, content: S.drafts.get(n.path)?.text ?? n.content }));
+const fmOf = (path: string) => frontmatter(S.drafts.get(path)?.text ?? note(path)?.content ?? "").data;
+/** Change a note's content and save it (the draft keeps the editor in step). */
+async function writeNote(path: string, content: string) {
+  if (!note(path)) return;
+  onDraftInput(path, content);
+  await save(path);
+}
+const pinnedSet = () => new Set(S.settings.bookmarks);
+const faded = (path: string) => { const n = note(path); return !!n && isFaded({ ...n, content: S.drafts.get(path)?.text ?? n.content }, S.settings.decayDays, pinnedSet()); };
+const inboxNotes = () => orgNotes().filter((n) => n.path.endsWith(".md") && (n.path.startsWith("Inbox/") || /(^|\s)#inbox\b/.test(n.content) || frontmatter(n.content).data.source === "capture"));
+const choiceInput = (col: PropColumn, path: string, value: string) => {
+  const a = `name="propcell" data-path="${esc(path)}" data-key="${esc(col.key)}" aria-label="${esc(col.key)} of ${esc(title(path))}"`;
+  if (col.type === "date") return `<input class="cellin" type="date" ${a} value="${esc(value.slice(0, 10))}">`;
+  if (col.type === "number") return `<input class="cellin num" type="number" step="any" ${a} value="${esc(value)}">`;
+  if (col.type === "checkbox") return `<select class="cellin" ${a}><option value=""></option>${["yes", "no"].map((v) => `<option ${value.toLowerCase() === v || (v === "yes" && value === "true") || (v === "no" && value === "false") ? "selected" : ""}>${v}</option>`).join("")}</select>`;
+  if (col.type === "choice") return `<input class="cellin" list="dl-${esc(col.key)}" ${a} value="${esc(value)}">`;
+  return `<input class="cellin" ${a} value="${esc(value)}">`;
+};
+function organizeTab(): string {
+  const o = S.org;
+  const notes = orgNotes();
+  const saved = S.settings.searches;
+  const results = o.q.trim() ? runQuery(notes, o.q) : [];
+  const cols = propertyColumns(results).slice(0, 7);
+  const sorted = o.sort ? [...results].sort((a, b) => { const k = o.sort!.key; const va = k === "_name" ? title(a.path) : frontmatter(a.content).data[k] ?? ""; const vb = k === "_name" ? title(b.path) : frontmatter(b.content).data[k] ?? ""; const na = Number(va), nb2 = Number(vb); const c = va !== "" && vb !== "" && !Number.isNaN(na) && !Number.isNaN(nb2) ? na - nb2 : va.localeCompare(vb); return o.sort!.dir * c; }) : results;
+  const head = (k: string, label: string) => `<th><button type="button" class="th-sort" data-action="org-sort" data-key="${esc(k)}">${esc(label)}${o.sort?.key === k ? (o.sort.dir > 0 ? " ▲" : " ▼") : ""}</button></th>`;
+  const table = results.length ? `<div class="ptable-wrap"><table class="ptable"><thead><tr><th><input type="checkbox" name="orgall" aria-label="Select all" ${o.selected.size && o.selected.size === results.length ? "checked" : ""}></th>${head("_name", "Note")}${cols.map((c) => head(c.key, `${c.key} · ${c.type}`)).join("")}</tr></thead><tbody>${sorted.slice(0, 300).map((n) => { const d = frontmatter(n.content).data; return `<tr class="${faded(n.path) ? "faded" : ""}"><td><input type="checkbox" name="orgpick" value="${esc(n.path)}" ${o.selected.has(n.path) ? "checked" : ""} aria-label="Select ${esc(title(n.path))}"></td><td><a href="#" data-action="open" data-path="${esc(n.path)}">${esc(title(n.path))}</a><div class="small faint">${esc(dir(n.path))}</div></td>${cols.map((c) => `<td>${choiceInput(c, n.path, d[c.key] ?? "")}</td>`).join("")}</tr>`; }).join("")}</tbody></table>${cols.filter((c) => c.type === "choice").map((c) => `<datalist id="dl-${esc(c.key)}">${c.choices.map((v) => `<option value="${esc(v)}">`).join("")}</datalist>`).join("")}</div>` : o.q.trim() ? `<p class="muted small">No notes match.</p>` : "";
+  const inbox = inboxNotes();
+  const t = o.triage ? inbox[Math.min(o.triageIdx, inbox.length - 1)] : undefined;
+  const issues = lint(notes, S.idx, S.folders);
+  const kinds: [Issue["kind"], string][] = [["broken", "Broken links"], ["orphan", "Orphans"], ["duplicate", "Duplicate titles"], ["empty-folder", "Empty folders"], ["stale-project", "Stale projects"]];
+  const fix = (i: Issue) => i.kind === "broken" ? `<button type="button" class="btn btn-ghost" data-action="lint-create" data-target="${esc(i.target ?? "")}">${icon("plus")}Create it</button>` : i.kind === "orphan" ? `<button type="button" class="btn btn-ghost" data-action="lint-index" data-path="${esc(i.path)}">Link from index</button><button type="button" class="btn btn-ghost" data-action="org-archive" data-path="${esc(i.path)}">Archive</button>` : i.kind === "duplicate" ? `<button type="button" class="btn btn-ghost" data-action="lint-rename" data-path="${esc(i.path)}">Rename</button>` : i.kind === "empty-folder" ? `<button type="button" class="btn btn-ghost" data-action="lint-rmdir" data-path="${esc(i.path)}">Delete folder</button>` : `<button type="button" class="btn btn-ghost" data-action="lint-pause" data-path="${esc(i.path)}">Mark paused</button>`;
+  const next = nextToResurface(notes, S.settings.resurface);
+  const fadedCount = notes.filter((n) => faded(n.path)).length;
+  const md = notes.filter((n) => n.path.endsWith(".md")).map((n) => n.path);
+  const opts = (sel?: string) => md.map((p) => `<option value="${esc(p)}" ${p === sel ? "selected" : ""}>${esc(stem(p))}</option>`).join("");
+  const tpls = [...Object.keys(BUILTIN_TEMPLATES).map((k) => ({ v: `builtin:${k}`, l: `${k} (built in)` })), ...paths().filter((p) => p.startsWith("Templates/")).map((p) => ({ v: p, l: stem(p).slice(10) }))];
+  return `<section class="main" style="overflow:auto"><div class="page wide org">
+    <div class="card band">
+      <div class="row"><h2>${icon("search")} Saved searches</h2></div>
+      <form class="row tight" data-form="org-search"><input class="input code" name="orgq" value="${esc(o.q)}" placeholder='tag:#client status:open modified:<7d folder:Projects -tag:done' aria-label="Search query" style="flex:1"><button type="submit" class="btn">Run</button><button type="button" class="btn btn-primary" data-action="org-save" ${o.q.trim() ? "" : "disabled"}>${icon("star")}Save</button>${o.q.trim() ? `<button type="button" class="btn btn-ghost" data-action="org-tile" title="Show this search as a tile on a dashboard">${icon("graph")}Tile</button>` : ""}</form>
+      <p class="small muted">Terms combine: <code>tag:x</code>, <code>folder:x</code>, any property like <code>status:open</code> or <code>priority:&gt;2</code>, <code>has:due</code>, <code>modified:&lt;7d</code> or <code>created:&gt;30d</code>, <code>-</code> to exclude, <code>"a phrase"</code>.</p>
+      ${saved.length ? `<div class="tags">${saved.map((s, i) => `<span class="tag-chip ${s.q === o.q ? "active" : ""}"><button type="button" class="chip-btn" data-action="org-load" data-i="${i}" title="${esc(s.q)}">${esc(s.name)}<span class="cnt">${runQuery(notes, s.q).length}</span></button><button type="button" class="chip-x" data-action="org-del" data-i="${i}" aria-label="Forget ${esc(s.name)}">${icon("x")}</button></span>`).join("")}</div>` : ""}
+      ${o.selected.size ? `<div class="row tight nudge"><span class="small">${o.selected.size} selected</span><button type="button" class="btn" data-action="org-bulk">${icon("edit")}Set a property</button><button type="button" class="btn btn-ghost" data-action="org-unselect">Clear</button></div>` : ""}
+      ${table}
+    </div>
+    <div class="grid2 org-grid">
+      <div class="card band">
+        <div class="row"><h2>${icon("folder-open")} Inbox triage</h2><span class="right-actions">${inbox.length ? `<button type="button" class="btn ${o.triage ? "" : "btn-primary"}" data-action="triage-toggle">${o.triage ? "Stop" : `Start · ${inbox.length}`}</button>` : ""}</span></div>
+        ${!inbox.length ? `<p class="muted small">Inbox zero. Notes in <code>Inbox/</code>, tagged <code>#inbox</code> or quick captures land here.</p>` : t ? `<div class="triage"><div class="small faint">${Math.min(o.triageIdx, inbox.length - 1) + 1} of ${inbox.length} · ${esc(t.path)}</div><h3>${esc(title(t.path))}</h3><div class="triage-body md">${renderMd(frontmatter(t.content).body.slice(0, 1200), t.path)}</div>
+          <div class="row tight nudge"><button type="button" class="btn" data-action="triage-file" data-path="${esc(t.path)}"><span class="kbd">F</span>File</button><button type="button" class="btn" data-action="triage-tag" data-path="${esc(t.path)}"><span class="kbd">T</span>Tag</button><button type="button" class="btn" data-action="triage-link" data-path="${esc(t.path)}"><span class="kbd">L</span>Link to project</button><button type="button" class="btn" data-action="org-archive" data-path="${esc(t.path)}"><span class="kbd">A</span>Archive</button><button type="button" class="btn btn-ghost" data-action="triage-next"><span class="kbd">N</span>Skip</button><button type="button" class="btn btn-ghost" data-action="open" data-path="${esc(t.path)}"><span class="kbd">O</span>Open</button></div></div>` : `<p class="small muted">${inbox.length} note${inbox.length === 1 ? "" : "s"} waiting. Start, then one key per note: F file, T tag, L link to a project, A archive, N skip.</p>`}
+      </div>
+      <div class="card band">
+        <div class="row"><h2>${icon("calendar")} Periodic notes</h2></div>
+        <p class="small muted">Each rolls up what was created, changed, finished, left open and decided in its period; months link their weeks, quarters their months.</p>
+        <div class="row tight">${(["week", "month", "quarter"] as Period[]).map((k) => { const p = periodPath(k, new Date()); return `<span class="btn-group"><button type="button" class="btn" data-action="periodic-open" data-kind="${k}">${note(p) ? "Open" : "Start"} this ${k}</button>${note(p) ? `<button type="button" class="btn btn-ghost icon-btn" data-action="periodic-rebuild" data-kind="${k}" title="Rebuild the rollup (keeps your reflection)" aria-label="Rebuild">${icon("refresh")}</button>` : ""}</span>`; }).join("")}</div>
+      </div>
+      <div class="card band">
+        <div class="row"><h2>${icon("bolt")} Rules</h2></div>
+        <p class="small muted">Rules run when a note is saved in this browser. A rule acts once per note.</p>
+        ${S.settings.rules.length ? `<div class="runs">${S.settings.rules.map((r) => `<div class="run"><span>When a note gets <b>#${esc(r.tag)}</b>${r.template ? `, apply <b>${esc(r.template.replace(/^builtin:/, "").replace(/^Templates\//, ""))}</b>` : ""}${r.folder ? `, move it to <b>${esc(r.folder)}</b>` : ""}${r.weekly ? ", add it to this week's note" : ""}</span><button type="button" class="btn btn-ghost icon-btn" data-action="rule-del" data-id="${esc(r.id)}" aria-label="Delete rule">${icon("x")}</button></div>`).join("")}</div>` : ""}
+        <form class="rule-form" data-form="rule-add"><input class="input" name="rtag" placeholder="tag, e.g. meeting" required><select class="input" name="rtpl"><option value="">no template</option>${tpls.map((x) => `<option value="${esc(x.v)}">${esc(x.l)}</option>`).join("")}</select><select class="input" name="rfolder"><option value="">stay where it is</option>${S.folders.filter((f) => !isAgentPath(f)).map((f) => `<option>${esc(f)}</option>`).join("")}</select><label class="switch"><input type="checkbox" name="rweek"> Add to this week</label><button type="submit" class="btn">${icon("plus")}Add rule</button></form>
+        <label class="field nudge"><span class="label">Kanban: move done cards to an Archive lane after (days, 0 = never)</span><div class="row tight"><input class="input" type="number" min="0" name="kbarchive" value="${S.settings.kanbanArchiveDays}" style="max-width:110px"><button type="button" class="btn btn-ghost" data-action="kb-sweep">Sweep boards now</button></div></label>
+      </div>
+      <div class="card band">
+        <div class="row"><h2>${icon("eye")} Resurface</h2></div>
+        ${next ? `<div class="resurface"><div class="small faint">Last touched ${ago(BigInt(nsToMs(next.modified)) * 1_000_000n)}</div><h3><a href="#" data-action="open" data-path="${esc(next.path)}">${esc(title(next.path))}</a></h3><div class="triage-body md">${renderMd(frontmatter(next.content).body.slice(0, 700), next.path)}</div><div class="row tight nudge"><button type="button" class="btn btn-primary" data-action="res-keep" data-path="${esc(next.path)}">Keep, show me later</button><button type="button" class="btn" data-action="open" data-path="${esc(next.path)}">Edit</button><button type="button" class="btn" data-action="res-pin" data-path="${esc(next.path)}">${icon("star")}Pin</button><button type="button" class="btn btn-ghost" data-action="org-archive" data-path="${esc(next.path)}">Archive</button></div></div>` : `<p class="muted small">Nothing older than 30 days is due. Old notes come back here so they get reread, kept or pruned.</p>`}
+      </div>
+      <div class="card band">
+        <div class="row"><h2>${icon("history")} Decay</h2></div>
+        <p class="small muted">Notes nobody touched for a while fade in the file tree, and can be hidden, unless bookmarked or marked <code>pinned: true</code>. Everything in <code>Archive/</code> is faded.</p>
+        <div class="row tight"><label class="field"><span class="label">Fade after (days, 0 = off)</span><input class="input" type="number" min="0" name="decaydays" value="${S.settings.decayDays}" style="max-width:110px"></label><label class="switch"><input type="checkbox" name="hidefaded" ${S.settings.hideFaded ? "checked" : ""}> Hide faded notes in the tree</label></div>
+        <p class="small faint">${fadedCount} note${fadedCount === 1 ? "" : "s"} faded right now.</p>
+      </div>
+    </div>
+    <div class="card band">
+      <div class="row"><h2>${icon("check")} Tidy up</h2><span class="small muted">${issues.length ? `${issues.length} thing${issues.length === 1 ? "" : "s"} to look at` : "All tidy"}</span></div>
+      ${kinds.map(([k, label]) => { const is = issues.filter((i) => i.kind === k); return is.length ? `<details class="lint" ${is.length <= 6 ? "open" : ""}><summary><b>${label}</b> <span class="count">${is.length}</span></summary><div class="runs">${is.slice(0, 60).map((i) => `<div class="run"><span><a href="#" data-action="${k === "empty-folder" ? "noop" : "open"}" data-path="${esc(i.path)}">${esc(k === "empty-folder" ? i.path : stem(i.path))}</a> <span class="small muted">· ${esc(i.detail)}</span></span><span class="row-actions">${fix(i)}</span></div>`).join("")}</div></details>` : ""; }).join("")}
+    </div>
+    <div class="card band">
+      <div class="row"><h2>${icon("move")} Refactor</h2></div>
+      <div class="grid2">
+        <form class="field" data-form="ref-tag"><span class="label">Rename a tag everywhere</span><div class="row tight"><input class="input" name="from" placeholder="old" required list="dl-tags"><input class="input" name="to" placeholder="new" required><button type="submit" class="btn">Rename</button></div></form>
+        <form class="field" data-form="ref-prop"><span class="label">Rename a property everywhere</span><div class="row tight"><input class="input" name="from" placeholder="old key" required><input class="input" name="to" placeholder="new key" required><button type="submit" class="btn">Rename</button></div></form>
+        <form class="field" data-form="ref-split"><span class="label">Split a note at its ## headings</span><div class="row tight"><select class="input" name="path">${opts(cur())}</select><button type="submit" class="btn">Split</button></div></form>
+        <form class="field" data-form="ref-merge"><span class="label">Merge a note into another (links follow)</span><div class="row tight"><select class="input" name="from" aria-label="Note to merge in">${opts()}</select><span class="small">into</span><select class="input" name="into" aria-label="Note to keep">${opts(cur())}</select><button type="submit" class="btn">Merge</button></div></form>
+      </div>
+      <datalist id="dl-tags">${[...S.idx.tags.keys()].sort().map((tg) => `<option value="${esc(tg)}">`).join("")}</datalist>
+    </div>
+  </div></section>`;
+}
+/** Apply every rule to a note that was just saved; a rule acts once per note (it leaves a marker). */
+async function runRules(path: string) {
+  if (!S.settings.rules.length || !path.endsWith(".md") || path.startsWith("Periodic/") || isAgentPath(path)) return;
+  for (const r of S.settings.rules) {
+    const content = S.drafts.get(path)?.text ?? note(path)?.content ?? "";
+    const tpl = r.template ? (r.template.startsWith("builtin:") ? BUILTIN_TEMPLATES[r.template.slice(8)] : note(r.template)?.content) : undefined;
+    const out = applyRule(r, path, content, tpl ? fillTemplate(tpl, { title: title(path) }) : undefined);
+    if (!out.applied) continue;
+    await writeNote(path, out.content);
+    if (out.weekly) await addToPeriodic("week", path);
+    if (out.move && !note(out.move)) { await renamePath(path, out.move); toast(`Rule #${r.tag}: moved to ${dir(out.move)}.`, "ok"); return; }
+    toast(`Rule #${r.tag} applied to ${title(path)}.`, "ok");
+  }
+}
+async function addToPeriodic(kind: Period, path: string) {
+  const p = periodPath(kind, new Date());
+  if (!note(p)) await createQuiet(p, periodRollup(kind, new Date(), orgNotes()));
+  const text = S.drafts.get(p)?.text ?? note(p)?.content ?? "";
+  const link = `- [[${stem(path)}]]`;
+  if (!text.includes(link)) await writeNote(p, text.replace(/\n## Reflection/, `\n## Added by rules\n\n${link}\n\n## Reflection`));
+}
+/** Create a note without opening it (for rollups, links and generated files). */
+async function createQuiet(path: string, content: string) {
+  if (!S.notes || note(path)) return;
+  try {
+    if (S.offline || S.fromCache) throw new Error("offline");
+    const m = unwrap(await nb().write(path, content));
+    S.notes.push({ path, content, created: m.created, modified: m.modified });
+  } catch (e) {
+    if (!(S.offline || S.fromCache || !navigator.onLine)) throw e;
+    await queueWrite({ canister: S.notebook!.canister.toText(), path, content, at: Date.now(), base: "0" });
+    S.notes.push({ path, content, created: BigInt(Date.now()) * 1_000_000n, modified: 0n });
+    S.pendingWrites = (await queued()).filter((q) => q.canister === S.notebook!.canister.toText()).length;
+  }
+  S.notes.sort((x, y) => x.path.localeCompare(y.path));
+  if (dir(path) && !S.folders.includes(dir(path))) S.folders = [...S.folders, dir(path)].sort();
+  reindex();
+}
+async function openPeriodic(kind: Period, rebuild = false) {
+  const p = periodPath(kind, new Date());
+  const fresh = periodRollup(kind, new Date(), orgNotes());
+  if (!note(p)) { await createQuiet(p, fresh); }
+  else if (rebuild) {
+    const old = S.drafts.get(p)?.text ?? note(p)!.content;
+    const keep = old.slice(old.indexOf("\n## Reflection") >= 0 ? old.indexOf("\n## Reflection") : old.length);
+    await writeNote(p, fresh.slice(0, fresh.indexOf("\n## Reflection")) + (keep || "\n## Reflection\n\n- \n"));
+    toast("Rollup rebuilt; your reflection is kept.", "ok");
+  }
+  S.tab = "notes";
+  await open(p);
+}
+/** Done kanban cards carry `✅ date`; after the set number of days they move to an Archive lane. */
+async function sweepBoards(manual = false) {
+  const days = S.settings.kanbanArchiveDays;
+  if (!days || !S.notes) { if (manual) toast("Set the number of days first.", "info"); return; }
+  let moved = 0;
+  for (const n of orgNotes().filter((x) => isKanban(x.content))) {
+    const b = parseBoard(n.content);
+    let lane = b.lanes.find((l) => l.title.toLowerCase() === "archive");
+    let changed = false;
+    for (const l of b.lanes) {
+      if (l === lane) continue;
+      const keep = [];
+      for (const c of l.cards) {
+        const d = /✅\s*(\d{4}-\d{2}-\d{2})/.exec(c.text)?.[1];
+        if (c.done && d && Date.now() - new Date(d).getTime() > days * 86_400_000) {
+          if (!lane) { lane = { title: "Archive", cards: [], complete: true }; b.lanes.push(lane); }
+          lane.cards.push(c); changed = true; moved++;
+        } else keep.push(c);
+      }
+      l.cards = keep;
+    }
+    if (changed) await writeNote(n.path, serializeBoard(b));
+  }
+  if (manual || moved) toast(moved ? `Archived ${moved} done card${moved === 1 ? "" : "s"}.` : "No done cards old enough.", "ok");
+}
+
+// --- the Trips tab: plans, gear, food, water, routes, field journal, check-ins, reviews, skills decks
+
+function tripsTab(): string {
+  const notes = orgNotes();
+  const trips = notes.filter((n) => n.path.endsWith(".md") && (frontmatter(n.content).data.type ?? "") === "trip").sort((a, b) => (frontmatter(b.content).data.start ?? "").localeCompare(frontmatter(a.content).data.start ?? ""));
+  const gear = notes.filter((n) => isSheetPath(n.path) && isGearWorkbook(n.content));
+  const watch = (id?: string) => S.trips.mine.find((w) => String(w.id) === id);
+  const card = (n: OrgNote) => {
+    const d = frontmatter(n.content).data;
+    const f = dir(n.path);
+    const w = watch(d.watch);
+    const inFolder = (suffix: string) => notes.find((x) => x.path === `${f}/${suffix}`);
+    const entries = notes.filter((x) => x.path.startsWith(`${f}/Journal/`)).sort((a, b) => (frontmatter(b.content).data.time ?? "").localeCompare(frontmatter(a.content).data.time ?? ""));
+    const routes = notes.filter((x) => dir(x.path) === f && (frontmatter(x.content).data.type ?? "") === "route");
+    const status = w ? (w.closed ? `<span class="pill">back home</span>` : w.overdue ? `<span class="pill bad">overdue</span>` : `<span class="pill ok">@${esc(w.contact_handle)} is watching</span>`) : "";
+    const btn = (action: string, label: string, ic: string, extra = "") => `<button type="button" class="btn btn-ghost" data-action="${action}" data-path="${esc(n.path)}" data-folder="${esc(f)}" ${extra}>${icon(ic)}${label}</button>`;
+    const have = (suffix: string, label: string, ic: string, action: string) => inFolder(suffix) ? `<button type="button" class="btn btn-ghost" data-action="open" data-path="${esc(`${f}/${suffix}`)}">${icon(ic)}${label}</button>` : btn(action, label, ic);
+    return `<div class="card band trip">
+      <div class="row"><h2><a href="#" data-action="open" data-path="${esc(n.path)}">${esc(title(n.path) === "Plan" ? f.split("/").pop()! : title(n.path))}</a></h2><span class="small muted">${esc(d.start ?? "")}${d.end && d.end !== d.start ? ` → ${esc(d.end)}` : ""}${d.return_by ? ` · back by ${esc(d.return_by)}` : ""}</span><span class="right-actions">${status}</span></div>
+      <div class="row tight wrap">${btn("open", "Plan", "file")}${have("Gear.sheet", "Gear", "columns", "trip-gear")}${have("Food.sheet", "Food", "columns", "trip-food")}${have("Water.sheet", "Water", "columns", "trip-water")}<label class="btn btn-ghost">${icon("upload")}Route (GPX)<input type="file" name="gpx" accept=".gpx,application/gpx+xml" data-folder="${esc(f)}" hidden></label>${btn("field-entry", "Field entry", "camera")}${have("Review.md", "Review", "check", "trip-review")}${inFolder("Review.md") ? `<button type="button" class="btn btn-ghost" data-action="review-apply" data-path="${esc(`${f}/Review.md`)}">${icon("columns")}Apply review to gear</button>` : ""}${btn("trip-print", "Print", "download")}</div>
+      <div class="row tight wrap nudge">${!w || w.closed ? btn("trip-leave", "Leave this plan with someone", "shield") : `${btn("trip-checkin", "Check in: I'm OK", "check", `data-id="${w.id}"`)}${btn("trip-home", "Back home", "out", `data-id="${w.id}"`)}<span class="small muted">${w.last_check_in ? `last check-in ${ago(w.last_check_in)}` : "no check-in yet"}${w.every_hours ? ` · every ${w.every_hours} h` : ""}</span>`}</div>
+      ${routes.length ? `<div class="band-title">Routes</div>${routes.map((r) => `<div class="run"><a href="#" data-action="open" data-path="${esc(r.path)}">${esc(title(r.path))}</a><span class="small muted">${esc(frontmatter(r.content).data.distance_km ?? "?")} km · ↑ ${esc(frontmatter(r.content).data.ascent_m ?? "?")} m</span></div>`).join("")}` : ""}
+      ${entries.length ? `<div class="band-title">Field journal · ${entries.length}</div><div class="timeline">${entries.slice(0, 8).map((e) => { const ed = frontmatter(e.content).data; return `<div class="tl-row" data-action="open" data-path="${esc(e.path)}"><span class="tl-time">${esc(ed.time ?? "")}</span><span class="tl-text">${esc(frontmatter(e.content).body.replace(/^#.*\n/, "").trim().slice(0, 120) || "(empty)")}</span>${ed.lat ? `<span class="small faint">${esc(ed.lat)}, ${esc(ed.lon ?? "")}</span>` : ""}</div>`; }).join("")}</div>` : ""}
+    </div>`;
+  };
+  const watching = S.trips.watching;
+  return `<section class="main" style="overflow:auto"><div class="page wide trips">
+    ${watching.length ? `<div class="card band ${watching.some((w) => w.overdue && !w.closed) ? "alarm" : ""}"><div class="row"><h2>${icon("shield")} Trips left with you</h2></div>${watching.map((w) => `<div class="run ${w.overdue && !w.closed ? "overdue" : ""}"><span><b>@${esc(w.owner_handle)}</b> · ${esc(w.title)} · back by ${esc(new Date(Number(w.return_by / 1_000_000n)).toLocaleString())}${w.last_check_in ? ` · last check-in ${ago(w.last_check_in)}` : ""}</span><span class="row-actions">${w.closed ? `<span class="pill">back home</span>` : w.overdue ? `<span class="pill bad">overdue: follow their plan</span>` : `<span class="pill ok">on track</span>`}<a class="btn btn-ghost" href="${esc(w.link)}" target="_blank" rel="noopener">${icon("out")}Plan</a></span></div>`).join("")}<p class="small muted">If a trip is overdue, read their plan and follow its "Plan if late" section; call the agency or emergency number it lists.</p></div>` : ""}
+    <div class="card band"><div class="row"><h2>${icon("mountain")} Trips</h2><span class="right-actions"><button type="button" class="btn btn-primary" data-action="trip-new">${icon("plus")}New trip</button></span></div>
+      <p class="small muted">A trip is a folder under <code>Trips/</code> with a plan, a gear list, a food plan, a water ledger, routes from GPX files, a field journal and a review. It all works offline once the notebook has been opened here; changes sync when you are back in range.</p></div>
+    ${trips.map(card).join("") || ""}
+    <div class="grid2">
+      <div class="card band"><div class="row"><h2>${icon("columns")} Gear lists</h2><span class="right-actions">${gear.length > 1 ? `<button type="button" class="btn" data-action="gear-compare">${icon("graph")}Compare</button>` : ""}</span></div>
+        ${gear.length ? `<div class="runs">${gear.map((g) => { const bw = baseWeight(g.content); return `<div class="run"><a href="#" data-action="open" data-path="${esc(g.path)}">${esc(stem(g.path))}</a><span class="small muted">${bw === undefined ? "" : `base ${(bw / 1000).toFixed(2)} kg · ${(bw / 453.6).toFixed(1)} lb`}</span></div>`; }).join("")}</div>` : `<p class="small muted">No gear lists yet; each trip can start one, copied from an earlier list.</p>`}</div>
+      <div class="card band"><div class="row"><h2>${icon("check")} Skills decks</h2></div><p class="small muted">Flashcards for the Study tab's spaced repetition.</p>
+        <div class="row tight wrap">${Object.keys(DECKS).map((k) => { const p = `Skills/${k}.md`; return note(p) ? `<button type="button" class="btn btn-ghost" data-action="open" data-path="${esc(p)}">${icon("check")}${esc(k)}</button>` : `<button type="button" class="btn" data-action="deck-add" data-deck="${esc(k)}">${icon("plus")}${esc(k)}</button>`; }).join("")}</div></div>
+    </div>
+  </div></section>`;
+}
+async function tripNew() {
+  const name = (await ask({ title: "New trip", label: "Name", placeholder: "Lost Coast, May", ok: "Create" }))?.trim().replace(/[\\/:*?"<>|#^[\]]/g, " ");
+  if (!name) return;
+  const f = `Trips/${name}`;
+  if (note(`${f}/Plan.md`)) return toast("A trip with that name exists.", "error");
+  await createQuiet(`${f}/Plan.md`, fillTemplate(TRIP_TEMPLATE, { title: name }));
+  S.tab = "notes";
+  await open(`${f}/Plan.md`);
+}
+async function tripSheet(kind: "gear" | "food" | "water", folder: string) {
+  const path = `${folder}/${kind === "gear" ? "Gear" : kind === "food" ? "Food" : "Water"}.sheet`;
+  let content = kind === "water" ? waterWorkbook() : "";
+  if (kind === "gear") {
+    const others = orgNotes().filter((n) => isSheetPath(n.path) && isGearWorkbook(n.content));
+    const from = others.length ? await ask({ title: "Gear list", label: "Start from", choices: [{ value: "", label: "A fresh list" }, ...others.map((o) => ({ value: o.path, label: `Copy of ${stem(o.path)}` }))], value: others[0].path, ok: "Create" }) : "";
+    if (from === null) return;
+    content = from ? note(from)!.content : gearWorkbook();
+  }
+  if (kind === "food") {
+    const d = fmOf(`${folder}/Plan.md`);
+    const span = d.start && d.end ? Math.max(1, Math.round((new Date(d.end).getTime() - new Date(d.start).getTime()) / 86_400_000) + 1) : 3;
+    const days = await ask({ title: "Food plan", label: "Days", value: String(Math.min(span, 30)), ok: "Next" });
+    if (days === null) return;
+    const target = await ask({ title: "Food plan", label: "Daily target (kcal)", value: "3000", ok: "Create" });
+    if (target === null) return;
+    content = foodWorkbook(Math.max(1, Math.min(30, Number(days) || 3)), Number(target) || 3000);
+  }
+  await createQuiet(path, content);
+  S.tab = "notes";
+  await open(path);
+}
+async function importGpx(folder: string, file: File) {
+  const t = parseGpx(await file.text());
+  if (t.points.length < 2 && !t.waypoints.length) return toast("No track points or waypoints in that file.", "error");
+  const name = (t.name || file.name.replace(/\.gpx$/i, "")).replace(/[\\/:*?"<>|#^[\]]/g, " ").trim() || "Route";
+  let path = `${folder}/${name}.md`;
+  for (let i = 2; note(path); i++) path = `${folder}/${name} ${i}.md`;
+  await createQuiet(path, routeNote(t));
+  S.tab = "notes";
+  await open(path);
+  toast(`Imported ${t.points.length} points and ${t.waypoints.length} waypoints.`, "ok");
+}
+async function fieldNote(folder: string) {
+  toast("Getting your position (works without signal)…", "info");
+  const pos = await new Promise<GeolocationCoordinates | undefined>((res) => {
+    if (!navigator.geolocation) return res(undefined);
+    navigator.geolocation.getCurrentPosition((p) => res(p.coords), () => res(undefined), { enableHighAccuracy: true, timeout: 12_000, maximumAge: 60_000 });
+  });
+  const now = new Date();
+  const stamp = localStamp(now).replace(":", "");
+  let path = `${folder}/Journal/${stamp}.md`;
+  for (let i = 2; note(path); i++) path = `${folder}/Journal/${stamp} ${i}.md`;
+  await createQuiet(path, fieldEntry(now, pos ? { lat: pos.latitude, lon: pos.longitude, alt: pos.altitude } : undefined));
+  S.tab = "notes";
+  await open(path);
+  pane().view = "edit";
+  render();
+  if (!pos) toast("No position this time; the entry is saved without one.", "info");
+}
+async function tripReview(folder: string) {
+  const path = `${folder}/Review.md`;
+  await createQuiet(path, setProperty(fillTemplate(REVIEW_TEMPLATE, { title: `${folder.split("/").pop()} review` }), "trip", `[[${folder}/Plan]]`));
+  S.tab = "notes";
+  await open(path);
+}
+async function applyReview(path: string) {
+  const gear = orgNotes().filter((n) => isSheetPath(n.path) && isGearWorkbook(n.content));
+  if (!gear.length) return toast("Make a gear list first.", "info");
+  const target = await ask({ title: "Apply this review to a gear list", label: "Gear list", choices: gear.map((g) => ({ value: g.path, label: stem(g.path) })), value: gear[gear.length - 1].path, ok: "Apply" });
+  if (!target) return;
+  const r = applyReviewToGear(S.drafts.get(path)?.text ?? note(path)!.content, S.drafts.get(target)?.text ?? note(target)!.content);
+  await writeNote(target, r.json);
+  toast(`Gear list updated: ${r.added} added, ${r.removed} removed.`, "ok");
+}
+/** Make the plan readable by link, then leave it with a community member who is alerted if you miss a check-in or your return. */
+async function tripLeave(path: string) {
+  const d = fmOf(path);
+  const handle = await ask({ title: "Leave this plan with someone", body: "They must be in the community. They get a read-only link to this plan now, and an alert anywhere in Lab if you miss a check-in or are not back by your return time.", label: "Their handle", value: (d.contact ?? "").replace(/^@/, ""), placeholder: "ada", ok: "Next" });
+  if (!handle?.trim()) return;
+  const when = await ask({ title: "Back by", label: "Date and time (YYYY-MM-DD HH:MM)", value: d.return_by || `${new Date(Date.now() + 2 * 86_400_000).toISOString().slice(0, 10)} 18:00`, ok: "Next" });
+  if (!when) return;
+  const at = new Date(when.trim().replace(" ", "T"));
+  if (Number.isNaN(at.getTime()) || at.getTime() < Date.now()) return toast("That return time is not in the future.", "error");
+  const every = await ask({ title: "Check-ins", body: "Leave empty to rely on the return time only.", label: "Check in at least every (hours)", value: "24", ok: "Leave the plan" });
+  if (every === null) return;
+  try {
+    unwrap(await nb().set_share({ path, public: true, public_role: Role.View, viewers: [], commenters: [], editors: [] }));
+    const r = await registry().set_watch(handle.trim(), title(path) === "Plan" ? dir(path).split("/").pop()! : title(path), shareLink(path), BigInt(at.getTime()) * 1_000_000n, every.trim() ? Number(every) : null);
+    if (r.__kind__ === "Err") throw new Error(r.Err);
+    let text = S.drafts.get(path)?.text ?? note(path)!.content;
+    text = setProperty(setProperty(setProperty(text, "watch", String(r.Ok.id)), "contact", `@${r.Ok.contact_handle}`), "return_by", when.trim());
+    await writeNote(path, text);
+    await loadWatches();
+    toast(`@${r.Ok.contact_handle} is watching. Check in from the Trips tab; press Back home when you are out.`, "ok");
+  } catch (e) { toast(errMsg(e), "error"); }
+  render();
+}
+async function loadWatches() {
+  if (!S.identity) return;
+  const [mine, watching] = await Promise.all([registry().my_watches().catch(() => []), registry().watching().catch(() => [])]);
+  S.trips.mine = mine;
+  S.trips.watching = watching;
+  watchBanner();
+}
+/** An overdue trip someone left with you shows on every page until you look at it. */
+function watchBanner() {
+  const late = S.trips.watching.filter((w) => w.overdue && !w.closed && store(`nb-watch-ack-${w.id}`) !== String(Math.floor(Date.now() / 3_600_000)));
+  let el = document.getElementById("watch-alert");
+  if (!late.length) { el?.remove(); return; }
+  if (!el) { el = Object.assign(document.createElement("div"), { id: "watch-alert" }); el.setAttribute("role", "alert"); document.body.append(el); }
+  const w = late[0];
+  el.innerHTML = `${icon("shield")}<span><b>@${esc(w.owner_handle)} is overdue</b> from “${esc(w.title)}”${w.last_check_in ? `; last check-in ${ago(w.last_check_in)}` : ""}. Read their plan and follow its “Plan if late” section.</span><a class="btn" href="${esc(w.link)}" target="_blank" rel="noopener">Open the plan</a><button type="button" class="btn btn-ghost" data-watch-ack="${w.id}">Seen</button>`;
+  el.querySelector("[data-watch-ack]")!.addEventListener("click", () => { store(`nb-watch-ack-${w.id}`, String(Math.floor(Date.now() / 3_600_000))); watchBanner(); });
+  if (document.hidden && "Notification" in window && Notification.permission === "granted" && store(`nb-watch-note-${w.id}`) !== String(Math.floor(Date.now() / 3_600_000))) { store(`nb-watch-note-${w.id}`, String(Math.floor(Date.now() / 3_600_000))); new Notification(`@${w.owner_handle} is overdue`, { body: w.title, tag: `watch-${w.id}` }); }
+}
+setInterval(() => void loadWatches(), 60_000);
+setTimeout(() => void loadWatches(), 3000);
+async function gearCompare() {
+  const gear = orgNotes().filter((n) => isSheetPath(n.path) && isGearWorkbook(n.content));
+  const path = "Trips/Gear comparison.dash";
+  const tiles = gear.map((g) => ({ id: Math.random().toString(36).slice(2, 8), kind: "kpi" as const, source: g.path, sheet: GEAR_BASE_REF.sheet, ref: GEAR_BASE_REF.ref, label: `${stem(g.path)} · base weight (g)` }));
+  const content = `${JSON.stringify({ tiles }, null, 1)}\n`;
+  if (note(path)) await writeNote(path, content); else await createQuiet(path, content);
+  S.tab = "notes";
+  await open(path);
+}
+
 function workTab(): string {
   const today = new Date();
   const notes = workNotes();
@@ -2320,7 +2666,7 @@ function chartDialog(path: string, id?: string) {
 }
 
 // --- dashboards: `.dash` notes that mash up charts, cell values and Jupyter outputs from other notes
-type Tile = { id: string; kind: "chart" | "kpi" | "cell"; source: string; sheet?: string; chart?: string; ref?: string; cell?: string; label?: string; w?: 1 | 2 };
+type Tile = { id: string; kind: "chart" | "kpi" | "cell" | "search"; source: string; q?: string; sheet?: string; chart?: string; ref?: string; cell?: string; label?: string; w?: 1 | 2 };
 type Dash = { tiles: Tile[] };
 const isDashPath = (p: string) => p.toLowerCase().endsWith(".dash");
 const NEW_DASH = `{\n "tiles": []\n}\n`;
@@ -2328,6 +2674,11 @@ const parseDash = (json: string): Dash => { try { const d = JSON.parse(json) as 
 const dashOf = (path: string) => parseDash(draftOf(path).text);
 const noteText = (path: string): string | undefined => S.drafts.get(path)?.text ?? note(path)?.content;
 function tileHtml(path: string, t: Tile): string {
+  if (t.kind === "search") {
+    const hits = runQuery(orgNotes(), t.q ?? "");
+    const tools = S.mobile ? "" : `<span class="tile-tools"><button type="button" class="btn btn-ghost icon-btn" data-action="dash-width" data-path="${esc(path)}" data-id="${esc(t.id)}" aria-label="Toggle width">${icon("columns")}</button><button type="button" class="btn btn-ghost icon-btn" data-action="dash-del" data-path="${esc(path)}" data-id="${esc(t.id)}" aria-label="Remove tile">${icon("x")}</button></span>`;
+    return `<section class="tile ${t.w === 2 ? "w2" : ""}" data-tile="${esc(t.id)}"><header class="tile-head"><b>${esc(t.label ?? t.q ?? "Search")}</b><a href="#" class="tile-src" data-action="org-open-q" data-q="${esc(t.q ?? "")}" title="Open in Organize">${icon("search")}${hits.length}</a>${tools}</header><div class="tile-body">${hits.length ? `<div class="runs">${hits.slice(0, 10).map((n) => `<div class="run"><a href="#" data-action="open" data-path="${esc(n.path)}">${esc(base(n.path))}</a><span class="small faint">${esc(dir(n.path))}</span></div>`).join("")}</div>${hits.length > 10 ? `<p class="small muted">and ${hits.length - 10} more</p>` : ""}` : `<div class="empty-side">No notes match.</div>`}</div></section>`;
+  }
   const src = noteText(t.source);
   const link = `<a href="#" class="tile-src" data-action="open" data-path="${esc(t.source)}" title="Open ${esc(t.source)}">${icon("out")}${esc(stem(t.source))}</a>`;
   const tools = S.mobile ? "" : `<span class="tile-tools"><button type="button" class="btn btn-ghost icon-btn" data-action="dash-move" data-path="${esc(path)}" data-id="${esc(t.id)}" data-d="-1" title="Move earlier" aria-label="Move earlier">${icon("chevron")}</button><button type="button" class="btn btn-ghost icon-btn flip" data-action="dash-move" data-path="${esc(path)}" data-id="${esc(t.id)}" data-d="1" title="Move later" aria-label="Move later">${icon("chevron")}</button><button type="button" class="btn btn-ghost icon-btn" data-action="dash-width" data-path="${esc(path)}" data-id="${esc(t.id)}" title="${t.w === 2 ? "Half width" : "Full width"}" aria-label="Toggle width">${icon("columns")}</button><button type="button" class="btn btn-ghost icon-btn" data-action="dash-del" data-path="${esc(path)}" data-id="${esc(t.id)}" title="Remove tile" aria-label="Remove tile">${icon("x")}</button></span>`;
@@ -2677,6 +3028,8 @@ function workspace(): string {
   if (S.tab === "graph") return shell(graphTab());
   if (S.tab === "study") return shell(studyTab());
   if (S.tab === "work") return shell(workTab());
+  if (S.tab === "organize") return shell(organizeTab());
+  if (S.tab === "trips") return shell(tripsTab());
   if (S.tab === "chat") return shell(`<div class="workspace m-${S.mobilePane} ${S.sideOpen ? "" : "no-side"} ${S.asideOpen ? "" : "no-aside"}"><nav id="side" class="side" aria-label="Files">${side()}</nav>${chatHtml()}<aside id="aside" class="aside" aria-label="Sources">${chatAside()}</aside></div>`);
   return shell(`<div class="workspace m-${S.mobilePane} ${S.sideOpen ? "" : "no-side"} ${S.asideOpen ? "" : "no-aside"}"><nav id="side" class="side" aria-label="Files">${side()}</nav>${panesHtml()}<aside id="aside" class="aside" aria-label="Links">${aside()}</aside></div>`);
 }
@@ -2890,6 +3243,7 @@ async function loadNotebooks() {
     registry().price().then((p) => { S.price = p; }).catch(() => {});
     registry().tokens().then((t) => { S.tokens = t; }).catch(() => {});
     S.notebooks = await registry().my_notebooks();
+    void cacheSet("nb:list", S.notebooks);
     S.error = "";
     render();
     await Promise.all(S.notebooks.map(async (v) => {
@@ -2901,8 +3255,8 @@ async function loadNotebooks() {
     }));
     void loadActivity();
   } catch (e) {
-    S.error = errMsg(e);
-    S.notebooks = [];
+    const cached = await cacheGet<NotebookRec[]>("nb:list");
+    if (cached?.length) { S.notebooks = cached; S.offline = true; } else { S.error = errMsg(e); S.notebooks = []; }
   }
   render();
 }
@@ -2958,10 +3312,10 @@ async function loadNotebook() {
   S.comments = cm.__kind__ === "Ok" ? cm.Ok : [];
   S.published = pub ?? null;
   S.fromCache = false;
-  void cacheSet(`nb:${S.notebook!.canister.toText()}`, { notes: S.notes, folders: S.folders, settings: S.settings, at: Date.now() });
   S.notes = notes.sort((x, y) => x.path.localeCompare(y.path));
   attachments.clear();
   S.folders = unwrap(folders);
+  void cacheSet(`nb:${S.notebook!.canister.toText()}`, { notes: S.notes, folders: S.folders, settings: S.settings, at: Date.now() });
   S.info = info;
   S.topups = topups;
   for (const [p, d] of S.drafts) if (!d.dirty) S.drafts.delete(p);
@@ -2994,6 +3348,7 @@ async function openNotebook(id: string, path?: string) {
   try {
     await loadNotebook();
     restoreTabs();
+    void sweepBoards();
     void loadHealth(id).then((h) => { if (urgent(h) && S.notebook?.canister.toText() === id) { render(); freezeModal(id, h!); } });
   } catch (e) {
     const h = await loadHealth(id);
@@ -3195,10 +3550,11 @@ async function save(path: string) {
     if (d.text === content) d.dirty = false;
     reindex();
     renderSide();
+    if (!d.dirty) void runRules(path);
     void cacheSet(`nb:${S.notebook.canister.toText()}`, { notes: S.notes, folders: S.folders, settings: S.settings, at: Date.now() });
   } catch (e) {
     if (errMsg(e) === "offline" || !navigator.onLine) {
-      await queueWrite({ canister: S.notebook.canister.toText(), path, content, at: Date.now() });
+      await queueWrite({ canister: S.notebook.canister.toText(), path, content, at: Date.now(), base: String(note(path)?.modified ?? 0n) });
       const n = note(path);
       if (n) n.content = content;
       if (d.text === content) d.dirty = false;
@@ -3211,15 +3567,74 @@ async function save(path: string) {
   if (d.dirty) scheduleSave(path);
 }
 
+function conflictDialog() {
+  document.querySelector(".scrim.conflicts")?.remove();
+  const c = S.conflicts[0];
+  if (!c) return;
+  const scrim = document.createElement("div");
+  scrim.className = "scrim conflicts";
+  scrim.innerHTML = `<div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="cf-t"><h2 id="cf-t">${icon("split")} ${esc(c.path)}</h2><p class="muted small">You changed this note offline, and it was also changed elsewhere${S.conflicts.length > 1 ? ` (1 of ${S.conflicts.length})` : ""}.</p>
+    <div class="grid2 conflict"><div><div class="band-title">Yours (offline)</div><pre>${esc(c.mine)}</pre></div><div><div class="band-title">Theirs (now on the canister)</div><pre>${esc(c.theirs)}</pre></div></div>
+    <div class="actions"><button type="button" class="btn" data-action="conflict-theirs" data-i="0">Keep theirs</button><button type="button" class="btn" data-action="conflict-both" data-i="0">Keep both</button><button type="button" class="btn btn-primary" data-action="conflict-mine" data-i="0">Keep mine</button></div></div>`;
+  scrim.addEventListener("click", (e) => { if (e.target === scrim) scrim.remove(); });
+  document.body.append(scrim);
+}
+async function resolveConflict(i: number, choice: "mine" | "theirs" | "both") {
+  const c = S.conflicts[i];
+  if (!c) return;
+  try {
+    const api = notebookOf(c.canister);
+    if (choice === "mine") unwrap(await api.write(c.path, c.mine));
+    if (choice === "both") { const copy = `${stem(c.path)} (offline copy)${c.path.endsWith(".md") ? ".md" : c.path.slice(c.path.lastIndexOf("."))}`; unwrap(await api.write(copy, c.mine)); }
+    S.conflicts.splice(i, 1);
+    await cacheSet("conflicts", S.conflicts);
+    if (S.notebook?.canister.toText() === c.canister) await loadNotebook();
+  } catch (e) { return toast(errMsg(e), "error"); }
+  document.querySelector(".scrim.conflicts")?.remove();
+  render();
+  if (S.conflicts.length) conflictDialog(); else toast("All versions sorted.", "ok");
+}
+/** Keep every notebook on this device for offline use: notes, folders and settings in IndexedDB. */
+async function keepOffline() {
+  const list = S.notebooks ?? [];
+  let n = 0;
+  for (const v of list) {
+    const id = v.canister.toText();
+    try {
+      const a = notebookOf(id);
+      const notes: Note[] = [];
+      let after: string | null = null;
+      do { const page: { notes: Note[]; next?: string | null } = unwrap(await a.read_page(after, 300)); notes.push(...page.notes); after = page.next ?? null; } while (after);
+      const [folders, settings] = await Promise.all([a.folders(), a.get_settings()]);
+      let st: Partial<Settings> = {};
+      try { st = settings.__kind__ === "Ok" && settings.Ok ? JSON.parse(settings.Ok) : {}; } catch { /* defaults */ }
+      await cacheSet(`nb:${id}`, { notes, folders: unwrap(folders), settings: parseSettings(st), at: Date.now() });
+      n++;
+    } catch { /* frozen or unreachable: skip */ }
+  }
+  await cacheSet("nb:list", list);
+  store("nb-offline-at", String(Date.now()));
+  toast(`${n} notebook${n === 1 ? " is" : "s are"} on this device for offline use.`, "ok");
+  render();
+}
 /** Replay writes made offline, then reload the notebook. */
 async function syncQueue() {
   const all = await queued();
   if (!all.length || !S.identity) return;
   let ok = 0;
   const left: Queued[] = [];
+  S.conflicts = (await cacheGet<typeof S.conflicts>("conflicts")) ?? [];
+  let clash = 0;
   for (const q of all) {
     try {
-      const r = await notebookOf(q.canister).write(q.path, q.content);
+      const api = notebookOf(q.canister);
+      if (q.base !== undefined) {
+        const rr = await api.read(q.path);
+        const theirs = rr.__kind__ === "Ok" ? rr.Ok : undefined;
+        // changed on the server since this device went offline: keep both, let the person choose
+        if (theirs && theirs.modified > BigInt(q.base) && theirs.content !== q.content) { S.conflicts.push({ canister: q.canister, path: q.path, mine: q.content, theirs: theirs.content }); clash++; continue; }
+      }
+      const r = await api.write(q.path, q.content);
       if (r.__kind__ === "Err") throw new Error(describe(r.Err));
       ok++;
     } catch {
@@ -3228,8 +3643,10 @@ async function syncQueue() {
   }
   await clearQueue();
   for (const q of left) await queueWrite(q);
+  await cacheSet("conflicts", S.conflicts);
   S.pendingWrites = left.length;
   if (ok) toast(`Synced ${ok} offline change${ok === 1 ? "" : "s"}.`, "ok");
+  if (clash) toast(`${clash} note${clash === 1 ? " was" : "s were"} also changed elsewhere; choose which version to keep.`, "info");
   if (S.notebook && !left.length) {
     try {
       await loadNotebook();
@@ -3283,7 +3700,17 @@ async function newNote(name?: string, folder?: string, paneId?: number, content 
   if (isAgentPath(where)) where = "";
   const path = name ? (/\.(md|ipynb|canvas|sheet|dash)$/i.test(name) ? name : `${name}.md`) : untitled(paths(), where);
   try {
-    const m = unwrap(await nb().write(path, content));
+    let m: { created: bigint; modified: bigint };
+    try {
+      if (S.offline || S.fromCache) throw new Error("offline");
+      m = unwrap(await nb().write(path, content));
+    } catch (e) {
+      if (!(errMsg(e) === "offline" || !navigator.onLine)) throw e;
+      await queueWrite({ canister: S.notebook!.canister.toText(), path, content, at: Date.now(), base: "0" });
+      m = { created: BigInt(Date.now()) * 1_000_000n, modified: 0n };
+      S.pendingWrites = (await queued()).filter((q) => q.canister === S.notebook!.canister.toText()).length;
+      toast("Created offline; it syncs when you are back in range.", "info");
+    }
     S.notes.push({ path, content, created: m.created, modified: m.modified });
     S.notes.sort((x, y) => x.path.localeCompare(y.path));
     if (dir(path) && !S.folders.includes(dir(path))) S.folders = [...S.folders, dir(path)].sort();
@@ -4520,6 +4947,107 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
       store(`nb-chat-off-${S.notebook!.canister.toText()}`, JSON.stringify([...S.chat.excluded]));
       return render();
     case "chat-save": return saveAnswer(Number(el.dataset.i));
+    // --- Organize
+    case "org-open-q": { S.org.q = el.dataset.q ?? ""; S.org.selected.clear(); S.tab = "organize"; return render(); }
+    case "org-open": { const x = S.settings.searches[Number(el.dataset.i)]; if (!x) return; S.org.q = x.q; S.org.selected.clear(); S.tab = "organize"; return render(); }
+    case "org-load": { const x = S.settings.searches[Number(el.dataset.i)]; if (x) { S.org.q = x.q; S.org.selected.clear(); } return render(); }
+    case "org-del": { S.settings.searches.splice(Number(el.dataset.i), 1); await saveSettings(); return render(); }
+    case "org-save": {
+      const name = await ask({ title: "Save this search", label: "Name", value: S.org.q.slice(0, 40), ok: "Save" });
+      if (!name?.trim()) return;
+      S.settings.searches.push({ name: name.trim(), q: S.org.q.trim() });
+      await saveSettings();
+      toast("Saved; it is in the file pane too.", "ok");
+      return render();
+    }
+    case "org-sort": { const k = el.dataset.key!; S.org.sort = S.org.sort?.key === k ? { key: k, dir: -S.org.sort.dir } : { key: k, dir: 1 }; return render(); }
+    case "org-unselect": { S.org.selected.clear(); return render(); }
+    case "org-bulk": {
+      const key = await ask({ title: `Set a property on ${S.org.selected.size} notes`, label: "Property", placeholder: "status", ok: "Next" });
+      if (!key?.trim()) return;
+      const value = await ask({ title: `${key.trim()} on ${S.org.selected.size} notes`, label: "Value (empty removes it)", value: "", ok: "Apply" });
+      if (value === null) return;
+      for (const p of S.org.selected) await writeNote(p, setProperty(S.drafts.get(p)?.text ?? note(p)?.content ?? "", key.trim(), value));
+      toast(`Updated ${S.org.selected.size} notes.`, "ok");
+      S.org.selected.clear();
+      return render();
+    }
+    case "org-tile": {
+      const dashes = paths().filter(isDashPath);
+      const choice = await ask({ title: "Show this search on a dashboard", label: "Dashboard", choices: [{ value: "", label: "A new dashboard" }, ...dashes.map((d) => ({ value: d, label: stem(d) }))], value: dashes[0] ?? "", ok: "Add" });
+      if (choice === null) return;
+      const path = choice || "Dashboard.dash";
+      if (!note(path)) await createQuiet(path, NEW_DASH);
+      const label = S.settings.searches.find((x) => x.q === S.org.q)?.name ?? S.org.q;
+      updateDash(path, (d) => { d.tiles.push({ id: Math.random().toString(36).slice(2, 8), kind: "search", source: "", q: S.org.q, label }); });
+      void save(path);
+      S.tab = "notes";
+      return open(path);
+    }
+    case "org-archive": { const p = el.dataset.path!; const to = `Archive/${p.split("/").pop()}`; if (note(to)) return toast("Archive already has a note with that name.", "error"); await renamePath(p, to); return render(); }
+    case "triage-toggle": { S.org.triage = !S.org.triage; S.org.triageIdx = 0; return render(); }
+    case "triage-next": { S.org.triageIdx = (S.org.triageIdx + 1) % Math.max(1, inboxNotes().length); return render(); }
+    case "triage-file": {
+      const p = el.dataset.path!;
+      const f = await ask({ title: `File “${title(p)}”`, label: "Folder", choices: S.folders.filter((x) => !isAgentPath(x) && x !== "Inbox").map((x) => ({ value: x, label: x })), value: store("nb-triage-folder") ?? S.folders.find((x) => x !== "Inbox") ?? "", ok: "File it" });
+      if (!f) return;
+      store("nb-triage-folder", f);
+      await renamePath(p, `${f}/${p.split("/").pop()}`);
+      return render();
+    }
+    case "triage-tag": {
+      const p = el.dataset.path!;
+      const t = await ask({ title: `Tag “${title(p)}”`, label: "Tags, comma separated", placeholder: "idea, reading", ok: "Tag it" });
+      if (!t?.trim()) return;
+      const text = S.drafts.get(p)?.text ?? note(p)!.content;
+      const have = (frontmatter(text).data.tags ?? "").replace(/^\[|\]$/g, "").split(/\s*,\s*/).filter(Boolean);
+      const tags = [...new Set([...have, ...t.split(/[\s,]+/).map((x) => x.replace(/^#/, "")).filter(Boolean)])].filter((x) => x !== "inbox");
+      await writeNote(p, setProperty(text.replace(/(^|\s)#inbox\b/g, "$1"), "tags", `[${tags.join(", ")}]`));
+      S.org.triageIdx = (S.org.triageIdx + 1) % Math.max(1, inboxNotes().length);
+      return render();
+    }
+    case "triage-link": {
+      const p = el.dataset.path!;
+      const projs = orgNotes().filter((n) => (frontmatter(n.content).data.type ?? "").toLowerCase() === "project");
+      if (!projs.length) return toast("No notes with type: project yet.", "info");
+      const target = await ask({ title: `Link “${title(p)}” to a project`, label: "Project", choices: projs.map((n) => ({ value: n.path, label: stem(n.path) })), value: projs[0].path, ok: "Link" });
+      if (!target) return;
+      const pt = S.drafts.get(target)?.text ?? note(target)!.content;
+      const line = `- [[${stem(p)}]]`;
+      if (!pt.includes(line)) await writeNote(target, /\n## Notes\s*\n/.test(pt) ? pt.replace(/\n## Notes\s*\n/, `\n## Notes\n\n${line}\n`) : `${pt.trimEnd()}\n${line}\n`);
+      await writeNote(p, setProperty(S.drafts.get(p)?.text ?? note(p)!.content, "project", `[[${stem(target)}]]`));
+      toast(`Linked to ${title(target)}.`, "ok");
+      S.org.triageIdx = (S.org.triageIdx + 1) % Math.max(1, inboxNotes().length);
+      return render();
+    }
+    case "periodic-open": return openPeriodic(el.dataset.kind as Period);
+    case "periodic-rebuild": return openPeriodic(el.dataset.kind as Period, true);
+    case "rule-del": { S.settings.rules = S.settings.rules.filter((r) => r.id !== el.dataset.id); await saveSettings(); return render(); }
+    case "kb-sweep": return sweepBoards(true);
+    case "lint-create": { const t = el.dataset.target!; await createQuiet(t.endsWith(".md") ? t : `${t}.md`, `# ${base(t)}\n`); toast(`Created ${t}.`, "ok"); return render(); }
+    case "lint-index": { const p = el.dataset.path!; const idx = S.drafts.get("index.md")?.text ?? note("index.md")?.content; if (idx === undefined) return toast("There is no index.md.", "error"); await writeNote("index.md", `${idx.trimEnd()}\n- [[${stem(p)}]]\n`); return render(); }
+    case "lint-rename": { const p = el.dataset.path!; const to = await ask({ title: `Rename “${stem(p)}”`, label: "New name (keep the folder or type a path)", value: stem(p), ok: "Rename" }); if (to?.trim() && to.trim() !== stem(p)) await renamePath(p, to.trim()); return render(); }
+    case "lint-rmdir": return deleteFolder(el.dataset.path!);
+    case "lint-pause": { const p = el.dataset.path!; await writeNote(p, setProperty(S.drafts.get(p)?.text ?? note(p)!.content, "status", "paused")); return render(); }
+    case "res-keep": { S.settings.resurface = keepLater(S.settings.resurface, el.dataset.path!); await saveSettings(); return render(); }
+    case "res-pin": { await toggleBookmark(el.dataset.path!); S.settings.resurface = keepLater(S.settings.resurface, el.dataset.path!); await saveSettings(); return render(); }
+    // --- Trips
+    case "trip-new": return tripNew();
+    case "trip-gear": return tripSheet("gear", el.dataset.folder!);
+    case "trip-food": return tripSheet("food", el.dataset.folder!);
+    case "trip-water": return tripSheet("water", el.dataset.folder!);
+    case "field-entry": return fieldNote(el.dataset.folder!);
+    case "trip-review": return tripReview(el.dataset.folder!);
+    case "review-apply": return applyReview(el.dataset.path!);
+    case "trip-print": { const p = el.dataset.path!; S.tab = "notes"; await open(p); const pn = pane(); if (pn.view === "edit") { pn.view = "preview"; render(); } setTimeout(() => window.print(), 400); return; }
+    case "trip-leave": return tripLeave(el.dataset.path!);
+    case "trip-checkin": { const r = await registry().check_in(BigInt(el.dataset.id!), null); if (r.__kind__ === "Err") return toast(r.Err, "error"); await loadWatches(); toast("Checked in. Your contact sees you are OK.", "ok"); return render(); }
+    case "trip-home": { if ((await ask({ title: "Back home?", body: "Your contact stops watching this trip.", ok: "I'm back" })) === null) return; const r = await registry().close_watch(BigInt(el.dataset.id!)); if (r.__kind__ === "Err") return toast(r.Err, "error"); await loadWatches(); toast("Welcome back. Write the review while it is fresh.", "ok"); return render(); }
+    case "gear-compare": return gearCompare();
+    case "deck-add": { const k = el.dataset.deck!; await createQuiet(`Skills/${k}.md`, DECKS[k]); S.tab = "notes"; return open(`Skills/${k}.md`); }
+    case "conflicts-open": return conflictDialog();
+    case "keep-offline": return keepOffline();
+    case "conflict-mine": case "conflict-theirs": case "conflict-both": return resolveConflict(Number(el.dataset.i), action.slice(9) as "mine" | "theirs" | "both");
     case "chat-clear":
       S.chat.messages = [];
       return render();
@@ -5286,6 +5814,13 @@ document.addEventListener("input", (ev) => {
   const v = el.value;
   switch (el.name) {
     case "newNotebook": S.newNotebook = v; break;
+    case "propcell": { const p = el.dataset.path!; void writeNote(p, setProperty(S.drafts.get(p)?.text ?? note(p)?.content ?? "", el.dataset.key!, v)); break; }
+    case "orgpick": { const c = el as HTMLInputElement; if (c.checked) S.org.selected.add(c.value); else S.org.selected.delete(c.value); render(); break; }
+    case "orgall": { const c = el as HTMLInputElement; S.org.selected = c.checked ? new Set(runQuery(orgNotes(), S.org.q).map((n) => n.path)) : new Set(); render(); break; }
+    case "decaydays": { S.settings.decayDays = Math.max(0, Number(v) || 0); void saveSettings(); renderSide(); break; }
+    case "hidefaded": { S.settings.hideFaded = (el as HTMLInputElement).checked; void saveSettings(); renderSide(); break; }
+    case "kbarchive": { S.settings.kanbanArchiveDays = Math.max(0, Number(v) || 0); void saveSettings(); break; }
+    case "gpx": { const inp = el as HTMLInputElement; if (inp.files?.[0]) void importGpx(inp.dataset.folder!, inp.files[0]); inp.value = ""; break; }
     case "newDesc": S.newDesc = v; break;
     case "newAgent": S.newAgent = v; break;
     case "topupAmount": S.topupAmount = v; break;
@@ -5301,7 +5836,7 @@ document.addEventListener("input", (ev) => {
     case "notify": { store("nb-notify", (el as HTMLInputElement).checked ? "1" : "0"); if ((el as HTMLInputElement).checked) { store("nb-mention-seen", store("nb-mention-seen") ?? "0"); void checkMentions(); } renderOnline(); break; }
     case "csv": { const inp = el as HTMLInputElement; if (inp.files?.[0]) void importCsv(inp.dataset.path!, inp.files[0]); inp.value = ""; break; }
     case "kbdone":
-      updateBoard(el.dataset.path!, (b) => { const c = b.lanes[Number(el.dataset.lane)]?.cards[Number(el.dataset.idx)]; if (c) c.done = (el as HTMLInputElement).checked; });
+      updateBoard(el.dataset.path!, (b) => { const c = b.lanes[Number(el.dataset.lane)]?.cards[Number(el.dataset.idx)]; if (!c) return; c.done = (el as HTMLInputElement).checked; c.text = c.text.replace(/\s*✅\s*\d{4}-\d{2}-\d{2}/, "") + (c.done ? ` ✅ ${new Date().toISOString().slice(0, 10)}` : ""); });
       break;
     case "paytoken": S.payToken = v; store("nb-pay-token", v); break;
     case "progress": if (S.shared) { const st = Number(v); S.shared.myProgress = st; void notebookOf(S.shared.canister).set_progress(S.shared.path, st).then(() => toast(st ? "Progress saved for the group." : "Mark cleared.", "ok")); } break;
@@ -5444,6 +5979,12 @@ document.addEventListener("focusin", (ev) => {
 document.addEventListener("keydown", (ev) => {
   const mod = isMac ? ev.metaKey : ev.ctrlKey;
   const t = ev.target as HTMLElement;
+  if (S.tab === "organize" && S.org.triage && !/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) && !t.isContentEditable && !document.querySelector(".scrim") && !mod) {
+    const p = document.querySelector<HTMLElement>(".triage [data-action=triage-file]")?.dataset.path;
+    const key: Record<string, string> = { f: "triage-file", t: "triage-tag", l: "triage-link", a: "org-archive", n: "triage-next", j: "triage-next", o: "open" };
+    const act2 = key[ev.key.toLowerCase()];
+    if (p && act2) { ev.preventDefault(); const i = document.createElement("i"); i.dataset.path = p; return void onAction(act2, i, ev as unknown as MouseEvent); }
+  }
   if (S.show) {
     if (ev.key === "Escape") { ev.preventDefault(); return closeShow(); }
     if (["ArrowRight", "ArrowDown", "PageDown", " ", "Enter"].includes(ev.key)) { ev.preventDefault(); return showStep(1); }
@@ -5556,7 +6097,55 @@ document.addEventListener("submit", (ev) => {
   if (!f.dataset.form) return;
   ev.preventDefault();
   if (S.busy) return;
+  const fv = (n: string) => (f.querySelector<HTMLInputElement>(`[name=${n}]`)?.value ?? "").trim();
   switch (f.dataset.form) {
+    case "org-search": { S.org.q = fv("orgq"); S.org.selected.clear(); return render(); }
+    case "rule-add":
+      return void (async () => {
+        const tag = fv("rtag").replace(/^#/, "");
+        if (!tag) return;
+        S.settings.rules.push({ id: Math.random().toString(36).slice(2, 8), tag, template: fv("rtpl") || undefined, folder: fv("rfolder") || undefined, weekly: f.querySelector<HTMLInputElement>("[name=rweek]")!.checked || undefined });
+        await saveSettings();
+        toast(`Rule added for #${tag}.`, "ok");
+        render();
+      })();
+    case "ref-tag": case "ref-prop":
+      return void (async () => {
+        const from = fv("from").replace(/^#/, ""), to = fv("to").replace(/^#/, "");
+        if (!from || !to) return;
+        let n = 0;
+        for (const x of orgNotes()) { if (!x.path.endsWith(".md")) continue; const next = f.dataset.form === "ref-tag" ? renameTag(x.content, from, to) : renameProperty(x.content, from, to); if (next !== x.content) { await writeNote(x.path, next); n++; } }
+        toast(n ? `Renamed in ${n} note${n === 1 ? "" : "s"}.` : "Nothing used that name.", n ? "ok" : "info");
+        render();
+      })();
+    case "ref-split":
+      return void (async () => {
+        const p = fv("path");
+        const text = S.drafts.get(p)?.text ?? note(p)?.content;
+        if (!text) return;
+        const { intro, parts } = splitAtHeadings(text);
+        if (!parts.length) return toast("That note has no ## headings to split at.", "info");
+        const made: string[] = [];
+        for (const part of parts) { let np = `${dir(p) ? `${dir(p)}/` : ""}${part.title}.md`; for (let i = 2; note(np); i++) np = `${dir(p) ? `${dir(p)}/` : ""}${part.title} ${i}.md`; await createQuiet(np, part.body); made.push(np); }
+        await writeNote(p, `${intro.trimEnd()}\n\n${made.map((m) => `- [[${stem(m)}]]`).join("\n")}\n`);
+        toast(`Split into ${made.length} notes, linked from the original.`, "ok");
+        render();
+      })();
+    case "ref-merge":
+      return void (async () => {
+        const from = fv("from"), into = fv("into");
+        if (!from || !into || from === into) return toast("Pick two different notes.", "error");
+        if ((await ask({ title: `Merge “${stem(from)}” into “${stem(into)}”?`, body: "Its text is appended, links to it are pointed at the note you keep, and it is deleted.", ok: "Merge", danger: true })) === null) return;
+        const a = S.drafts.get(into)?.text ?? note(into)!.content, b = S.drafts.get(from)?.text ?? note(from)!.content;
+        await writeNote(into, `${a.trimEnd()}\n\n## From ${title(from)}\n\n${frontmatter(b).body.replace(/^# .*\n/, "").trim()}\n`);
+        for (const x of orgNotes()) { if (x.path === from || !x.path.endsWith(".md")) continue; const next = retargetLinks(x.content, from, into); if (next !== x.content) await writeNote(x.path, next); }
+        unwrap(await nb().delete_(from));
+        S.notes = S.notes!.filter((n) => n.path !== from);
+        S.drafts.delete(from);
+        reindex();
+        toast(`Merged into ${title(into)}.`, "ok");
+        render();
+      })();
     case "create-notebook":
       return void createNotebook();
     case "chat":

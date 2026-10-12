@@ -27,10 +27,14 @@ export const cacheGet = <T>(key: string) => tx("readonly", (s) => s.get(key)) as
 export const cacheSet = (key: string, value: unknown) => tx("readwrite", (s) => s.put(value, key));
 export const cacheDel = (key: string) => tx("readwrite", (s) => s.delete(key));
 
-export type Queued = { canister: string; path: string; content: string; at: number };
+/** `base` is the server's `modified` when the first offline edit was made ("0" for a note made offline);
+ *  on sync, a server copy newer than that is a conflict instead of being overwritten. */
+export type Queued = { canister: string; path: string; content: string; at: number; base?: string };
 export async function queueWrite(q: Queued) {
-  const all = ((await cacheGet<Queued[]>("queue")) ?? []).filter((x) => !(x.canister === q.canister && x.path === q.path));
-  all.push(q);
+  const prev = ((await cacheGet<Queued[]>("queue")) ?? []);
+  const old = prev.find((x) => x.canister === q.canister && x.path === q.path);
+  const all = prev.filter((x) => x !== old);
+  all.push(old?.base !== undefined ? { ...q, base: old.base } : q);
   await cacheSet("queue", all);
 }
 export const queued = async () => (await cacheGet<Queued[]>("queue")) ?? [];

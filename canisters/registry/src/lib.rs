@@ -1133,6 +1133,122 @@ thread_local! {
     static NEXT_POST: RefCell<ic_stable_structures::StableCell<u64, Mem>> = RefCell::new(ic_stable_structures::StableCell::init(MM.with_borrow(|m| m.get(MemoryId::new(28))), 1));
     /// feature flags: name -> on; unknown names fall back to FLAG_DEFAULTS
     static FLAGS: RefCell<StableBTreeMap<String, u8, Mem>> = RefCell::new(StableBTreeMap::init(MM.with_borrow(|m| m.get(MemoryId::new(29)))));
+    static WATCHES: RefCell<StableBTreeMap<u64, C<Watch>, Mem>> = RefCell::new(StableBTreeMap::init(MM.with_borrow(|m| m.get(MemoryId::new(30)))));
+    static NEXT_WATCH: RefCell<ic_stable_structures::StableCell<u64, Mem>> = RefCell::new(ic_stable_structures::StableCell::init(MM.with_borrow(|m| m.get(MemoryId::new(31))), 1));
+}
+
+// --- trip check-ins: leave a plan with someone; they are alerted when a check-in or the return is missed
+#[derive(CandidType, Deserialize, Clone, Debug)]
+pub struct Watch {
+    pub id: u64,
+    pub owner: Principal,
+    pub owner_handle: String,
+    pub contact: Principal,
+    pub contact_handle: String,
+    pub title: String,
+    /// the read-only share link of the trip plan
+    pub link: String,
+    pub return_by: u64,
+    /// check in at least this often while out (hours); none means only the return time counts
+    pub every_hours: Option<u32>,
+    pub last_check_in: Option<u64>,
+    pub created_at: u64,
+    pub closed: bool,
+    pub overdue: bool,
+}
+const HOUR_NS: u64 = 3_600_000_000_000;
+fn watch_overdue(w: &Watch, now: u64) -> bool {
+    if w.closed {
+        return false;
+    }
+    let since = w.last_check_in.unwrap_or(w.created_at);
+    now > w.return_by || w.every_hours.map(|h| now > since + h as u64 * HOUR_NS).unwrap_or(false)
+}
+fn with_status(mut w: Watch) -> Watch {
+    w.overdue = watch_overdue(&w, time());
+    w
+}
+/// Leave a trip plan with a community member: they see it, and get an alert if you miss a check-in
+/// or are not back by `return_by` (nanoseconds).
+#[update]
+fn set_watch(contact_handle: String, title: String, link: String, return_by: u64, every_hours: Option<u32>) -> Result<Watch, String> {
+    let me = msg_caller();
+    if me == Principal::anonymous() {
+        return Err("sign in first".into());
+    }
+    let title = title.trim().to_string();
+    if title.is_empty() || title.chars().count() > 120 || link.len() > 400 {
+        return Err("title: 1-120 characters, link up to 400".into());
+    }
+    if return_by <= time() || return_by > time() + 120 * 24 * HOUR_NS {
+        return Err("the return time must be in the next 120 days".into());
+    }
+    if every_hours.map(|h| !(1..=168).contains(&h)).unwrap_or(false) {
+        return Err("check in every 1 to 168 hours".into());
+    }
+    let h = contact_handle.trim().trim_start_matches('@').to_string();
+    let contact = MEMBERS.with_borrow(|m| m.iter().find(|e| e.value().0.handle.eq_ignore_ascii_case(&h)).map(|e| (*e.key(), e.value().0.handle.clone()))).ok_or("no community member has that handle; your contact needs to join the community first")?;
+    if contact.0 == me {
+        return Err("pick someone else as your contact".into());
+    }
+    if WATCHES.with_borrow(|x| x.iter().filter(|e| e.value().0.owner == me && !e.value().0.closed).count()) >= 5 {
+        return Err("five open trips already; close one when you are back".into());
+    }
+    let owner_handle = MEMBERS.with_borrow(|m| m.get(&me).map(|c| c.0.handle)).unwrap_or_else(|| me.to_text().chars().take(11).collect());
+    let id = NEXT_WATCH.with_borrow(|n| *n.get());
+    NEXT_WATCH.with_borrow_mut(|n| n.set(id + 1));
+    let w = Watch { id, owner: me, owner_handle, contact: contact.0, contact_handle: contact.1, title, link, return_by, every_hours, last_check_in: None, created_at: time(), closed: false, overdue: false };
+    WATCHES.with_borrow_mut(|x| x.insert(id, C(w.clone())));
+    Ok(w)
+}
+/// "I am OK": resets the check-in clock; a later `return_by` moves the deadline.
+#[update]
+fn check_in(id: u64, return_by: Option<u64>) -> Result<Watch, String> {
+    let me = msg_caller();
+    let mut w = WATCHES.with_borrow(|x| x.get(&id).map(|c| c.0)).ok_or("unknown trip")?;
+    if w.owner != me {
+        return Err("not your trip".into());
+    }
+    if w.closed {
+        return Err("this trip is closed".into());
+    }
+    w.last_check_in = Some(time());
+    if let Some(r) = return_by {
+        if r > time() && r <= time() + 120 * 24 * HOUR_NS {
+            w.return_by = r;
+        }
+    }
+    WATCHES.with_borrow_mut(|x| x.insert(id, C(w.clone())));
+    Ok(with_status(w))
+}
+/// Back home: the contact stops watching.
+#[update]
+fn close_watch(id: u64) -> Result<Watch, String> {
+    let me = msg_caller();
+    let mut w = WATCHES.with_borrow(|x| x.get(&id).map(|c| c.0)).ok_or("unknown trip")?;
+    if w.owner != me && w.contact != me {
+        return Err("not your trip".into());
+    }
+    w.closed = true;
+    w.last_check_in = Some(time());
+    WATCHES.with_borrow_mut(|x| x.insert(id, C(w.clone())));
+    Ok(with_status(w))
+}
+/// My trips, newest first.
+#[query]
+fn my_watches() -> Vec<Watch> {
+    let me = msg_caller();
+    let mut v: Vec<Watch> = WATCHES.with_borrow(|x| x.iter().map(|e| e.value().0).filter(|w| w.owner == me).map(with_status).collect());
+    v.reverse();
+    v
+}
+/// Trips people left with me, open ones first; `overdue` says whether to raise the alarm.
+#[query]
+fn watching() -> Vec<Watch> {
+    let me = msg_caller();
+    let mut v: Vec<Watch> = WATCHES.with_borrow(|x| x.iter().map(|e| e.value().0).filter(|w| w.contact == me && (!w.closed || time() < w.return_by + 7 * 24 * HOUR_NS)).map(with_status).collect());
+    v.sort_by_key(|w| (w.closed, std::cmp::Reverse(w.overdue), w.return_by));
+    v
 }
 /// Every flag the app knows, with its default. The market is off until it has been exercised on mainnet.
 const FLAG_DEFAULTS: &[(&str, bool, &str)] = &[
@@ -2358,3 +2474,20 @@ async fn delete_snapshot(canister: Principal, id: Vec<u8>) -> Result<(), String>
 }
 
 ic_cdk::export_candid!();
+
+#[cfg(test)]
+mod watch_tests {
+    use super::*;
+    fn w(created: u64, every: Option<u32>, last: Option<u64>, ret: u64, closed: bool) -> Watch {
+        Watch { id: 1, owner: Principal::anonymous(), owner_handle: "a".into(), contact: Principal::anonymous(), contact_handle: "b".into(), title: "t".into(), link: "".into(), return_by: ret, every_hours: every, last_check_in: last, created_at: created, closed, overdue: false }
+    }
+    #[test]
+    fn overdue_when_a_check_in_or_the_return_is_missed() {
+        let h = HOUR_NS;
+        assert!(!watch_overdue(&w(0, Some(24), None, 100 * h, false), 10 * h));
+        assert!(watch_overdue(&w(0, Some(24), None, 100 * h, false), 25 * h));
+        assert!(!watch_overdue(&w(0, Some(24), Some(20 * h), 100 * h, false), 30 * h));
+        assert!(watch_overdue(&w(0, None, None, 100 * h, false), 101 * h));
+        assert!(!watch_overdue(&w(0, None, None, 100 * h, true), 500 * h));
+    }
+}

@@ -461,6 +461,16 @@ expect "a stranger cannot delete the post" "not your post" icp canister call reg
 expect "a post can be shared into chat" "📰 Hello board" reg share_post "(\"general\", $PID)"
 expect "the author deletes the post" "Ok" reg delete_post "($PID)"
 expect "its comments went with it" "(vec {})" reg post_comments "($PID)" --query
+echo "== trip check-ins: leave a plan with a community member"
+RET=$(( ($(date +%s) + 2 * 86400) * 1000000000 ))
+expect "the contact must be a member" "no community member" reg set_watch "(\"nobody-zz9\", \"Lost Coast\", \"https://x/plan\", $RET : nat64, opt 24)"
+expect "the return must be in the future" "next 120 days" reg set_watch "(\"other$SUF\", \"Lost Coast\", \"https://x/plan\", 1 : nat64, null)"
+expect "a plan is left with a contact" 'contact_handle = "other' reg set_watch "(\"other$SUF\", \"Lost Coast\", \"https://x/plan\", $RET : nat64, opt 24)"
+WID=$(reg my_watches '()' --query | grep -o 'id = [0-9_]*' | head -1 | tr -dc '0-9')
+expect "the contact sees it, not overdue" "overdue = false" icp canister call registry watching '()' --query --identity "$OTHER"
+expect "someone else cannot check in" "not your trip" icp canister call registry check_in "($WID, null)" --identity "$OWNER2"
+expect "the owner checks in" "last_check_in = opt" reg check_in "($WID, null)"
+expect "back home closes it" "closed = true" reg close_watch "($WID)"
 expect "a reply must point into the channel" "reply target" reg post '("general", "x", opt 999999)'
 expect "a reply works" "reply_to = opt" icp canister call registry post "(\"general\", \"welcome\", opt $MID)" --identity "$OTHER"
 expect "an unknown channel is refused" "unknown channel" reg post '("nope", "x", null)'
