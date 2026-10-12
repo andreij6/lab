@@ -622,3 +622,7 @@ details.lint { margin: 6px 0; } details.lint summary { cursor: pointer; padding:
 pre[data-tools] { position: relative; } .code-tools { position: absolute; top: 4px; right: 4px; display: flex; gap: 2px; opacity: 0; transition: opacity .15s; } pre[data-tools]:hover .code-tools, pre[data-tools]:focus-within .code-tools { opacity: 1; } .code-tools .btn { padding: 2px 8px; font-size: .75rem; background: var(--bg-2); } .run-out { margin: -6px 0 12px; }
 @media (hover: none) { .code-tools { opacity: 1; } }
 @media (max-width: 760px) { .chat-head > .small.muted { display: none; } .chat-head b { white-space: nowrap; } .chat-head .segmented { flex-wrap: nowrap; margin: 0; } }
+/* Flutter-style corner banner; clicks pass through to whatever sits under it, dialogs sit above it */
+.alpha-ribbon { position: fixed; top: 13px; right: -27px; z-index: 50; width: 100px; transform: rotate(45deg); background: color-mix(in srgb, var(--accent) 88%, transparent); color: var(--accent-fg); font: 700 9.5px/15px var(--sans); letter-spacing: .12em; text-transform: uppercase; text-align: center; box-shadow: 0 1px 4px rgba(0,0,0,.3); pointer-events: none; user-select: none; }
+body .wsbar, body .topbar { padding-right: 50px; } /* keep the corner clear for the ribbon */
+@media print { .alpha-ribbon { display: none; } }
