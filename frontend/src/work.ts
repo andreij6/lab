@@ -27,6 +27,27 @@ export function parseTasks(notes: NoteLike[]): Task[] {
   }
   return out;
 }
+/** `date` moved on by a period like "month", "3 months", "2 weeks", "1 year" or "90 days". */
+export function addPeriod(date: string, every: string): string {
+  const m = /^\s*(\d+)?\s*(day|week|month|quarter|year)s?\s*$/i.exec(every.replace(/^every\s+/i, ""));
+  const n = Number(m?.[1] ?? 1), unit = (m?.[2] ?? "month").toLowerCase();
+  const d = new Date(`${date}T00:00:00Z`);
+  if (unit === "day") d.setUTCDate(d.getUTCDate() + n);
+  else if (unit === "week") d.setUTCDate(d.getUTCDate() + 7 * n);
+  else {
+    // months clamp to the month's last day (Jan 31 + 1 month is Feb 28)
+    const months = unit === "year" ? 12 * n : unit === "quarter" ? 3 * n : n, day = d.getUTCDate();
+    d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() + months);
+    d.setUTCDate(Math.min(day, new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate()));
+  }
+  return d.toISOString().slice(0, 10);
+}
+/** Give the first open task (starting with `label`, when given) a new 📅 date, so a recurring
+ *  reminder in Work moves on instead of piling up. Adds the task at the end when there is none. */
+export function setDue(content: string, date: string, label = ""): string {
+  const re = new RegExp(`^(\\s*[-*+]\\s+\\[ \\]\\s+${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}.*?)(?:[ \\t]*📅[ \\t]*\\d{4}-\\d{2}-\\d{2})?[ \\t]*$`, "m");
+  return re.test(content) ? content.replace(re, `$1 📅 ${date}`) : `${content.trimEnd()}\n\n- [ ] ${label || "Due"} 📅 ${date}\n`;
+}
 export const isOverdue = (t: Task, today: Date): boolean => !t.done && !!t.due && t.due < dayKey(today);
 /** Open tasks: overdue first, then by date, then priority. */
 export function sortTasks(ts: Task[], today: Date): Task[] {

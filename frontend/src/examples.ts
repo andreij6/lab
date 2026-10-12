@@ -3,6 +3,10 @@
 // (Career/, Trips/, Sources/, ...). Pure: the app writes whatever this returns that is not there yet.
 import { APPLICATIONS_BOARD, EXPERIENCE_TEMPLATE, PERSON_TEMPLATE, RESUME_TEMPLATE, STORIES_DECK, addApplication, addDays, applicationCard, storyCard } from "./career.ts";
 import { THESIS_TEMPLATE, TRADE_TEMPLATE, closeTrade } from "./crypto.ts";
+import { NET_WORTH_NOTE, SUBSCRIPTION_TEMPLATE, budgetWorkbook } from "./money.ts";
+import { CALENDAR_BOARD, POST_TEMPLATE, placeCard } from "./creator.ts";
+import { WORKOUT_TEMPLATE } from "./fitness.ts";
+import { ITEM_TEMPLATE, UPKEEP_TEMPLATE } from "./home.ts";
 import { NEW_DRAWING } from "./excalidraw.ts";
 import { NEW_IPYNB } from "./ipynb.ts";
 import { parseBibtex, sourceNote, careWorkbook, adrTemplate, RUNBOOK_TEMPLATE } from "./kits.ts";
@@ -18,7 +22,7 @@ const how = (text: string) => `> [!tip] How to make one\n> ${text.replace(/\n/g,
 const fill = (t: string, title: string, date: string) => t.replace(/\{\{title\}\}/g, title).replace(/\{\{date\}\}/g, date);
 
 /** The examples for a set of tools (the ids from onboarding: chat, graph, study, work, organize,
- *  research, writing, care, software, career, crypto, trips). Everyone gets the core note types. */
+ *  research, writing, care, software, career, crypto, money, creator, fitness, home, trips). Everyone gets the core note types. */
 export function examples(tools: Set<string>, today: string): ExampleFile[] {
   const out: ExampleFile[] = [];
   const add = (path: string, content: string) => out.push([path, content]);
@@ -99,6 +103,27 @@ export function examples(tools: Set<string>, today: string): ExampleFile[] {
     add(`Crypto/Trades/${addDays(today, -7)} BTC long.md`, tradeHow(closeTrade(TRADE_TEMPLATE({ asset: "BTC", side: "long", size: 0.01, entry: 90000, stop: 87000, opened: addDays(today, -7), thesis }, "An example trade, closed with a profit."), 93000, addDays(today, -2), "Took profit at the target.")));
     add(`Crypto/Trades/${today} ETH long.md`, tradeHow(TRADE_TEMPLATE({ asset: "ETH", side: "long", size: 0.5, entry: 3500, stop: 3300, target: 4000, opened: today }, "An example open trade. Crypto → Close records the exit and the profit or loss.")));
     add("Crypto/Watchlist.md", `# Watchlist\n\n${how("A `prices` code block shows live prices in any note, from ICP's exchange rate canister.")}\`\`\`prices\nBTC ETH SOL HYPE\n\`\`\`\n`);
+  }
+  // a note's first heading gets the how-to box under it
+  const withHow = (c: string, text: string) => c.replace(/^(# .+\n)/m, `$1\n${how(text)}`);
+  if (has("money")) {
+    add("Money/Budget.sheet", budgetWorkbook());
+    add("Money/Net worth.md", withHow(NET_WORTH_NOTE, "Money → Net worth. Edit the table; Record today adds the total to the history below, and the tab draws it."));
+    add("Money/Subscriptions/Example streaming.md", withHow(SUBSCRIPTION_TEMPLATE(15.99, "month", addDays(today, 5), "Example streaming"), "Money → + Subscription. On the renewal date a keep-or-cancel reminder shows in Work; Renewed moves it to the next one."));
+  }
+  if (has("creator")) {
+    add("Creator/Calendar.md", placeCard(placeCard(CALENDAR_BOARD, "An idea for a post", "Ideas", undefined, "An idea for a post"), "Example thread", "Drafting"));
+    add("Creator/Posts/Example thread.md", withHow(POST_TEMPLATE("Example thread", "The first post of a thread: the hook.\n\n---\n\nA line with only three dashes starts the next post. A post that runs past 280 characters is split at its sentences for you, and each one gets a 2/3 counter.\n\n---\n\nThe last post: what you want people to do."), "Creator → + Post. Everything above the first ## heading is posted; Copy shows each post of the thread with its own copy button."));
+  }
+  if (has("fitness")) {
+    const wo = (d: string, kind: string, sets: string, min?: number) => withHow(WORKOUT_TEMPLATE(d, kind, sets, min), "Fitness → Log a workout. Sets are `- Lift: 100 x 5, 105 x 3` or `- Lift: 3x5 @ 100`; bodyweight is `@ bw`. A best-ever set is a personal record.");
+    add(`Fitness/Workouts/${addDays(today, -4)} strength.md`, wo(addDays(today, -4), "strength", "- Squat: 3x5 @ 60\n- Push-up: 3x10 @ bw", 40));
+    add(`Fitness/Workouts/${addDays(today, -2)} run.md`, wo(addDays(today, -2), "run", "", 30).replace("type: workout", "type: workout\ndistance_km: 5"));
+    add(`Fitness/Workouts/${today} strength.md`, wo(today, "strength", "- Squat: 62.5 x 5, 62.5 x 5, 65 x 3\n- Push-up: 3x12 @ bw", 45));
+  }
+  if (has("home")) {
+    add("Home/Upkeep/Test the smoke alarms.md", withHow(UPKEEP_TEMPLATE("Test the smoke alarms", "6 months", addDays(today, 3), "Press each alarm's test button. Replace the batteries once a year."), "Home → + Job. Done records the day and moves the task in Work to the next time."));
+    add("Home/Items/Fridge.md", withHow(ITEM_TEMPLATE({ name: "Fridge", room: "Kitchen", brand: "Example brand", value: 900, bought: addDays(today, -300), warrantyUntil: addDays(today, 65) }), "Home → + Item. Room, value and warranty feed the inventory; a link to the PDF manual inside ![[ ]] shows the manual here."));
   }
   return out;
 }

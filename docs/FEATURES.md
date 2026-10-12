@@ -204,6 +204,40 @@ For people who hold or trade BTC, ETH, SOL, HYPE and the rest; turn it on in Man
 - **Theses.** `type: crypto-thesis` notes (not `type: thesis`, which is Research's): what you believe, `Claim::` reasons that Research checks for sources, what would prove you wrong, and the price on the day it was written; the tab shows how far it has moved. Each has a review task that shows in Work; Still holds records the price and schedules the next review in 30 days, Broke marks it `status: broken`.
 - **#crypto.** A community channel for theses and trade reviews; Get feedback shares a thesis snapshot with its prices there.
 
+## Money
+
+Turn it on in Manage → Notebook → Features, or pick the Trader or Household preset.
+
+- **Budget.** `Money/Budget.sheet`: planned and spent per category, what is left, and a Total row the tab reads, with a progress bar. New month saves a copy to `Money/Budgets/` and clears the spending.
+- **Subscriptions.** One `type: subscription` note each with cost, how often it renews and the next date; the tab adds them up per month and per year. A keep-or-cancel task shows in Work on the renewal date; Renewed moves the date and the task one period on, Cancelled closes both.
+- **Net worth.** `Money/Net worth.md` is a table of accounts: dollars, debts as negatives, or coin amounts like `0.05 BTC` priced live through the Crypto kit's prices. Record today adds the total to its `## History`, which the tab draws as a line.
+
+## Creator
+
+Turn it on in Features, or pick the Creator preset.
+
+- **Calendar.** `Creator/Calendar.md` is a Kanban board with Ideas, Drafting, Scheduled and Posted lanes. Scheduling gives a card a 📅 date, so it shows in Work.
+- **Drafts and threads.** A `type: post` note: everything above the first `##` heading is posted. A line with only `---` starts the next post; anything longer than 280 characters is split at sentences, then words, and numbered 1/3, 2/3, 3/3. Copy shows each post with its own copy button and count. Characters are counted as code points; X counts links as 23 and some emoji as 2.
+- **Results.** Log impressions, likes, reposts and replies once a post is out; the tab shows reach, the average engagement rate and the best post.
+- **#creators.** A community channel for drafts and what worked; Feedback shares a draft's thread there.
+
+## Fitness
+
+Turn it on in Features, or pick the Athlete preset.
+
+- **Workouts.** One `type: workout` note each, with date, kind, minutes and `distance_km`. Sets are lines like `- Squat: 100 x 5, 105 x 3` (each a set) or `- Squat: 3x5 @ 100`; bodyweight is `@ bw`.
+- **Records and progress.** The best set per lift by estimated one-rep max (Epley), a PR badge on the workout that set it, and a line per lift over time.
+- **Weekly totals.** Sessions, kilometres and weight lifted per week, with a bar for each of the last eight.
+- **Runs from GPX.** Import a GPX file and the workout carries the route map from the Trips kit; its length is the distance, and minutes give the pace.
+
+## Home
+
+Turn it on in Features, or pick the Household preset.
+
+- **Upkeep.** One `type: upkeep` note per job that comes back (every 3 months, 6 months, a year, ...) with how to do it. Its task shows in Work; Done records the day and moves the task to the next date. Add common jobs starts with smoke alarms, the furnace filter, gutters, the water heater and fridge coils.
+- **Things in the house.** `type: item` notes with room, brand, model, bought, value and warranty end. The tab shows the inventory by room with values, for insurance, and warranties ending within 60 days; a task a month before the end shows in Work.
+- **Manuals.** A PDF link inside `![[ ]]` in an item note shows the manual right there, fetched by the notebook.
+
 ## Documents from the web
 
 - **PDF embeds.** `![[https://….pdf]]` or `![title](https://….pdf)` (arXiv `/pdf/` links too) shows the pages in the note. The browser fetches it when the site allows; otherwise the notebook does, over HTTPS, following up to three redirects, up to 1.9 MB, for about 0.02 TC of its cycles on mainnet (outcalls are priced by the 1.9 MB response cap, not the file size). Fetched PDFs stay on this device, so they open instantly and offline afterwards. The first three pages show; Show all draws the rest.

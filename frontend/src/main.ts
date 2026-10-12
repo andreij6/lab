@@ -24,6 +24,10 @@ import { countByDay, dayKey, gridWeeks, level, streak } from "./activity";
 import { examples } from "./examples";
 import { minDepositE8s } from "./pricing";
 import { APPLICATIONS_BOARD, EXPERIENCE_TEMPLATE, PERSON_TEMPLATE, RESUME_TEMPLATE, STAGES, STORIES_DECK, addApplication, addDays, applicationCard, applications, compileResume, contacts, experience, isExperience, markContacted, parseStar, searchStats, storyCard, updateApplication, waiting } from "./career";
+import { NET_WORTH_NOTE, SUBSCRIPTION_TEMPLATE, budgetTotals, budgetWorkbook, cancelSubscription, holdings, netWorth, netWorthHistory, recordNetWorth, renewSubscription, subscriptionTotals, subscriptions } from "./money";
+import { CALENDAR_BOARD, LANES, LIMIT, POST_TEMPLATE, calendar, logResults, placeCard, post, posts, results } from "./creator";
+import { WORKOUT_TEMPLATE, newRecords, pace, progress, records, weekly, workouts } from "./fitness";
+import { ITEM_TEMPLATE, UPKEEP_TEMPLATE, doneUpkeep, inventory, items, upkeep, warrantiesEnding } from "./home";
 import { DEFAULT_WATCH, MAX_WATCH, THESIS_TEMPLATE, TRADE_TEMPLATE, closeTrade, isOpen, isThesis, isTrade, journalStats, pnl, reviewThesis, rMultiple, symbolOf, theses, trade, tradePath, usd, watchSymbols, type Side, type Trade } from "./crypto";
 import { cardKey, isDue, review as srsReview, type Rating, type Sched } from "./srs";
 import { align, isLeanNote, leanCode, parseLean, statementCard, unmentionedHyps } from "./lean";
@@ -33,10 +37,10 @@ import { isSlides, splitSlides, SLIDES_TEMPLATE } from "./slides";
 import { QUERY_METHODS } from "./queries";
 import { ADR_STATUSES, CITE_KEY, RUNBOOK_TEMPLATE, adrTemplate, careQuestions, careSummary, careWorkbook, changelog, citeIn, citedKeys, claims, compileThesis, continuity, fromCrossref, manuscript, nextAdr, parseBibtex, sourceFromNote, sourceNote, timeline, type Source, type Style } from "./kits";
 import { applyRule, isFaded, keepLater, lint, ms as nsToMs, nextToResurface, periodPath, periodRollup, propertyColumns, renameProperty, renameTag, retarget as retargetLinks, runQuery, setProperty, splitAtHeadings, type Issue, type OrgNote, type Period, type PropColumn, type Resurface, type Rule } from "./organize";
-import { DECKS, GEAR_BASE_REF, localStamp, REVIEW_TEMPLATE, TRIP_TEMPLATE, applyReviewToGear, baseWeight, fieldEntry, foodWorkbook, gearWorkbook, isGearWorkbook, parseGpx, routeNote, waterWorkbook } from "./outdoor";
+import { DECKS, GEAR_BASE_REF, localStamp, REVIEW_TEMPLATE, TRIP_TEMPLATE, applyReviewToGear, baseWeight, fieldEntry, foodWorkbook, gearWorkbook, isGearWorkbook, parseGpx, routeNote, trackBlock, waterWorkbook } from "./outdoor";
 import { NEW_WORKBOOK, PALETTES, addChart, chartSvg, colName, evaluate, fmt, isSheetPath, newSheet, parseCsv, parseRef, parseWorkbook, serializeWorkbook, sheetCsv, toCsv, type Chart, type ChartType, type Workbook } from "./sheet";
 import DOMPurify from "dompurify";
-import { MEETING_TEMPLATE, actionCards, decisions, isMeeting, isOverdue, markdownToDocx, meetingSummary, parseIcs, parseMeeting, parseTasks, people, reminders, setCell, sortTable, sortTasks, toggleTaskLine, tsvToTable, weeklyReview } from "./work";
+import { MEETING_TEMPLATE, actionCards, decisions, isMeeting, isOverdue, markdownToDocx, meetingSummary, parseIcs, parseMeeting, parseTasks, people, addPeriod, reminders, setCell, sortTable, sortTasks, toggleTaskLine, tsvToTable, weeklyReview } from "./work";
 import { ankiTsv, cardsFromNote, cite, explain, glossary, goalProgress, questionsFor, sources, summarise } from "./study";
 import { isAttachment, renderDiagrams, renderMarkdown } from "./markdown";
 import { section, backlinkContext, base, buildIndex, dir, frontmatter, fuzzy, graphData, headings, resolve, search, setFrontmatter, stem, tree, untitled, type Folder, type Index } from "./notes";
@@ -169,7 +173,7 @@ const nb = (): NotebookApi => notebookOf(S.notebook!.canister.toText());
 
 // ---------- state ----------
 
-type Tab = "notes" | "chat" | "graph" | "manage" | "study" | "work" | "organize" | "trips" | "research" | "writing" | "care" | "software" | "career" | "crypto";
+type Tab = "notes" | "chat" | "graph" | "manage" | "study" | "work" | "organize" | "trips" | "research" | "writing" | "care" | "software" | "career" | "crypto" | "money" | "creator" | "fitness" | "home";
 type Settings = { bookmarks: string[]; srs: Record<string, Record<string, Sched>>; deckStats: Record<string, { reviews: number; good: number }>; study: Record<string, number>; goals: { notesPerWeek?: number; cardsPerDay?: number }; searches: { name: string; q: string }[]; rules: Rule[]; resurface: Resurface; decayDays: number; hideFaded: boolean; kanbanArchiveDays: number; features: Partial<Record<Tab, boolean>>; onboarded?: boolean; writingGoal: number; citeStyle: Style };
 const parseSettings = (j: Partial<Settings> | undefined): Settings => ({ bookmarks: Array.isArray(j?.bookmarks) ? j!.bookmarks : [], srs: j?.srs ?? {}, deckStats: j?.deckStats ?? {}, study: j?.study ?? {}, goals: j?.goals ?? {}, searches: Array.isArray(j?.searches) ? j!.searches : [], rules: Array.isArray(j?.rules) ? j!.rules : [], resurface: j?.resurface ?? {}, decayDays: typeof j?.decayDays === "number" ? j.decayDays : 180, hideFaded: !!j?.hideFaded, kanbanArchiveDays: typeof j?.kanbanArchiveDays === "number" ? j.kanbanArchiveDays : 14, features: j?.features ?? {}, onboarded: j?.onboarded, writingGoal: typeof j?.writingGoal === "number" ? j.writingGoal : 500, citeStyle: j?.citeStyle === "chicago" ? "chicago" : "apa" });
 type ManageTab = "finance" | "notebook" | "sharing" | "agents" | "market";
@@ -418,6 +422,10 @@ const ICONS: Record<string, string> = {
   mountain: '<path d="M3 20l6-10 4 6 3-4 5 8z"/><path d="M8.2 11.4l1.8 1.6 1.4-1.2"/>',
   sliders: '<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
   coin: '<circle cx="12" cy="12" r="9"/><path d="M14.8 9.4c-.5-.9-1.5-1.4-2.8-1.4-1.6 0-2.7.8-2.7 2s1.1 1.6 2.7 2 2.7.8 2.7 2-1.1 2-2.7 2c-1.3 0-2.4-.5-2.9-1.4M12 6.5v11"/>',
+  wallet: '<path d="M19 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a1 1 0 0 0 1-1v-3"/><path d="M3 5a2 2 0 0 0 2 2h15a1 1 0 0 1 1 1v3h-4a2 2 0 0 0 0 4h4"/>',
+  megaphone: '<path d="M3 11l16-6v14L3 13z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>',
+  dumbbell: '<path d="M6.5 6.5v11M17.5 6.5v11M3.5 9.5v5M20.5 9.5v5M6.5 12h11"/>',
+  house: '<path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/>',
   compass: '<circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/>',
   heart: '<path d="M12 20s-7.5-4.6-9.2-9.3A4.8 4.8 0 0 1 12 6.6a4.8 4.8 0 0 1 9.2 4.1C19.5 15.4 12 20 12 20z"/>',
   users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14a6.5 6.5 0 0 1 3.5 6"/>',
@@ -882,7 +890,7 @@ function routeSheet(el: HTMLElement) {
   const tab = (t: Tab, label: string, ic: string): R => ({ label, icon: ic, sub: true, hidden: !featureOn(t), on: inNb && S.tab === t, go: () => { const i = document.createElement("i"); i.dataset.tab = t; if (!inNb) { S.community = undefined; S.board = undefined; S.market = undefined; S.admin = undefined; location.hash = `#/notebook/${nbId}`; } void onAction("tab", i, new MouseEvent("click")); } });
   const routes: R[] = [
     { label: "Your notebooks", icon: "list", on: !S.notebook && !S.community && !S.board && !S.market && !S.admin, go: () => { location.hash = "#/"; } },
-    ...(S.notebook ? [{ label: S.notebook.name, icon: "notebook", on: inNb && S.tab === "notes", go: () => { if (!inNb) location.hash = `#/notebook/${nbId}`; else { const i = document.createElement("i"); i.dataset.tab = "notes"; void onAction("tab", i, new MouseEvent("click")); } } } as R, tab("chat", "Chat with your notes", "chat"), tab("graph", "Graph", "graph"), tab("study", "Study", "check"), tab("work", "Work", "briefcase"), tab("organize", "Organize", "sliders"), tab("research", "Research", "cap"), tab("writing", "Writing", "edit"), tab("care", "Care", "heart"), tab("software", "Software", "terminal"), tab("career", "Career", "compass"), tab("crypto", "Crypto", "coin"), tab("trips", "Trips", "mountain"), tab("manage", "Manage", "cog")].filter((r) => !r.hidden) : []),
+    ...(S.notebook ? [{ label: S.notebook.name, icon: "notebook", on: inNb && S.tab === "notes", go: () => { if (!inNb) location.hash = `#/notebook/${nbId}`; else { const i = document.createElement("i"); i.dataset.tab = "notes"; void onAction("tab", i, new MouseEvent("click")); } } } as R, tab("chat", "Chat with your notes", "chat"), tab("graph", "Graph", "graph"), tab("study", "Study", "check"), tab("work", "Work", "briefcase"), tab("organize", "Organize", "sliders"), tab("research", "Research", "cap"), tab("writing", "Writing", "edit"), tab("care", "Care", "heart"), tab("software", "Software", "terminal"), tab("career", "Career", "compass"), tab("crypto", "Crypto", "coin"), tab("money", "Money", "wallet"), tab("creator", "Creator", "megaphone"), tab("fitness", "Fitness", "dumbbell"), tab("home", "Home", "house"), tab("trips", "Trips", "mountain"), tab("manage", "Manage", "cog")].filter((r) => !r.hidden) : []),
     { label: "Community", icon: "users", on: !!S.community, go: () => { location.hash = "#/community"; } },
     ...(flag("board") ? [{ label: "Board", icon: "pin", on: !!S.board, go: () => { location.hash = "#/board"; } } as R] : []),
     ...(flag("market") ? [{ label: "Market", icon: "tag", on: !!S.market, go: () => { location.hash = "#/market"; } } as R] : []),
@@ -1034,7 +1042,7 @@ function ribbonHtml(i?: Info, low = false): string {
   const inNb = !!S.notebook && !S.community && !S.board && !S.market && !S.admin;
   const rb = (tab: Tab, label: string, ic: string, extra = "") => !featureOn(tab) ? "" : `<button type="button" class="rb ${inNb && S.tab === tab ? "on" : ""}" data-action="ribbon-tab" data-tab="${tab}" title="${label}" aria-label="${label}" aria-pressed="${inNb && S.tab === tab}">${icon(ic)}${extra}</button>`;
   return `<nav class="ribbon" aria-label="Sections">
-      <div class="rb-group">${rb("notes", "Notes", "file")}${rb("chat", "Chat with your notes", "chat")}${rb("graph", "Knowledge graph", "graph")}${rb("study", `Study${dueTotal() ? ` · ${dueTotal()} cards due` : ""}`, "check", dueTotal() ? `<i class="rb-count">${dueTotal()}</i>` : "")}${rb("work", `Work${overdueCount() ? ` · ${overdueCount()} overdue` : ""}`, "briefcase", overdueCount() ? `<i class="rb-count danger">${overdueCount()}</i>` : "")}${rb("organize", "Organize: saved searches, triage, rules, tidy-up", "sliders")}${rb("research", "Research: sources, citations, claims, thesis", "cap")}${rb("writing", "Writing: manuscript, story bible, timeline", "edit")}${rb("care", "Care: log, appointments, care team", "heart")}${rb("software", "Software: decisions, runbooks, changelog", "terminal")}${rb("career", "Career: applications, résumés, interviews, networking", "compass")}${rb("crypto", "Crypto: prices, trade journal, theses", "coin")}${rb("trips", S.trips.watching.some((w) => w.overdue && !w.closed) ? "Trips · someone is overdue" : "Trips", "mountain", S.trips.watching.some((w) => w.overdue && !w.closed) ? `<i class="rb-dot"></i>` : "")}</div>
+      <div class="rb-group">${rb("notes", "Notes", "file")}${rb("chat", "Chat with your notes", "chat")}${rb("graph", "Knowledge graph", "graph")}${rb("study", `Study${dueTotal() ? ` · ${dueTotal()} cards due` : ""}`, "check", dueTotal() ? `<i class="rb-count">${dueTotal()}</i>` : "")}${rb("work", `Work${overdueCount() ? ` · ${overdueCount()} overdue` : ""}`, "briefcase", overdueCount() ? `<i class="rb-count danger">${overdueCount()}</i>` : "")}${rb("organize", "Organize: saved searches, triage, rules, tidy-up", "sliders")}${rb("research", "Research: sources, citations, claims, thesis", "cap")}${rb("writing", "Writing: manuscript, story bible, timeline", "edit")}${rb("care", "Care: log, appointments, care team", "heart")}${rb("software", "Software: decisions, runbooks, changelog", "terminal")}${rb("career", "Career: applications, résumés, interviews, networking", "compass")}${rb("crypto", "Crypto: prices, trade journal, theses", "coin")}${rb("money", "Money: budget, subscriptions, net worth", "wallet")}${rb("creator", "Creator: calendar, threads, results", "megaphone")}${rb("fitness", "Fitness: workouts, records, runs", "dumbbell")}${rb("home", "Home: upkeep, inventory, warranties, manuals", "house")}${rb("trips", S.trips.watching.some((w) => w.overdue && !w.closed) ? "Trips · someone is overdue" : "Trips", "mountain", S.trips.watching.some((w) => w.overdue && !w.closed) ? `<i class="rb-dot"></i>` : "")}</div>
       <div class="rb-group bottom">${rb("manage", `Manage${i ? ` · ${tc(i.cycles)}` : ""}`, "cog", low ? `<i class="rb-dot"></i>` : "")}<a class="rb ${S.community ? "on" : ""}" href="#/community" data-action="nav" title="Community${S.mentions ? ` · ${S.mentions} new mention${S.mentions === 1 ? "" : "s"}` : ""}" aria-label="Community">${icon("users")}${S.mentions ? `<i class="rb-badge">${S.mentions > 9 ? "9+" : S.mentions}</i>` : ""}</a>${flag("board") ? `<a class="rb ${S.board ? "on" : ""}" href="#/board" data-action="nav" title="Board: posts and discussion" aria-label="Board">${icon("pin")}</a>` : ""}${flag("market") ? `<a class="rb ${S.market ? "on" : ""}" href="#/market" data-action="nav" title="Notebook market" aria-label="Notebook market">${icon("tag")}</a>` : ""}${S.isAdmin ? `<a class="rb ${S.admin ? "on" : ""}" href="#/admin" data-action="nav" title="Reports and ideas" aria-label="Reports and ideas">${icon("bug")}</a>` : ""}<button type="button" class="rb" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="rb" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button><button type="button" class="rb" data-action="sign-out" title="Sign out" aria-label="Sign out">${icon("out")}</button></div>
     </nav>`;
 }
@@ -1042,10 +1050,10 @@ function shellBody(body: string, i: Info | undefined, low: boolean, alert: strin
   const ribbon = ribbonHtml(i, low);
   return `<div class="shell ${S.mobile ? "is-mobile" : ""}">${ribbon}<div class="shell-main">
     ${alert}
-    <header class="wsbar">${brand()}${S.mobile ? seg : `<span class="crumb"><b>${esc(S.notebook!.name)}</b><span class="faint">/</span><span>${S.tab === "notes" ? (cur() ? esc(title(cur()!)) : "Notes") : S.tab === "chat" ? "Chat" : S.tab === "graph" ? "Graph" : S.tab === "study" ? "Study" : S.tab === "work" ? "Work" : S.tab === "organize" ? "Organize" : S.tab === "trips" ? "Trips" : S.tab === "research" ? "Research" : S.tab === "writing" ? "Writing" : S.tab === "care" ? "Care" : S.tab === "career" ? "Career" : S.tab === "crypto" ? "Crypto" : S.tab === "software" ? "Software" : "Manage"}</span></span>`}
+    <header class="wsbar">${brand()}${S.mobile ? seg : `<span class="crumb"><b>${esc(S.notebook!.name)}</b><span class="faint">/</span><span>${S.tab === "notes" ? (cur() ? esc(title(cur()!)) : "Notes") : S.tab === "chat" ? "Chat" : S.tab === "graph" ? "Graph" : S.tab === "study" ? "Study" : S.tab === "work" ? "Work" : S.tab === "organize" ? "Organize" : S.tab === "trips" ? "Trips" : S.tab === "research" ? "Research" : S.tab === "writing" ? "Writing" : S.tab === "care" ? "Care" : S.tab === "career" ? "Career" : S.tab === "crypto" ? "Crypto" : S.tab === "money" ? "Money" : S.tab === "creator" ? "Creator" : S.tab === "fitness" ? "Fitness" : S.tab === "home" ? "Home" : S.tab === "software" ? "Software" : "Manage"}</span></span>`}
       <span class="right">${S.mobile ? "" : `<button type="button" class="btn btn-ghost" data-action="palette" title="Open or create a note (${MOD}K)">${icon("search")}<span class="kbd">${MOD}K</span></button>`}${S.mobile ? moreBtn() : ""}</span>
     </header>
-    ${panebar({ on: S.sideOpen, what: "the file pane", action: "side-toggle", off: S.tab === "graph" || S.tab === "manage" || S.tab === "study" || S.tab === "work" || S.tab === "organize" || S.tab === "trips" || S.tab === "research" || S.tab === "writing" || S.tab === "care" || S.tab === "software" || S.tab === "career" || S.tab === "crypto" }, { on: S.asideOpen, what: "the right pane", action: "aside-toggle", off: S.tab === "graph" || S.tab === "manage" || S.tab === "study" || S.tab === "work" || S.tab === "organize" || S.tab === "trips" || S.tab === "research" || S.tab === "writing" || S.tab === "care" || S.tab === "software" || S.tab === "career" || S.tab === "crypto" })}
+    ${panebar({ on: S.sideOpen, what: "the file pane", action: "side-toggle", off: S.tab === "graph" || S.tab === "manage" || S.tab === "study" || S.tab === "work" || S.tab === "organize" || S.tab === "trips" || S.tab === "research" || S.tab === "writing" || S.tab === "care" || S.tab === "software" || S.tab === "career" || S.tab === "crypto" || S.tab === "money" || S.tab === "creator" || S.tab === "fitness" || S.tab === "home" }, { on: S.asideOpen, what: "the right pane", action: "aside-toggle", off: S.tab === "graph" || S.tab === "manage" || S.tab === "study" || S.tab === "work" || S.tab === "organize" || S.tab === "trips" || S.tab === "research" || S.tab === "writing" || S.tab === "care" || S.tab === "software" || S.tab === "career" || S.tab === "crypto" || S.tab === "money" || S.tab === "creator" || S.tab === "fitness" || S.tab === "home" })}
     ${body}
     ${mobileNav}
   </div></div>`;
@@ -2075,6 +2083,10 @@ const FEATURES: { id: Tab; label: string; icon: string; desc: string }[] = [
   { id: "software", label: "Software", icon: "terminal", desc: "Decision records, runbooks, a changelog, runnable snippets." },
   { id: "career", label: "Career", icon: "compass", desc: "Job applications board, experience bank and résumés, interview stories, networking follow-ups, a weekly search review." },
   { id: "crypto", label: "Crypto", icon: "coin", desc: "Live prices for BTC, ETH, SOL, HYPE and more, a trade journal with win rate and profit and loss, theses you review on a schedule." },
+  { id: "money", label: "Money", icon: "wallet", desc: "A monthly budget, subscriptions with keep-or-cancel reminders, net worth with crypto priced live." },
+  { id: "creator", label: "Creator", icon: "megaphone", desc: "A content calendar, drafts split into 280-character threads, results per post, #creators for feedback." },
+  { id: "fitness", label: "Fitness", icon: "dumbbell", desc: "Workout notes, personal records, progress per lift, weekly totals, runs from GPX." },
+  { id: "home", label: "Home", icon: "house", desc: "Recurring upkeep, an inventory by room, warranties and PDF manuals." },
   { id: "trips", label: "Trips", icon: "mountain", desc: "Trip plans, gear, food, water, GPX routes, field journal, check-ins." },
 ];
 /** Notebooks made before features existed keep every tab they had; the new kits start off. */
@@ -2088,7 +2100,10 @@ const PRESETS: Record<string, Tab[]> = {
   Developer: ["chat", "graph", "work", "software", "organize"],
   Hiker: ["chat", "trips", "study"],
   "Job seeker": ["chat", "career", "study", "work", "organize"],
-  Trader: ["chat", "crypto", "research", "work", "organize"],
+  Trader: ["chat", "crypto", "money", "research", "work", "organize"],
+  Creator: ["chat", "creator", "writing", "work", "organize"],
+  Athlete: ["chat", "fitness", "trips", "study", "work"],
+  Household: ["chat", "home", "money", "work", "organize"],
   Everything: FEATURES.map((f) => f.id),
 };
 function featuresCard(): string {
@@ -2388,7 +2403,7 @@ function loadPrices(symbols: string[], force = false): Promise<void> {
     } finally {
       quoting = undefined;
     }
-    if (S.tab === "crypto" && !document.querySelector(".scrim")) render();
+    if ((S.tab === "crypto" || S.tab === "money") && !document.querySelector(".scrim")) render();
     document.querySelectorAll<HTMLElement>(".price-embed").forEach(fillPriceEmbed);
   })();
   return quoting;
@@ -2577,6 +2592,348 @@ async function cryptoAction(action: string, el: HTMLElement) {
       return shareGist({ notebook: S.notebook!.canister.toText(), path: p, text: body }, "crypto");
     }
     case "crypto-channel": { store("nb-chat-channel", "crypto"); location.hash = "#/community"; return; }
+  }
+}
+
+// --- small charts the Money, Creator and Fitness kits share
+
+/** One bar per week, labelled MM/DD. */
+function weekBarsSvg(rows: { week: string; v: number }[], title: (r: { week: string; v: number }) => string, aria: string): string {
+  const max = Math.max(1, ...rows.map((r) => r.v));
+  return `<svg class="career-bars" viewBox="0 0 ${rows.length * 34} 70" role="img" aria-label="${esc(aria)}">${rows.map((r, i) => `<rect x="${i * 34 + 6}" y="${60 - (r.v / max) * 52}" width="22" height="${(r.v / max) * 52 || 1}" rx="3"><title>${esc(title(r))}</title></rect><text x="${i * 34 + 17}" y="69">${r.week.slice(5).replace("-", "/")}</text>`).join("")}</svg>`;
+}
+/** A line over time, with the first and last dates under it. */
+function lineSvg(pts: { date: string; v: number }[], aria: string, show: (v: number) => string): string {
+  if (pts.length < 2) return "";
+  const W = 300, H = 80, lo = Math.min(...pts.map((p) => p.v)), span = Math.max(...pts.map((p) => p.v)) - lo || 1;
+  const xy = pts.map((p, i) => [8 + (i / (pts.length - 1)) * (W - 16), 8 + (1 - (p.v - lo) / span) * (H - 26)]);
+  return `<svg class="kit-line" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(aria)}"><polyline points="${xy.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ")}"/>${xy.map(([x, y], i) => `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.5"><title>${pts[i].date}: ${esc(show(pts[i].v))}</title></circle>`).join("")}<text x="8" y="${H - 2}">${pts[0].date}</text><text x="${W - 8}" y="${H - 2}" text-anchor="end">${pts[pts.length - 1].date}</text></svg>`;
+}
+const uniquePath = (path: string) => { let p = path; for (let i = 2; note(p); i++) p = path.replace(/\.(md|sheet)$/, ` ${i}.$1`); return p; };
+const isDay = (s: string | undefined) => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s);
+const inDaysText = (n: number | undefined) => (n === undefined ? "" : n < 0 ? `${-n} day${n === -1 ? "" : "s"} late` : n === 0 ? "today" : `in ${n} day${n === 1 ? "" : "s"}`);
+
+// --- the Money kit
+
+const MONEY_BUDGET = "Money/Budget.sheet", MONEY_NET = "Money/Net worth.md";
+function moneyTab(): string {
+  const today = dayKey(new Date());
+  const subs = subscriptions(orgNotes(), today);
+  const active = subs.filter((s) => s.status === "active"), tot = subscriptionTotals(subs);
+  const bsrc = textOf(MONEY_BUDGET);
+  const bt = bsrc ? budgetTotals(evaluate(parseWorkbook(bsrc)).get("Budget")) : undefined;
+  const nsrc = textOf(MONEY_NET);
+  const hs = nsrc ? holdings(nsrc) : [];
+  const coins = hs.filter((h) => h.coin).map((h) => h.coin!);
+  if (coins.length) void loadPrices(coins);
+  const nw = netWorth(hs, priceOf), hist = nsrc ? netWorthHistory(nsrc) : [];
+  const pct = bt && bt.planned ? Math.min(100, Math.round((bt.spent / bt.planned) * 100)) : 0;
+  return `<section class="main" style="overflow:auto"><div class="page wide kit">
+    <div class="grid2">
+      <div class="card band"><div class="row"><h2>${icon("columns")} Budget</h2><span class="right-actions">${bsrc ? `<button type="button" class="btn btn-ghost" data-action="money-month" title="Save this month's copy and start the next with nothing spent">New month</button>` : ""}<button type="button" class="btn ${bsrc ? "" : "btn-primary"}" data-action="money-budget">${bsrc ? "Open budget" : `${icon("plus")}Make a budget`}</button></span></div>
+        ${bt ? `<div class="career-stats"><div><b>${usd(bt.planned)}</b><span>planned</span></div><div><b>${usd(bt.spent)}</b><span>spent</span></div><div><b>${money(bt.left, false)}</b><span>left</span></div></div><div class="meter" role="img" aria-label="${pct}% of the budget spent"><i style="width:${pct}%" class="${bt.left < 0 ? "over" : ""}"></i></div>` : `<p class="small muted">A spreadsheet of what you plan to spend per category and what you have spent. New month keeps a copy and clears the spending.</p>`}
+      </div>
+      <div class="card band"><div class="row"><h2>${icon("wallet")} Net worth</h2><span class="right-actions">${nsrc ? `<button type="button" class="btn btn-ghost" data-action="money-net-open">Edit</button><button type="button" class="btn" data-action="money-net-record" title="Add today's total to the history">Record today</button>` : `<button type="button" class="btn btn-primary" data-action="money-net-open">${icon("plus")}Start</button>`}</span></div>
+        ${nsrc ? `<div class="career-stats"><div><b>${money(nw.total, false)}</b><span>${nw.unpriced.length ? `without ${esc(nw.unpriced.join(", "))} (no price yet)` : "today"}</span></div>${lineSvg(hist.map((h) => ({ date: h.date, v: h.total })), "Net worth over time", usd)}</div>
+          <div class="tags nudge">${nw.byKind.map((k) => `<span class="tag-chip"><span>${esc(k.kind)}</span><span class="cnt">${usd(k.total)}</span></span>`).join("")}</div>` : `<p class="small muted">A table of your accounts: dollars, debts as negatives, or coins like <code>0.05 BTC</code> priced live. Record today adds the total to its history.</p>`}
+      </div>
+    </div>
+    <div class="card band"><div class="row"><h2>${icon("calendar")} Subscriptions</h2><span class="right-actions"><button type="button" class="btn btn-primary" data-action="money-sub-add">${icon("plus")}Subscription</button></span></div>
+      ${active.length ? `<div class="career-stats"><div><b>${usd(tot.monthly)}</b><span>a month</span></div><div><b>${usd(tot.yearly)}</b><span>a year</span></div><div><b>${active.length}</b><span>active</span></div></div>
+        <div class="runs">${active.map((s) => `<div class="run"><span><a href="#" data-action="open" data-path="${esc(s.path)}">${esc(s.name)}</a> <span class="small muted">${usd(s.cost)} every ${esc(s.every)}${/year|quarter|week|day|\d/.test(s.every) ? ` · ${usd(s.monthly)} a month` : ""}</span> <span class="small ${s.inDays !== undefined && s.inDays <= 3 ? "danger" : "muted"}">${s.renews ? `renews ${inDaysText(s.inDays)}` : ""}</span></span><span class="row-actions"><button type="button" class="btn btn-ghost" data-action="money-sub-renewed" data-path="${esc(s.path)}" title="It renewed: move the reminder to the next renewal">Renewed</button><button type="button" class="btn btn-ghost" data-action="money-sub-cancel" data-path="${esc(s.path)}">Cancelled</button></span></div>`).join("")}</div>`
+        : `<p class="small muted">One note per subscription with its cost, how often it renews and the next date. A keep-or-cancel reminder shows in Work on the renewal date.</p>`}
+      ${subs.length > active.length ? `<p class="small muted">Cancelled: ${subs.filter((s) => s.status !== "active").map((s) => `<a href="#" data-action="open" data-path="${esc(s.path)}">${esc(s.name)}</a>`).join(", ")}</p>` : ""}
+    </div>
+  </div></section>`;
+}
+async function moneyAction(action: string, el: HTMLElement) {
+  const today = dayKey(new Date());
+  const p = el.dataset.path ?? "";
+  switch (action) {
+    case "money-budget": { if (!note(MONEY_BUDGET)) await createQuiet(MONEY_BUDGET, budgetWorkbook()); S.tab = "notes"; return open(MONEY_BUDGET); }
+    case "money-month": {
+      const month = today.slice(0, 7);
+      if (!(await confirmDialog("Start a new month?", `This month's budget is saved as Money/Budgets/${month}.sheet, then Spent starts again from zero.`, "Start the month"))) return;
+      const wb = parseWorkbook(textOf(MONEY_BUDGET)!);
+      await createQuiet(uniquePath(`Money/Budgets/${month}.sheet`), serializeWorkbook(wb));
+      const sh = wb.sheets.find((s) => s.name === "Budget") ?? wb.sheets[0];
+      sh.rows.forEach((r, i) => { if (i > 0 && String(r[0]).trim().toLowerCase() !== "total" && r.length > 2 && !String(r[2]).startsWith("=")) r[2] = "0"; });
+      await writeNote(MONEY_BUDGET, serializeWorkbook(wb));
+      toast(`Saved ${month}; the new month starts with nothing spent.`, "ok");
+      return render();
+    }
+    case "money-net-open": { if (!note(MONEY_NET)) await createQuiet(MONEY_NET, NET_WORTH_NOTE); S.tab = "notes"; return open(MONEY_NET); }
+    case "money-net-record": {
+      const hs = holdings(textOf(MONEY_NET)!);
+      await loadPrices(hs.filter((h) => h.coin).map((h) => h.coin!));
+      const nw = netWorth(hs, priceOf);
+      if (nw.unpriced.length) return toast(`No price for ${nw.unpriced.join(", ")} yet; try again in a minute.`, "error");
+      await writeNote(MONEY_NET, recordNetWorth(textOf(MONEY_NET)!, today, nw.total));
+      toast(`Recorded ${usd(nw.total)} for ${today}.`, "ok");
+      return render();
+    }
+    case "money-sub-add": {
+      const v = await fieldsDialog("Add a subscription", "A reminder to keep or cancel it shows in Work on the renewal date.", [
+        { name: "name", label: "Name", placeholder: "Streaming", required: true, wide: true },
+        { name: "cost", label: "Cost ($)", kind: "number", placeholder: "15.99", required: true },
+        { name: "every", label: "Renews every", kind: "choice", value: "month", choices: ["week", "month", "3 months", "6 months", "year"].map((x) => ({ value: x, label: x })) },
+        { name: "renews", label: "Next renewal", kind: "date", value: addDays(today, 30), wide: true },
+      ], "Add it");
+      if (!v) return;
+      await createQuiet(uniquePath(`Money/Subscriptions/${safeName(v.name)}.md`), SUBSCRIPTION_TEMPLATE(amount(v.cost) ?? 0, v.every, isDay(v.renews) ? v.renews : addDays(today, 30), v.name));
+      return render();
+    }
+    case "money-sub-renewed": { await writeNote(p, renewSubscription(textOf(p)!, today)); toast("Next renewal noted; the reminder moved with it.", "ok"); return render(); }
+    case "money-sub-cancel": { await writeNote(p, cancelSubscription(textOf(p)!, today)); toast("Marked cancelled. It no longer counts toward your total.", "ok"); return render(); }
+  }
+}
+
+// --- the Creator kit
+
+const CREATOR_BOARD = "Creator/Calendar.md";
+async function creatorBoard(): Promise<string> {
+  if (!note(CREATOR_BOARD)) await createQuiet(CREATOR_BOARD, CALENDAR_BOARD);
+  return textOf(CREATOR_BOARD) ?? CALENDAR_BOARD;
+}
+function creatorTab(): string {
+  const board = textOf(CREATOR_BOARD);
+  const cards = board ? calendar(board) : [];
+  const ps = posts(orgNotes());
+  const laneOf = (title: string) => cards.find((c) => c.title === title)?.lane;
+  const drafts = ps.filter((x) => !x.posted && laneOf(x.title) !== "Posted");
+  const out = ps.filter((x) => x.posted || laneOf(x.title) === "Posted").sort((a, b) => (b.posted ?? "").localeCompare(a.posted ?? ""));
+  const r = results(out);
+  const scheduled = cards.filter((c) => c.lane === "Scheduled").sort((a, b) => (a.date ?? "9").localeCompare(b.date ?? "9"));
+  const ideas = cards.filter((c) => c.lane === "Ideas");
+  const draftRow = (x: (typeof ps)[number]) => { const when = cards.find((c) => c.title === x.title && c.lane === "Scheduled")?.date; return `<div class="run"><span><a href="#" data-action="open" data-path="${esc(x.path)}">${esc(x.title)}</a> <span class="small muted">${x.thread.length ? `${x.thread.length} post${x.thread.length === 1 ? "" : "s"}` : "empty"}${when ? ` · scheduled ${esc(when)}` : ""}</span>${x.over ? ` <span class="small danger">${x.over} over ${LIMIT}</span>` : ""}</span><span class="row-actions"><button type="button" class="btn btn-ghost" data-action="creator-thread" data-path="${esc(x.path)}">${icon("copy")}Copy</button><button type="button" class="btn btn-ghost" data-action="creator-schedule" data-path="${esc(x.path)}">Schedule</button><button type="button" class="btn btn-ghost" data-action="creator-posted" data-path="${esc(x.path)}">Posted</button><button type="button" class="btn btn-ghost" data-action="creator-feedback" data-path="${esc(x.path)}" title="Share the draft in #creators">${icon("users")}Feedback</button></span></div>`; };
+  const n = (v: number | undefined) => (v === undefined ? "–" : v.toLocaleString("en-US"));
+  return `<section class="main" style="overflow:auto"><div class="page wide kit">
+    <div class="card band"><div class="row"><h2>${icon("calendar")} Calendar</h2><span class="right-actions"><button type="button" class="btn" data-action="creator-board">${icon("board")}Open the board</button><button type="button" class="btn btn-ghost" data-action="creator-idea">${icon("plus")}Idea</button><button type="button" class="btn btn-primary" data-action="creator-new">${icon("plus")}Post</button></span></div>
+      <div class="tags">${LANES.map((l) => `<span class="tag-chip"><span>${l}</span><span class="cnt">${cards.filter((c) => c.lane === l).length}</span></span>`).join("")}</div>
+      ${scheduled.length ? `<div class="band-title">Scheduled</div><div class="runs">${scheduled.map((c) => `<div class="run"><span><a href="#" data-action="wiki" data-target="${esc(c.title)}">${esc(c.title)}</a> <span class="small muted">${esc(c.date ?? "no date")}</span></span></div>`).join("")}</div>` : ""}
+      ${ideas.length ? `<div class="band-title">Ideas <span class="count">${ideas.length}</span></div><div class="runs">${ideas.slice(0, 6).map((c) => `<div class="run"><span>${esc(c.title)}</span><span class="row-actions"><button type="button" class="btn btn-ghost" data-action="creator-draft-idea" data-title="${esc(c.title)}">Draft it</button></span></div>`).join("")}</div>` : `<p class="small muted"><code>${CREATOR_BOARD}</code> is a board: Ideas, Drafting, Scheduled, Posted. A scheduled post's date shows in Work.</p>`}
+    </div>
+    <div class="card band"><div class="row"><h2>${icon("edit")} Drafts</h2></div>
+      <p class="small muted">Everything above a post's first <code>##</code> heading is posted. A line with only <code>---</code> starts the next post; long ones are split at sentences into a numbered thread of ${LIMIT}-character posts.</p>
+      ${drafts.length ? `<div class="runs">${drafts.map(draftRow).join("")}</div>` : `<p class="small muted">No drafts.</p>`}
+    </div>
+    <div class="grid2">
+      <div class="card band"><div class="row"><h2>${icon("graph")} Results</h2></div>
+        ${r.count ? `<div class="career-stats"><div><b>${r.count}</b><span>measured</span></div><div><b>${n(r.impressions)}</b><span>impressions</span></div><div><b>${r.engagement!.toFixed(1)}%</b><span>engagement</span></div></div>${r.best ? `<p class="small">Best: <a href="#" data-action="open" data-path="${esc(r.best.path)}">${esc(r.best.title)}</a> at ${r.best.engagement!.toFixed(1)}%</p>` : ""}` : ""}
+        ${out.length ? `<div class="runs">${out.slice(0, 8).map((x) => `<div class="run"><span><a href="#" data-action="open" data-path="${esc(x.path)}">${esc(x.title)}</a> <span class="small muted">${esc(x.posted ?? "")}${x.metrics.impressions !== undefined ? ` · ${n(x.metrics.impressions)} seen · ${n(x.metrics.likes)} likes · ${n(x.metrics.reposts)} reposts · ${n(x.metrics.replies)} replies` : ""}</span></span><span class="row-actions"><button type="button" class="btn btn-ghost" data-action="creator-results" data-path="${esc(x.path)}">${x.engagement === undefined ? "Log results" : "Update"}</button></span></div>`).join("")}</div>` : `<p class="small muted">Once a post is out, log its impressions, likes, reposts and replies; engagement is all three over impressions.</p>`}
+      </div>
+      <div class="card band"><div class="row"><h2>${icon("chat")} #creators</h2><span class="right-actions"><button type="button" class="btn" data-action="creator-channel">Open #creators</button></span></div>
+        <p class="small muted">Hooks, drafts and what worked. Feedback shares a draft's text; your notebook stays private.</p>
+      </div>
+    </div>
+  </div></section>`;
+}
+/** Each post of a thread with its own Copy button, to paste one at a time. */
+function threadDialog(title: string, th: string[]) {
+  const scrim = document.createElement("div");
+  scrim.className = "scrim";
+  scrim.innerHTML = `<div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="th-t"><h2 id="th-t">${esc(title)}</h2>
+    <div class="th-list">${th.map((t, i) => `<div class="th-post"><p>${esc(t).replace(/\n/g, "<br>")}</p><div class="row tight"><span class="small ${[...t].length > LIMIT ? "danger" : "muted"}">${[...t].length}/${LIMIT}</span><button type="button" class="btn btn-ghost" data-copy="${i}">${icon("copy")}Copy</button></div></div>`).join("")}</div>
+    <div class="actions"><button type="button" class="btn" data-x="all">Copy all</button><button type="button" class="btn btn-primary" data-x="close">Done</button></div></div>`;
+  const close = () => { scrim.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
+  scrim.addEventListener("click", (e) => {
+    const t = e.target as HTMLElement;
+    const c = t.closest<HTMLElement>("[data-copy]");
+    if (c) { void copy(th[Number(c.dataset.copy)]); c.innerHTML = `${icon("check")}Copied`; return; }
+    if (t === scrim || t.closest("[data-x=close]")) return close();
+    if (t.closest("[data-x=all]")) { void copy(th.join("\n\n")); toast("Copied the whole thread.", "ok"); }
+  });
+  document.addEventListener("keydown", onKey);
+  document.body.append(scrim);
+}
+async function creatorNewPost(title: string) {
+  const path = uniquePath(`Creator/Posts/${safeName(title)}.md`);
+  const name = path.split("/").pop()!.replace(/\.md$/, "");
+  await createQuiet(path, POST_TEMPLATE(name));
+  await writeNote(CREATOR_BOARD, placeCard(await creatorBoard(), name, "Drafting"));
+  S.tab = "notes";
+  return open(path);
+}
+async function creatorAction(action: string, el: HTMLElement) {
+  const today = dayKey(new Date());
+  const p = el.dataset.path ?? "";
+  const titleOfPath = () => p.split("/").pop()!.replace(/\.md$/, "");
+  switch (action) {
+    case "creator-board": { await creatorBoard(); S.tab = "notes"; return open(CREATOR_BOARD); }
+    case "creator-idea": {
+      const v = (await ask({ title: "An idea", label: "What could you post about?", placeholder: "Why I keep my notes on a blockchain", ok: "Add" }))?.trim();
+      if (!v) return;
+      await writeNote(CREATOR_BOARD, placeCard(await creatorBoard(), v.replace(/[[\]]/g, ""), "Ideas", undefined, v.replace(/[[\]]/g, "")));
+      return render();
+    }
+    case "creator-new": { const v = (await ask({ title: "New post", label: "Title (for you; it is not posted)", placeholder: "Launch thread", ok: "Create" }))?.trim(); return v ? creatorNewPost(v) : undefined; }
+    case "creator-draft-idea": {
+      const idea = el.dataset.title!;
+      const b = parseBoard(await creatorBoard());
+      for (const l of b.lanes) if (l.title === "Ideas") l.cards = l.cards.filter((c) => c.text.trim() !== idea);
+      const path = uniquePath(`Creator/Posts/${safeName(idea)}.md`);
+      await createQuiet(path, POST_TEMPLATE(path.split("/").pop()!.replace(/\.md$/, ""), idea));
+      await writeNote(CREATOR_BOARD, placeCard(serializeBoard(b), path.split("/").pop()!.replace(/\.md$/, ""), "Drafting"));
+      S.tab = "notes";
+      return open(path);
+    }
+    case "creator-thread": { const x = post(p, textOf(p)!); return x.thread.length ? threadDialog(x.title, x.thread) : toast("Nothing to post yet: write above the first ## heading.", "info"); }
+    case "creator-schedule": {
+      const v = await fieldsDialog("Schedule it", "It shows in Work on that day.", [{ name: "date", label: "Post on", kind: "date", value: addDays(today, 1), wide: true }], "Schedule");
+      if (!v || !isDay(v.date)) return;
+      await writeNote(CREATOR_BOARD, placeCard(await creatorBoard(), titleOfPath(), "Scheduled", v.date));
+      return render();
+    }
+    case "creator-posted": {
+      await writeNote(p, logResults(textOf(p)!, {}, today));
+      await writeNote(CREATOR_BOARD, placeCard(await creatorBoard(), titleOfPath(), "Posted", ""));
+      toast("Moved to Posted. Log its results in a day or two.", "ok");
+      return render();
+    }
+    case "creator-results": {
+      const x = post(p, textOf(p)!);
+      const f = (name: keyof typeof x.metrics, label: string) => ({ name, label, kind: "number" as const, value: x.metrics[name] === undefined ? "" : String(x.metrics[name]) });
+      const v = await fieldsDialog(`Results: ${x.title}`, "From the post's analytics.", [f("impressions", "Impressions"), f("likes", "Likes"), f("reposts", "Reposts"), f("replies", "Replies")], "Save");
+      if (!v) return;
+      const m = Object.fromEntries(Object.entries(v).map(([k, val]) => [k, amount(val)])) as typeof x.metrics;
+      await writeNote(p, logResults(textOf(p)!, m));
+      return render();
+    }
+    case "creator-feedback": { const x = post(p, textOf(p)!); return shareGist({ notebook: S.notebook!.canister.toText(), path: p, text: `# ${x.title}\n\n${x.thread.join("\n\n---\n\n")}\n` }, "creators"); }
+    case "creator-channel": { store("nb-chat-channel", "creators"); location.hash = "#/community"; return; }
+  }
+}
+
+// --- the Fitness kit
+
+function fitnessTab(): string {
+  const today = dayKey(new Date());
+  const ws = workouts(orgNotes());
+  const wk = weekly(ws, today);
+  const now = wk[wk.length - 1];
+  const prs = records(ws);
+  const ex = store("nb-fit-ex") && prs.some((r) => r.exercise.toLowerCase() === store("nb-fit-ex")!.toLowerCase()) ? store("nb-fit-ex")! : prs[0]?.exercise;
+  const prog = ex ? progress(ws, ex) : [];
+  const recent = [...ws].reverse().slice(0, 6);
+  const unit = ws[ws.length - 1]?.unit ?? "kg";
+  return `<section class="main" style="overflow:auto"><div class="page wide kit">
+    <div class="card band"><div class="row"><h2>${icon("dumbbell")} Training</h2><span class="right-actions"><label class="btn btn-ghost">${icon("upload")}Run from GPX<input type="file" name="workout-gpx" accept=".gpx,application/gpx+xml" hidden></label><button type="button" class="btn btn-primary" data-action="fitness-log">${icon("plus")}Log a workout</button></span></div>
+      <div class="career-stats"><div><b>${now.sessions}</b><span>sessions this week</span></div><div><b>${now.km}</b><span>km this week</span></div><div><b>${Math.round(now.volume).toLocaleString("en-US")}</b><span>${esc(unit)} lifted this week</span></div><div><b>${ws.length}</b><span>workouts in all</span></div>${weekBarsSvg(wk.map((w) => ({ week: w.week, v: w.sessions })), (r) => `Week of ${r.week}: ${r.v} session${r.v === 1 ? "" : "s"}`, "Sessions per week")}</div>
+      ${recent.length ? `<div class="band-title">Recent</div><div class="runs">${recent.map((w) => { const pr = newRecords(ws, w.path); const pc = pace(w.minutes, w.km); return `<div class="run"><span><a href="#" data-action="open" data-path="${esc(w.path)}">${esc(w.title)}</a> <span class="small muted">${[w.title.toLowerCase().includes(w.kind) ? "" : esc(w.kind), w.sets.length ? `${w.sets.length} set${w.sets.length === 1 ? "" : "s"}` : "", w.km ? `${w.km} km` : "", w.minutes ? `${w.minutes} min` : "", pc ?? ""].filter(Boolean).join(" · ")}</span>${pr.length ? ` <span class="pill ok">${icon("star")}PR: ${esc(pr.join(", "))}</span>` : ""}</span></div>`; }).join("")}</div>` : `<p class="small muted">One note per workout. Write sets as <code>- Squat: 100 x 5, 105 x 3</code> or <code>- Squat: 3x5 @ 100</code>, bodyweight as <code>@ bw</code>. Runs can carry a GPX route.</p>`}
+    </div>
+    <div class="grid2">
+      <div class="card band"><div class="row"><h2>${icon("star")} Personal records</h2></div>
+        <p class="small muted">Your best set per lift, ranked by estimated one-rep max (Epley: weight × (1 + reps ÷ 30)).</p>
+        ${prs.length ? `<div class="runs">${prs.slice(0, 10).map((r) => `<div class="run"><span><b>${esc(r.exercise)}</b> <span class="small muted">${r.set.weight} ${esc(unit)} × ${r.set.reps} · about ${Math.round(r.e1rm)} ${esc(unit)} for one · <a href="#" data-action="open" data-path="${esc(r.path)}">${esc(r.date)}</a></span></span></div>`).join("")}</div>` : `<p class="small muted">No weighted sets yet.</p>`}
+      </div>
+      <div class="card band"><div class="row"><h2>${icon("graph")} Progress</h2></div>
+        ${prs.length ? `<div class="tags">${prs.map((r) => `<button type="button" class="tag-chip ${r.exercise === ex ? "active" : ""}" data-action="fitness-ex" data-ex="${esc(r.exercise)}"><span>${esc(r.exercise)}</span></button>`).join("")}</div>${lineSvg(prog.map((x) => ({ date: x.date, v: x.e1rm })), `${ex} over time`, (v) => `about ${Math.round(v)} ${unit}`) || `<p class="small muted">Log ${esc(ex ?? "it")} twice to see a line.</p>`}` : `<p class="small muted">Each lift's estimated one-rep max over time shows here.</p>`}
+      </div>
+    </div>
+  </div></section>`;
+}
+async function importWorkoutGpx(file: File) {
+  const t = parseGpx(await file.text());
+  if (t.points.length < 2) return toast("No track in that file.", "error");
+  const today = dayKey(new Date());
+  const path = uniquePath(`Fitness/Workouts/${today} ${safeName(t.name || file.name.replace(/\.gpx$/i, "")) || "Run"}.md`);
+  await createQuiet(path, WORKOUT_TEMPLATE(today, "run", "").replace("## How it felt", `${trackBlock(t)}\n\n## How it felt`));
+  S.tab = "notes";
+  await open(path);
+  toast("Imported the route. Add the minutes it took for your pace.", "ok");
+}
+async function fitnessAction(action: string, el: HTMLElement) {
+  const today = dayKey(new Date());
+  switch (action) {
+    case "fitness-ex": { store("nb-fit-ex", el.dataset.ex ?? null); return render(); }
+    case "fitness-log": {
+      const v = await fieldsDialog("Log a workout", "", [
+        { name: "date", label: "Date", kind: "date", value: today },
+        { name: "kind", label: "Kind", kind: "choice", value: "strength", choices: ["strength", "run", "ride", "walk", "swim", "other"].map((x) => ({ value: x, label: x[0].toUpperCase() + x.slice(1) })) },
+        { name: "minutes", label: "Minutes", kind: "number", placeholder: "45" },
+        { name: "km", label: "Distance (km)", kind: "number", placeholder: "Runs, rides" },
+        { name: "sets", label: "Sets, one exercise a line", kind: "area", placeholder: "- Squat: 3x5 @ 100\n- Bench press: 80 x 5, 80 x 5, 85 x 3\n- Pull-up: 3x8 @ bw" },
+      ], "Save");
+      if (!v) return;
+      const date = isDay(v.date) ? v.date : today;
+      const sets = (v.sets ?? "").split("\n").map((l) => l.trim()).filter(Boolean).map((l) => (/^[-*+]\s/.test(l) ? l : `- ${l}`)).join("\n");
+      let c = WORKOUT_TEMPLATE(date, v.kind || "strength", sets, amount(v.minutes));
+      if (amount(v.km)) c = setProperty(c, "distance_km", String(amount(v.km)));
+      const path = uniquePath(`Fitness/Workouts/${date} ${v.kind || "workout"}.md`);
+      await createQuiet(path, c);
+      const pr = newRecords(workouts(orgNotes()), path);
+      toast(pr.length ? `Saved. New personal record: ${pr.join(", ")}!` : "Saved.", "ok");
+      return render();
+    }
+  }
+}
+
+// --- the Home kit
+
+const STARTER_UPKEEP: [string, string, string][] = [["Test the smoke alarms", "6 months", "Press each test button; replace batteries once a year."], ["Change the furnace filter", "3 months", "Note the filter size here."], ["Clean the gutters", "year", ""], ["Flush the water heater", "year", ""], ["Clean the fridge coils", "year", ""]];
+function homeTab(): string {
+  const today = dayKey(new Date());
+  const jobs = upkeep(orgNotes(), today);
+  const its = items(orgNotes(), today);
+  const inv = inventory(its);
+  const ending = warrantiesEnding(its);
+  const total = inv.reduce((a, r) => a + r.value, 0);
+  return `<section class="main" style="overflow:auto"><div class="page wide kit">
+    <div class="card band"><div class="row"><h2>${icon("refresh")} Upkeep</h2><span class="right-actions">${jobs.length ? "" : `<button type="button" class="btn" data-action="home-starters">Add common jobs</button>`}<button type="button" class="btn btn-primary" data-action="home-job-add">${icon("plus")}Job</button></span></div>
+      ${jobs.length ? `<div class="runs">${jobs.map((j) => `<div class="run"><span><a href="#" data-action="open" data-path="${esc(j.path)}">${esc(j.job)}</a> <span class="small ${j.inDays !== undefined && j.inDays <= 0 ? "danger" : "muted"}">${j.next ? `due ${inDaysText(j.inDays)}` : "no date"} · every ${esc(j.every)}${j.lastDone ? ` · last done ${esc(j.lastDone)}` : ""}</span></span><span class="row-actions"><button type="button" class="btn btn-ghost" data-action="home-job-done" data-path="${esc(j.path)}">Done</button></span></div>`).join("")}</div>`
+        : `<p class="small muted">Jobs that come back: each is a note with how often, how to do it, and a task in Work that moves to the next date when you mark it done.</p>`}
+    </div>
+    <div class="card band"><div class="row"><h2>${icon("house")} Things in the house</h2><span class="right-actions"><button type="button" class="btn btn-primary" data-action="home-item-add">${icon("plus")}Item</button></span></div>
+      ${its.length ? `<div class="career-stats"><div><b>${its.length}</b><span>items</span></div><div><b>${usd(total)}</b><span>recorded value</span></div><div><b>${its.filter((i) => i.manual).length}</b><span>with a manual</span></div></div>
+        ${ending.length ? `<div class="band-title">Warranty ending <span class="count">${ending.length}</span></div><div class="runs">${ending.map((i) => `<div class="run"><span><a href="#" data-action="open" data-path="${esc(i.path)}">${esc(i.name)}</a> <span class="small danger">ends ${inDaysText(i.warrantyDays)} (${esc(i.warrantyUntil!)})</span></span></div>`).join("")}</div>` : ""}
+        <div class="band-title">By room</div><div class="runs">${inv.map((r) => `<div class="run"><span><b>${esc(r.room)}</b> <span class="small muted">${r.count} item${r.count === 1 ? "" : "s"}${r.value ? ` · ${usd(r.value)}` : ""}</span><div class="small muted">${its.filter((i) => i.room === r.room).map((i) => `<a href="#" data-action="open" data-path="${esc(i.path)}">${esc(i.name)}</a>${i.manual ? " 📄" : ""}`).join(", ")}</div></span></div>`).join("")}</div>`
+        : `<p class="small muted">One note per appliance or valuable: room, brand, model, value, warranty and the PDF manual from the maker's site. The inventory by room is ready for insurance, and a warranty's end shows in Work a month ahead.</p>`}
+    </div>
+  </div></section>`;
+}
+async function homeAction(action: string, el: HTMLElement) {
+  const today = dayKey(new Date());
+  const p = el.dataset.path ?? "";
+  switch (action) {
+    case "home-starters": {
+      for (const [job, every, how] of STARTER_UPKEEP) { const path = `Home/Upkeep/${job}.md`; if (!note(path)) await createQuiet(path, UPKEEP_TEMPLATE(job, every, addPeriod(today, every), how)); }
+      toast("Added five common jobs, each due one period from today. Change any date in its note.", "ok");
+      return render();
+    }
+    case "home-job-add": {
+      const v = await fieldsDialog("A job that comes back", "", [
+        { name: "job", label: "Job", placeholder: "Change the furnace filter", required: true, wide: true },
+        { name: "every", label: "Every", kind: "choice", value: "3 months", choices: ["2 weeks", "month", "3 months", "6 months", "year", "2 years"].map((x) => ({ value: x, label: x })) },
+        { name: "next", label: "Next due", kind: "date", value: today },
+        { name: "how", label: "How (optional)", kind: "area", placeholder: "Steps, part numbers, who to call" },
+      ], "Add it");
+      if (!v) return;
+      await createQuiet(uniquePath(`Home/Upkeep/${safeName(v.job)}.md`), UPKEEP_TEMPLATE(v.job, v.every, isDay(v.next) ? v.next : today, v.how ?? ""));
+      return render();
+    }
+    case "home-job-done": {
+      const next = doneUpkeep(textOf(p)!, today);
+      await writeNote(p, next);
+      toast(`Done. Next time: ${upkeep([{ path: p, content: next }], today)[0]?.next ?? "set a date"}.`, "ok");
+      return render();
+    }
+    case "home-item-add": {
+      const v = await fieldsDialog("Add an item", "Paste the manual's PDF link from the maker's site and it shows inside the note.", [
+        { name: "name", label: "What", placeholder: "Fridge", required: true },
+        { name: "room", label: "Room", placeholder: "Kitchen" },
+        { name: "brand", label: "Brand", placeholder: "Optional" },
+        { name: "model", label: "Model", placeholder: "Optional" },
+        { name: "bought", label: "Bought", kind: "date" },
+        { name: "value", label: "Value ($)", kind: "number", placeholder: "Optional" },
+        { name: "warranty", label: "Warranty until", kind: "date", wide: true },
+        { name: "manual", label: "Manual (PDF link)", placeholder: "https://…/manual.pdf", wide: true },
+      ], "Add it");
+      if (!v) return;
+      const manual = /^https:\/\/\S+$/.test(v.manual ?? "") ? v.manual : undefined;
+      await createQuiet(uniquePath(`Home/Items/${safeName(v.name)}.md`), ITEM_TEMPLATE({ name: v.name, room: v.room || "Other", brand: v.brand || undefined, model: v.model || undefined, bought: isDay(v.bought) ? v.bought : undefined, value: amount(v.value), warrantyUntil: isDay(v.warranty) ? v.warranty : undefined, manual }));
+      return render();
+    }
   }
 }
 
@@ -3822,6 +4179,10 @@ function workspace(): string {
   if (S.tab === "care") return shell(careTab());
   if (S.tab === "career") return shell(careerTab());
   if (S.tab === "crypto") return shell(cryptoTab());
+  if (S.tab === "money") return shell(moneyTab());
+  if (S.tab === "creator") return shell(creatorTab());
+  if (S.tab === "fitness") return shell(fitnessTab());
+  if (S.tab === "home") return shell(homeTab());
   if (S.tab === "software") return shell(softwareTab());
   if (S.tab === "trips") return shell(tripsTab());
   if (S.tab === "chat") return shell(`<div class="workspace m-${S.mobilePane} ${S.sideOpen ? "" : "no-side"} ${S.asideOpen ? "" : "no-aside"}"><nav id="side" class="side" aria-label="Files">${side()}</nav>${chatHtml()}<aside id="aside" class="aside" aria-label="Sources">${chatAside()}</aside></div>`);
@@ -5906,6 +6267,8 @@ function flashCopied(what: string) {
 async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
   const pid = el.dataset.pane ? Number(el.dataset.pane) : undefined;
   const newTab = !!(ev && (ev.metaKey || ev.ctrlKey || ev.button === 1));
+  const kit = /^(money|creator|fitness|home)-/.exec(action)?.[1];
+  if (kit) return kit === "money" ? moneyAction(action, el) : kit === "creator" ? creatorAction(action, el) : kit === "fitness" ? fitnessAction(action, el) : homeAction(action, el);
   switch (action) {
     case "sign-in":
       return signIn();
@@ -6908,6 +7271,7 @@ document.addEventListener("input", (ev) => {
     case "decaydays": { S.settings.decayDays = Math.max(0, Number(v) || 0); void saveSettings(); renderSide(); break; }
     case "hidefaded": { S.settings.hideFaded = (el as HTMLInputElement).checked; void saveSettings(); renderSide(); break; }
     case "kbarchive": { S.settings.kanbanArchiveDays = Math.max(0, Number(v) || 0); void saveSettings(); break; }
+    case "workout-gpx": { const inp = el as HTMLInputElement; if (inp.files?.[0]) void importWorkoutGpx(inp.files[0]); inp.value = ""; break; }
     case "gpx": { const inp = el as HTMLInputElement; if (inp.files?.[0]) void importGpx(inp.dataset.folder!, inp.files[0]); inp.value = ""; break; }
     case "newDesc": S.newDesc = v; break;
     case "newAgent": S.newAgent = v; break;

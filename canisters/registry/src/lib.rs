@@ -1243,9 +1243,9 @@ fn set_channel_section(name: String, section: Option<String>) -> Result<Channel,
     })
 }
 /// The kits' channels: #careers (résumé reviews, interview practice, job leads) for the Career kit
-/// and #crypto (theses and trade reviews) for the Crypto kit.
+/// #crypto (theses and trade reviews) for the Crypto kit and #creators (drafts) for the Creator kit.
 fn seed_kit_channels() {
-    for (name, topic) in [("careers", "Résumés, interviews and job leads"), ("crypto", "Theses, trade reviews and what you are watching")] {
+    for (name, topic) in [("careers", "Résumés, interviews and job leads"), ("crypto", "Theses, trade reviews and what you are watching"), ("creators", "Hooks, drafts and what worked")] {
         if CHANNELS.with_borrow(|c| c.contains_key(&name.to_string())) {
             continue;
         }

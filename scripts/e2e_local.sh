@@ -392,6 +392,7 @@ SUF=$(date +%s | tail -c 5)
 expect "six channels exist" "general" icp canister call registry channels '()' --query
 expect "#careers is seeded for the Career kit" 'name = "careers"; section = opt "Lab"' icp canister call registry channels '()' --query
 expect "#crypto is seeded for the Crypto kit" 'name = "crypto"; section = opt "Lab"' icp canister call registry channels '()' --query
+expect "#creators is seeded for the Creator kit" 'name = "creators"; section = opt "Lab"' icp canister call registry channels '()' --query
 expect "the built-in channels sit in sections" 'section = opt "Lab"' icp canister call registry channels '()' --query
 expect "only admins move channels between sections" "admin only" reg set_channel_section '("help", opt "Support")'
 expect "an admin moves one" 'section = opt "Support"' icp canister call registry set_channel_section '("help", opt "Support")'
