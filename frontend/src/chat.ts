@@ -81,10 +81,29 @@ function snippetAt(body: string, at: number): string {
   return body.slice(start, end).replace(/^#+\s*|^[-*]\s+(\[[ x]\]\s*)?|^>\s*(\[![^\]]*\]\s*)?/g, "").replace(/\s+/g, " ").trim().slice(0, 240);
 }
 
-/** A grounded reply from the picked notes. ponytail: stub until the Gemini API is wired in. */
+/** The passage of a note worth sending to the model: front matter dropped, the window around the
+ *  first matching term, at most `max` characters. */
+export function excerpt(content: string, prompt: string, max = 1400): string {
+  const body = content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "").trim();
+  if (body.length <= max) return body;
+  const lower = body.toLowerCase();
+  let at = -1;
+  for (const t of terms(prompt)) { const i = lower.indexOf(t); if (i >= 0 && (at < 0 || i < at)) at = i; }
+  const start = at < 0 ? 0 : Math.max(0, at - Math.floor(max / 3));
+  return `${start > 0 ? "…" : ""}${body.slice(start, start + max).trim()}${start + max < body.length ? "…" : ""}`;
+}
+/** A citation the model wrote: [1], [2][3] or [1, 2]. */
+export const CITE = /\[(\d{1,2}(?:\s*,\s*\d{1,2})*)\]/g;
+/** Citation numbers the model used, in order of first use, limited to real sources. */
+export function cited(text: string, n: number): number[] {
+  const seen: number[] = [];
+  for (const m of text.matchAll(CITE)) for (const k of m[1].split(/\s*,\s*/).map(Number)) if (k >= 1 && k <= n && !seen.includes(k)) seen.push(k);
+  return seen;
+}
+/** A grounded reply built from the picked notes alone: the fallback when the language model is unavailable. */
 export function answer(prompt: string, picks: Pick[]): string {
   if (!picks.length) return `I did not find anything in the selected folders about “${prompt.trim()}”. Try other words, widen the folders in the panel on the right, or write a note about it first.`;
   const lines = picks.map((p) => `- **[[${base(p.path)}]]**${p.snippet ? `: ${p.snippet}` : ""}`);
   const s = picks.length === 1 ? "" : "s";
-  return `Here is what your note${s} say about that (${picks.length} note${s} looked relevant):\n\n${lines.join("\n")}\n\n_This is a preview answer built from your notes; a language model will write the full reply once it is connected._`;
+  return `Here is what your note${s} say about that (${picks.length} note${s} looked relevant):\n\n${lines.join("\n")}\n\n_The language model was not reachable, so this lists what the notes say instead._`;
 }

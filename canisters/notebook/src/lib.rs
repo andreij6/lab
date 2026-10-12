@@ -2200,7 +2200,6 @@ fn http_request_update(req: HttpRequest) -> HttpResponse {
     }
 }
 
-ic_cdk::export_candid!();
 
 #[cfg(test)]
 mod tests {
@@ -2247,5 +2246,116 @@ mod tests {
         assert_eq!(base("a/b/c.md"), "c");
         assert_eq!(stem("a/b/c.md"), "a/b/c");
         assert_eq!(stem("img.png"), "img.png");
+    }
+}
+
+// ---------------------------------------------------------------- answers from the LLM canister
+// The browser picks the relevant notes (System 1, see frontend/src/chat.ts) and sends excerpts; the
+// notebook asks the ICP LLM canister to answer from them with numbered citations. Owner only: paid
+// models are charged to this notebook's cycles.
+
+#[derive(CandidType, Deserialize, Clone, Debug)]
+pub struct AskSource {
+    pub path: String,
+    pub excerpt: String,
+}
+#[derive(CandidType, Deserialize, Clone, Debug)]
+pub struct AskAnswer {
+    pub text: String,
+    /// the model that actually answered (a paid model falls back to the best free one)
+    pub model: String,
+}
+#[derive(CandidType, Serialize)]
+struct LlmRequest {
+    model: String,
+    messages: Vec<ic_llm::ChatMessage>,
+    tools: Option<Vec<ic_llm::Tool>>,
+}
+const PAID_MODELS: &[&str] = &["z-ai:glm-5.2", "gemma3:27b"];
+/// the strongest free model, used when a paid one cannot be afforded or fails
+const FREE_FALLBACK: &str = "qwen3:32b";
+/// paid models want at least this attached; unused cycles come back
+const LLM_CYCLES: u128 = 100_000_000_000;
+/// the LLM canister caps a request at 10 KiB across all messages
+const PROMPT_BUDGET: usize = 9_600;
+const ASK_SYSTEM: &str = "You answer questions using only the notes provided by the user. Each note is numbered like [1]. After every sentence that uses a note, cite it with its number in square brackets, for example [1] or [2][3]. Only cite numbers that exist. If the notes do not contain the answer, say so plainly and say what is missing. Be concise and answer in Markdown.";
+
+fn clip(s: &str, max: usize) -> String {
+    if s.len() <= max { return s.to_string(); }
+    let mut out: String = String::new();
+    for ch in s.chars() { if out.len() + ch.len_utf8() > max { break; } out.push(ch); }
+    out.push('…');
+    out
+}
+/// Drop a reasoning model's `<think>…</think>` preamble.
+fn strip_think(s: &str) -> String {
+    match (s.find("<think>"), s.find("</think>")) {
+        (Some(a), Some(b)) if b > a => format!("{}{}", &s[..a], &s[b + 8..]).trim().to_string(),
+        _ => s.trim().to_string(),
+    }
+}
+/// The prompt the model sees: numbered excerpts, cut to fit the canister's size limit.
+fn ask_prompt(question: &str, sources: &[AskSource], model: &str) -> String {
+    let tail = format!("Question: {question}{}", if model.starts_with("qwen3") { " /no_think" } else { "" });
+    let mut room = PROMPT_BUDGET.saturating_sub(ASK_SYSTEM.len() + tail.len() + 16);
+    let mut ctx = String::from("Notes:\n\n");
+    for (i, s) in sources.iter().enumerate() {
+        let head = format!("[{}] {}\n", i + 1, s.path);
+        if room < head.len() + 120 { break; }
+        let body = clip(s.excerpt.trim(), room - head.len() - 2);
+        let block = format!("{head}{body}\n\n");
+        room = room.saturating_sub(block.len());
+        ctx.push_str(&block);
+    }
+    format!("{ctx}{tail}")
+}
+async fn llm_chat(llm: Principal, model: &str, user: String) -> Result<String, String> {
+    let paid = PAID_MODELS.contains(&model);
+    if paid && canister_cycle_balance() < LLM_CYCLES * 4 {
+        return Err("this notebook has too few cycles for a paid model".into());
+    }
+    let req = LlmRequest { model: model.to_string(), messages: vec![ic_llm::ChatMessage::System { content: ASK_SYSTEM.into() }, ic_llm::ChatMessage::User { content: user }], tools: None };
+    let r = Call::bounded_wait(llm, "v1_chat").change_timeout(300).with_cycles(if paid { LLM_CYCLES } else { 0 }).with_arg(&req).await.map_err(|e| e.to_string())?;
+    let resp: ic_llm::Response = r.candid().map_err(|e| e.to_string())?;
+    let text = strip_think(&resp.message.content.unwrap_or_default());
+    if text.is_empty() { Err("the model returned nothing".into()) } else { Ok(text) }
+}
+#[update]
+async fn ask(llm: Principal, model: String, question: String, sources: Vec<AskSource>) -> Result<AskAnswer, NotebookError> {
+    owner()?;
+    let question = question.trim().to_string();
+    if question.is_empty() || question.chars().count() > 1_000 {
+        return Err(NotebookError::Invalid("question: 1-1000 characters".into()));
+    }
+    if sources.len() > 10 {
+        return Err(NotebookError::Invalid("at most 10 notes per question".into()));
+    }
+    let mut last = String::new();
+    let mut tried: Vec<String> = vec![];
+    for m in [model.trim().to_string(), FREE_FALLBACK.to_string()] {
+        if m.is_empty() || tried.contains(&m) { continue; }
+        tried.push(m.clone());
+        match llm_chat(llm, &m, ask_prompt(&question, &sources, &m)).await {
+            Ok(text) => return Ok(AskAnswer { text, model: m }),
+            Err(e) => last = format!("{m}: {e}"),
+        }
+    }
+    Err(NotebookError::Invalid(format!("the language model did not answer ({last})")))
+}
+
+ic_cdk::export_candid!();
+
+#[cfg(test)]
+mod ask_tests {
+    use super::*;
+    #[test]
+    fn prompt_fits_the_llm_canister_limit_and_numbers_sources() {
+        let big = "word ".repeat(5_000);
+        let sources: Vec<AskSource> = (0..8).map(|i| AskSource { path: format!("n{i}.md"), excerpt: big.clone() }).collect();
+        let p = ask_prompt("what is it?", &sources, "qwen3:32b");
+        assert!(p.len() + ASK_SYSTEM.len() <= 10 * 1024, "{}", p.len());
+        assert!(p.starts_with("Notes:\n\n[1] n0.md\n") && p.ends_with("what is it? /no_think"));
+        assert_eq!(strip_think("<think>hmm</think>\nAnswer [1]"), "Answer [1]");
+        assert_eq!(clip("héllo", 3), "hé…");
     }
 }

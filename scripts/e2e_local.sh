@@ -169,6 +169,17 @@ echo "== delete"
 expect "deleted" "Ok" notebook delete '("Projects/Big Ideas.md")'
 expect "second delete is NotFound" "NotFound" notebook delete '("Projects/Big Ideas.md")'
 expect "info counts 7 files (index.md, the seeded project, the daily note, the Lean note, the paper and two clips)" "files = 7" notebook info '()' --query
+echo "== chat with notes: the notebook asks the LLM canister (locally the Ollama stand-in)"
+LLM=$(icp canister status llm -i 2>/dev/null || true)
+if [ -n "$LLM" ]; then
+  ASKSRC='vec { record { path = "Ideas.md"; excerpt = "Ideas: a reading list and a habit tracker." } }'
+  expect "a stranger cannot ask someone else's notebook" "Unauthorized" icp canister call "$V" ask "(principal \"$LLM\", \"qwen3:32b\", \"what ideas?\", $ASKSRC)" --identity "$OTHER"
+  expect "an empty question is refused" "1-1000 characters" notebook ask "(principal \"$LLM\", \"qwen3:32b\", \"  \", $ASKSRC)"
+  expect "too many notes are refused" "at most 10 notes" notebook ask "(principal \"$LLM\", \"qwen3:32b\", \"q\", vec { $(for i in 1 2 3 4 5 6 7 8 9 10 11; do printf 'record { path = "a.md"; excerpt = "x" };'; done) })"
+  if curl -s -m 2 localhost:11434/api/tags >/dev/null; then
+    expect "the notebook answers from its notes, citing them" '[1]' notebook ask "(principal \"$LLM\", \"qwen3:32b\", \"What ideas are in my notes? Cite the note.\", $ASKSRC)"
+  else echo "  skip: Ollama is not running, so the live answer is not checked"; fi
+fi
 
 echo "== keep it running: ICP sent to the notebook account becomes cycles"
 C0=$(notebook info '()' --query | grep -o 'cycles = [0-9_]*' | head -1 | tr -d 'cycles =_')

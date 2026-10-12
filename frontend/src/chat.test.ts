@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildIndex } from "./notes.ts";
-import { answer, decide, inFolders, terms } from "./chat.ts";
+import { answer, cited, decide, excerpt, inFolders, terms } from "./chat.ts";
 
 const notes = [
   { path: "Projects/Rust on ICP.md", content: "# Rust on ICP\n\nCanisters compile to wasm. Cycles keep a canister alive.\n#icp", modified: 3 },
@@ -39,4 +39,13 @@ test("answer quotes the picks and says when there are none", () => {
   const a = answer("cycles", decide("cycles", notes, idx));
   assert.match(a, /\[\[Rust on ICP\]\]/);
   assert.match(answer("zzz", []), /did not find/);
+});
+
+test("excerpts centre on the question and citations are read back", () => {
+  const body = `---\ntags: x\n---\n${"filler ".repeat(400)}The canister owns the notebook. ${"tail ".repeat(400)}`;
+  const e = excerpt(body, "who owns the canister?", 300);
+  assert.ok(e.length <= 302 && e.includes("canister owns") && e.startsWith("…") && !e.includes("tags:"));
+  assert.equal(excerpt("short note", "x"), "short note");
+  assert.deepEqual(cited("A [2] and B [1][2], not [9] or [0].", 3), [2, 1]);
+  assert.deepEqual(cited("Both [1, 3] say so.", 3), [1, 3]);
 });

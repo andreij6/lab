@@ -1,0 +1,83 @@
+type AssistantMessage = record {
+  content : opt text;
+  tool_calls : vec ToolCall;
+};
+// A message in a chat.
+type ChatMessage = variant {
+  tool : record { content : text; tool_call_id : text };
+  user : record { content : text };
+  assistant : AssistantMessage;
+  system : record { content : text };
+};
+type Function = record {
+  name : text;
+  parameters : opt Parameters;
+  description : opt text;
+};
+type FunctionCall = record { name : text; arguments : vec ToolCallArgument };
+// # HTTP Header.
+// 
+// Represents a HTTP header.
+// 
+// See [`HttpRequestArgs::headers`] and [`HttpRequestResult::headers`].
+type HttpHeader = record {
+  // Value of the header.
+  value : text;
+  // Name of the header.
+  name : text;
+};
+// # HTTP Request Result
+// 
+// Result type of [`http_request`](https://docs.internetcomputer.org/references/management-canister/#http_request).
+type HttpRequestResult = record {
+  // The response status (e.g. 200, 404).
+  status : nat;
+  // The response’s body.
+  body : blob;
+  // List of HTTP response headers and their corresponding values.
+  headers : vec HttpHeader;
+};
+type Parameters = record {
+  "type" : text;
+  properties : opt vec Property;
+  required : opt vec text;
+};
+type Property = record {
+  enum : opt vec text;
+  name : text;
+  "type" : text;
+  description : opt text;
+};
+type Request = record {
+  model : text;
+  tools : opt vec Tool;
+  messages : vec ChatMessage;
+};
+type Response = record { message : AssistantMessage };
+type Tool = variant { function : Function };
+type ToolCall = record { id : text; function : FunctionCall };
+// An argument to be provided to a tool.
+type ToolCallArgument = record { value : text; name : text };
+// # Transform Args.
+// 
+// ```text
+// record {
+// response : http_response;
+// context : blob;
+// }
+// ```
+// 
+// See [`TransformContext`].
+type TransformArgs = record {
+  // Context for response transformation
+  context : blob;
+  // Raw response from remote service, to be transformed
+  response : HttpRequestResult;
+};
+service : {
+  model : () -> (text) query;
+  // Controllers pick the Ollama model the stand-in uses (`ollama list` shows what is installed).
+  set_model : (text) -> ();
+  transform : (TransformArgs) -> (HttpRequestResult) query;
+  v1_chat : (Request) -> (Response);
+}
