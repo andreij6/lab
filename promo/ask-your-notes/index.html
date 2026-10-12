@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1080">
+<title>Lab: Ask your notes</title>
+<!-- A 15-second promo, 1080x1080. Everything is a pure function of time: seek(t) draws frame t,
+     so the renderer (render.mjs) can step it frame by frame. Opened normally it just loops. -->
+<style>
+  :root {
+    --bg: oklch(17% 0.01 281); --bg-1: oklch(23.5% 0.00125 281); --bg-2: oklch(27.5% 0.00375 281); --bg-3: oklch(31% 0.004 281);
+    --line: oklch(100% 0.05 281 / 0.08); --fg: oklch(90% 0.004 281); --fg-2: oklch(72% 0.004 281); --fg-3: oklch(55% 0.008 281);
+    --accent: hsl(212 86% 55%); --accent-2: hsl(212 86% 70%); --accent-dim: hsl(212 86% 55% / .16); --ok: #4ade80; --gold: #fde68a;
+    --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1080px; height: 1080px; overflow: hidden; background: var(--bg); color: var(--fg); font-family: var(--sans); -webkit-font-smoothing: antialiased; }
+  #stage { position: relative; width: 1080px; height: 1080px; overflow: hidden;
+    background: radial-gradient(900px 600px at 80% -10%, hsl(212 86% 40% / .35), transparent 60%), radial-gradient(800px 600px at -10% 110%, hsl(250 70% 45% / .30), transparent 60%), var(--bg); }
+  .abs { position: absolute; }
+
+  /* opening and closing titles */
+  #title { left: 0; right: 0; top: 0; bottom: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 28px; text-align: center; }
+  #title .logo { width: 132px; height: 132px; filter: drop-shadow(0 18px 40px hsl(212 86% 50% / .45)); }
+  #title h1 { font-size: 104px; font-weight: 800; letter-spacing: -.035em; line-height: 1; }
+  #title p { font-size: 38px; color: var(--fg-2); font-weight: 500; letter-spacing: -.01em; }
+
+  #head { left: 70px; right: 70px; top: 54px; display: flex; align-items: center; gap: 18px; }
+  #head .logo { width: 54px; height: 54px; }
+  #head h2 { font-size: 46px; font-weight: 800; letter-spacing: -.03em; }
+  #head span { margin-left: auto; font-size: 24px; color: var(--fg-3); font-weight: 600; }
+
+  /* the app window */
+  #win { left: 60px; top: 150px; width: 960px; height: 770px; border-radius: 22px; background: var(--bg-1); border: 1px solid var(--line); box-shadow: 0 40px 120px rgba(0,0,0,.6); overflow: hidden; }
+  .bar { height: 46px; display: flex; align-items: center; gap: 10px; padding: 0 18px; border-bottom: 1px solid var(--line); background: var(--bg-2); }
+  .bar i { width: 13px; height: 13px; border-radius: 50%; background: #ff5f57; } .bar i:nth-child(2) { background: #febc2e; } .bar i:nth-child(3) { background: #28c840; }
+  .bar b { margin-left: 14px; font-size: 17px; color: var(--fg-2); font-weight: 600; } .bar b em { font-style: normal; color: var(--fg-3); font-weight: 500; }
+  .body { position: absolute; top: 46px; left: 0; right: 0; bottom: 0; display: grid; grid-template-columns: 300px 1fr; }
+  .side { border-right: 1px solid var(--line); background: var(--bg-2); padding: 18px 14px; }
+  .side .h { font-size: 13px; font-weight: 800; color: var(--fg-3); letter-spacing: .1em; text-transform: uppercase; padding: 0 8px 10px; }
+  .row { display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 10px; border-radius: 9px; font-size: 18px; color: var(--fg-2); position: relative; }
+  .row.dir { color: var(--fg-3); font-weight: 600; font-size: 16px; margin-top: 6px; }
+  .row.sub { padding-left: 30px; }
+  .row svg { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .row .pick { margin-left: auto; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); display: grid; place-items: center; transform: scale(0); }
+  .row .pick svg { width: 13px; height: 13px; stroke: #fff; stroke-width: 3; }
+  .row.lit { background: var(--accent-dim); color: var(--fg); }
+  .side .foot { position: absolute; left: 14px; right: 14px; bottom: 16px; font-size: 15px; color: var(--fg-3); padding: 0 10px; }
+
+  .main { position: relative; display: flex; flex-direction: column; }
+  .thread { flex: 1; padding: 30px 34px 0; display: flex; flex-direction: column; gap: 20px; overflow: hidden; }
+  .you { align-self: flex-end; max-width: 520px; background: var(--accent); color: #fff; font-size: 22px; line-height: 1.4; padding: 14px 20px; border-radius: 20px 20px 6px 20px; font-weight: 500; box-shadow: 0 10px 30px hsl(212 86% 40% / .35); }
+  .stage-msg { display: flex; align-items: center; gap: 12px; font-size: 19px; color: var(--fg-2); }
+  .spinner { width: 20px; height: 20px; border-radius: 50%; border: 3px solid var(--accent-dim); border-top-color: var(--accent); }
+  .bot { display: flex; gap: 14px; align-items: flex-start; }
+  .bot .av { width: 40px; height: 40px; border-radius: 12px; flex: none; }
+  .bot .txt { font-size: 22px; line-height: 1.55; color: var(--fg); max-width: 540px; }
+  .bot .txt .beyond { display: block; margin-top: 14px; color: var(--fg-2); font-size: 19px; }
+  .bot .txt .beyond b { color: var(--fg-2); }
+  .cite { display: inline-grid; place-items: center; min-width: 30px; height: 26px; padding: 0 8px; margin: 0 2px; border-radius: 8px; background: var(--accent-dim); color: var(--accent-2); font-size: 16px; font-weight: 800; vertical-align: 2px; }
+  .cite.hot { background: var(--accent); color: #fff; }
+  .srcs { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+  .src { display: inline-flex; align-items: center; gap: 8px; font-size: 16px; color: var(--fg-2); background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; padding: 7px 12px; }
+  .src b { color: var(--accent-2); }
+  .composer { margin: 18px 26px 24px; height: 64px; border-radius: 16px; background: var(--bg-2); border: 1px solid var(--line); display: flex; align-items: center; padding: 0 20px; gap: 14px; font-size: 21px; color: var(--fg); }
+  .composer .ph { color: var(--fg-3); }
+  .caret { display: inline-block; width: 2px; height: 26px; background: var(--accent-2); vertical-align: -5px; margin-left: 2px; }
+  .send { margin-left: auto; width: 44px; height: 44px; border-radius: 12px; background: var(--accent); display: grid; place-items: center; flex: none; }
+  .send svg { width: 20px; height: 20px; stroke: #fff; fill: none; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+
+  /* the source note that opens from a citation */
+  #pop { left: 452px; top: 618px; width: 540px; border-radius: 18px; background: var(--bg-3); border: 1px solid hsl(212 86% 60% / .45); box-shadow: 0 30px 90px rgba(0,0,0,.6), 0 0 0 6px hsl(212 86% 55% / .12); padding: 18px 22px; }
+  #pop .p1 { font-size: 15px; color: var(--fg-3); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+  #pop h3 { font-size: 26px; margin: 6px 0 8px; letter-spacing: -.02em; }
+  #pop p { font-size: 18px; line-height: 1.5; color: var(--fg-2); }
+  #pop mark { background: hsl(48 96% 60% / .22); color: var(--fg); border-radius: 4px; padding: 0 3px; }
+  #pop .tags { margin-top: 10px; display: flex; gap: 8px; }
+  #pop .tags span { font-size: 15px; color: var(--accent-2); background: var(--accent-dim); border-radius: 999px; padding: 4px 12px; }
+
+  #cursor { width: 34px; height: 34px; left: 0; top: 0; }
+  #ripple { width: 60px; height: 60px; border-radius: 50%; border: 3px solid var(--accent-2); }
+
+  #end { inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 24px; background: radial-gradient(700px 500px at 50% 40%, hsl(212 86% 40% / .35), transparent 70%), var(--bg); }
+  #end .logo { width: 150px; height: 150px; filter: drop-shadow(0 18px 40px hsl(212 86% 50% / .5)); }
+  #end h1 { font-size: 96px; font-weight: 800; letter-spacing: -.035em; }
+  #end p { font-size: 34px; color: var(--fg-2); line-height: 1.35; max-width: 860px; }
+  #end .url { margin-top: 14px; font-size: 26px; color: var(--accent-2); font-weight: 600; background: var(--accent-dim); border-radius: 999px; padding: 12px 28px; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <svg width="0" height="0" style="position:absolute">
+    <defs>
+      <symbol id="logo" viewBox="0 0 512 512">
+        <linearGradient id="lbg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4338ca"/><stop offset="1" stop-color="#0ea5e9"/></linearGradient>
+        <linearGradient id="lliq" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7dd3fc"/><stop offset="1" stop-color="#38bdf8"/></linearGradient>
+        <rect width="512" height="512" rx="112" fill="url(#lbg)"/>
+        <path d="M208 120h96v22h-18v86l92 150c14 23-3 52-30 52H164c-27 0-44-29-30-52l92-150v-86h-18z" fill="#fff" fill-opacity=".14" stroke="#fff" stroke-width="22" stroke-linejoin="round"/>
+        <path d="M190 286h132l56 92c9 15-2 32-19 32H153c-17 0-28-17-19-32z" fill="url(#lliq)"/>
+        <circle cx="232" cy="352" r="12" fill="#fff" fill-opacity=".85"/><circle cx="282" cy="332" r="8" fill="#fff" fill-opacity=".7"/><circle cx="262" cy="386" r="6" fill="#fff" fill-opacity=".7"/>
+        <path d="M360 128l8 22 22 8-22 8-8 22-8-22-22-8 22-8z" fill="#fde68a"/>
+        <path d="M150 170l5 13 13 5-13 5-5 13-5-13-13-5 13-5z" fill="#fde68a" fill-opacity=".9"/>
+      </symbol>
+      <symbol id="file" viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></symbol>
+      <symbol id="folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+    </defs>
+  </svg>
+
+  <div id="head" class="abs"><svg class="logo"><use href="#logo"/></svg><h2>Ask your notes</h2><span>Lab</span></div>
+
+  <div id="win" class="abs">
+    <div class="bar"><i></i><i></i><i></i><b>Research <em>/ Chat with your notes</em></b></div>
+    <div class="body">
+      <div class="side">
+        <div class="h">Your notebook</div>
+        <div class="row dir"><svg><use href="#folder"/></svg>Research</div>
+        <div class="row sub" data-n="1"><svg><use href="#file"/></svg>Sleep and learning<span class="pick"><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg></span></div>
+        <div class="row sub"><svg><use href="#file"/></svg>Coffee experiments<span class="pick"></span></div>
+        <div class="row dir"><svg><use href="#folder"/></svg>Study</div>
+        <div class="row sub" data-n="2"><svg><use href="#file"/></svg>Spaced repetition<span class="pick"><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg></span></div>
+        <div class="row sub"><svg><use href="#file"/></svg>Exam plan<span class="pick"></span></div>
+        <div class="row dir"><svg><use href="#folder"/></svg>Daily</div>
+        <div class="row sub"><svg><use href="#file"/></svg>2026-10-11<span class="pick"></span></div>
+        <div class="row sub"><svg><use href="#file"/></svg>2026-10-12<span class="pick"></span></div>
+        <div class="foot" id="foot">48 notes</div>
+      </div>
+      <div class="main">
+        <div class="thread">
+          <div class="you" id="you">Does sleep actually help me remember what I study?</div>
+          <div class="stage-msg" id="reading"><span class="spinner" id="spin"></span><span id="readtxt">Reading your notes…</span></div>
+          <div class="bot" id="bot">
+            <svg class="av"><use href="#logo"/></svg>
+            <div>
+              <div class="txt" id="answer"></div>
+              <div class="srcs" id="srcs"><span class="src"><b>1</b> Sleep and learning</span><span class="src"><b>2</b> Spaced repetition</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="composer"><span id="typed"></span><span class="caret" id="caret"></span><span class="send"><svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="pop" class="abs">
+    <div class="p1">Source 1 · Research</div>
+    <h3>Sleep and learning</h3>
+    <p>Two weeks of tracking: on nights with 7+ hours, <mark>recall of the previous day's cards was 23% higher</mark>. Short nights before exams hurt more than they helped.</p>
+    <div class="tags"><span>#sleep</span><span>#study</span></div>
+  </div>
+
+  <svg id="cursor" class="abs" viewBox="0 0 24 24"><path d="M4 2l16 10.5-7 1.6-3.7 6.9z" fill="#fff" stroke="#111" stroke-width="1.4" stroke-linejoin="round"/></svg>
+  <div id="ripple" class="abs"></div>
+
+  <div id="title" class="abs"><svg class="logo"><use href="#logo"/></svg><h1>Ask your notes.</h1><p>Answers that cite your own notebook.</p></div>
+
+  <div id="end" class="abs">
+    <svg class="logo"><use href="#logo"/></svg>
+    <h1>Lab</h1>
+    <p>Organize your thoughts, get feedback, build a knowledge base. Every notebook is its own canister on the Internet Computer.</p>
+    <div class="url">cmbgr-zqaaa-aaaae-ahakq-cai.icp0.io</div>
+  </div>
+</div>
+
+<script>
+const DURATION = 15;
+const QUESTION = "Does sleep actually help me remember what I study?";
+// the answer as tokens; {1} and {2} become citation chips
+const ANSWER = "Yes, and your own notes back it up. On nights with 7+ hours your recall of the previous day's cards was clearly higher {1}, and your spaced-repetition reviews scored best after full nights {2}.";
+const BEYOND = "Beyond your notes: sleep replays and consolidates new memories, which is why reviewing before bed works.";
+
+const $ = (id) => document.getElementById(id);
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const seg = (t, a, b) => clamp((t - a) / (b - a));            // 0..1 across [a, b]
+const ease = (x) => 1 - Math.pow(1 - x, 3);                     // ease-out cubic
+const inout = (x) => (x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+const pop = (x) => { const c = 1.7; return 1 + (c + 1) * Math.pow(x - 1, 3) + c * Math.pow(x - 1, 2); }; // overshoot
+const show = (el, o, dy = 0, s = 1) => { el.style.opacity = o; el.style.transform = `translateY(${dy}px) scale(${s})`; el.style.visibility = o <= 0.001 ? "hidden" : "visible"; };
+
+const words = ANSWER.split(" ");
+function answerHtml(n) {
+  return words.slice(0, n).map((w) => w.replace(/\{(\d)\}/, (_, d) => `<span class="cite${d === "1" && hot ? " hot" : ""}">${d}</span>`)).join(" ");
+}
+let hot = false;
+
+function seek(t) {
+  // 0-2.1: title card, then it lifts away
+  const tin = ease(seg(t, 0, .7)), tout = ease(seg(t, 1.7, 2.3));
+  show($("title"), tin * (1 - tout), (1 - tin) * 30 - tout * 60, 1 - tout * .06);
+
+  // the app window and header rise in
+  const w = ease(seg(t, 1.9, 2.8));
+  show($("win"), w, (1 - w) * 80, .96 + w * .04);
+  show($("head"), ease(seg(t, 2.1, 2.9)), (1 - ease(seg(t, 2.1, 2.9))) * -20);
+
+  // 2.9-5.6: the question is typed, then sent
+  const typed = Math.round(QUESTION.length * seg(t, 2.9, 5.4));
+  const sent = t >= 5.7;
+  $("typed").innerHTML = sent ? '<span class="ph">Ask your notes…</span>' : typed ? QUESTION.slice(0, typed) : '<span class="ph">Ask your notes…</span>';
+  $("caret").style.opacity = sent ? 0 : (Math.floor(t * 2.4) % 2 === 0 || (t > 2.9 && t < 5.4) ? 1 : 0);
+  const y = ease(seg(t, 5.7, 6.1));
+  show($("you"), y, (1 - y) * 24, .96 + y * .04);
+
+  // 6.1-7.6: picking notes: the matches light up in the tree, one after the other
+  const r = ease(seg(t, 6.1, 6.4)) * (1 - ease(seg(t, 7.5, 7.8)));
+  $("reading").style.display = t < 7.8 ? "flex" : "none";
+  show($("reading"), r);
+  $("spin").style.transform = `rotate(${t * 540}deg)`;
+  $("readtxt").textContent = t < 6.9 ? "Reading your notes…" : "Picked 2 of 48 notes";
+  document.querySelectorAll(".row[data-n]").forEach((row) => {
+    const at = row.dataset.n === "1" ? 6.5 : 6.95;
+    const p = seg(t, at, at + .35);
+    row.classList.toggle("lit", t >= at);
+    row.querySelector(".pick").style.transform = `scale(${t >= at ? pop(p) : 0})`;
+  });
+  $("foot").textContent = t >= 6.95 ? "48 notes · 2 picked" : "48 notes";
+
+  // 7.8-11.3: the answer streams in word by word, then the beyond-your-notes line and sources
+  const b = ease(seg(t, 7.8, 8.1));
+  show($("bot"), b, (1 - b) * 20);
+  hot = t >= 11.75 && t < 13.2;
+  const n = Math.round(words.length * seg(t, 8.0, 10.6));
+  const beyondP = ease(seg(t, 10.7, 11.1));
+  $("answer").innerHTML = answerHtml(n) + (beyondP > 0 ? `<span class="beyond" style="opacity:${beyondP}"><b>Beyond your notes:</b> ${BEYOND.replace("Beyond your notes: ", "")}</span>` : "");
+  const s = ease(seg(t, 10.9, 11.3));
+  show($("srcs"), s, (1 - s) * 10);
+
+  // 11.2-12.1: the cursor glides to citation 1 and clicks; the source note opens
+  const chip = document.querySelector(".cite");
+  let cx = 980, cy = 1000;
+  if (chip) { const cr = chip.getBoundingClientRect(); cx = cr.left + cr.width / 2 - 4; cy = cr.top + cr.height / 2 - 2; }
+  const m = inout(seg(t, 11.0, 11.7));
+  const cursorOn = ease(seg(t, 10.9, 11.1)) * (1 - ease(seg(t, 13.0, 13.3)));
+  $("cursor").style.left = `${980 + (cx - 980) * m}px`;
+  $("cursor").style.top = `${1000 + (cy - 1000) * m}px`;
+  $("cursor").style.opacity = cursorOn;
+  const rp = seg(t, 11.72, 12.2);
+  $("ripple").style.left = `${cx - 26}px`; $("ripple").style.top = `${cy - 26}px`;
+  $("ripple").style.opacity = rp > 0 && rp < 1 ? 1 - rp : 0;
+  $("ripple").style.transform = `scale(${.3 + rp})`;
+  const pp = seg(t, 11.85, 12.25), pc = ease(seg(t, 13.0, 13.3));
+  show($("pop"), ease(pp) * (1 - pc), (1 - ease(pp)) * 16, .94 + pop(pp) * .06);
+
+  // 13.2-15: end card
+  const e = ease(seg(t, 13.2, 13.8));
+  show($("end"), e, 0, .98 + e * .02);
+}
+window.seek = seek;
+window.DURATION = DURATION;
+
+// opened directly: loop in real time; the renderer passes ?render and steps seek() itself
+if (!location.search.includes("render")) {
+  const t0 = performance.now();
+  const loop = (now) => { seek(((now - t0) / 1000) % (DURATION + 1)); requestAnimationFrame(loop); };
+  requestAnimationFrame(loop);
+} else seek(0);
+</script>
+</body>
+</html>
