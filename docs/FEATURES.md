@@ -166,6 +166,7 @@ A reddit-style board beside the chat (ribbon and top bar). Topics are the commun
 
 ## Help
 
+- **Working indicator.** Every call that changes something on a canister (joining the community, posting, voting, paying, spawning a notebook, saving) shows a progress bar along the top and a labelled pill ("Joining the community…") until it finishes; reads stay silent unless they drag on past a second. The wrapper lives around the registry and notebook actors, so new features get it for free; `scripts/queries.py` regenerates the list of read-only methods from the Candid files.
 - **On a phone.** The ⋯ button in the top bar opens a full-screen list of every route: your notebooks, the open notebook and its Chat, Graph, Study, Work and Manage views, Community, Board, Market and Admin, with the current one marked; search, help, appearance and sign-out sit below. The status bar stays pinned above the bottom tabs, and the graph fills the screen and centres itself.
 - **Help and support.** The ? button opens a form with a switch between "Report a problem" and "Suggest an idea"; both take a title and detail, and where you were is attached. Reports and ideas share one queue: yours show their kind, status and the admin's answer, and the Admin page filters by bugs or ideas.
 - **Admin queue.** Admins (registry controllers plus added principals) see every report, filter by status, read the detail and context, leave a note and set Open, In progress, Done or Won't fix.

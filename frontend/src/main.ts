@@ -26,6 +26,7 @@ import { align, isLeanNote, leanCode, parseLean, statementCard, unmentionedHyps 
 import { NEW_IPYNB, addCell as nbAddCell, isNotebookPath, moveCell as nbMoveCell, parseNotebook, serializeNotebook, type Cell as NbCell, type Notebook as Nb, type Output as NbOutput } from "./ipynb";
 import { pythonLoaded, restartPython, runPython } from "./pyodide";
 import { isSlides, splitSlides, SLIDES_TEMPLATE } from "./slides";
+import { QUERY_METHODS } from "./queries";
 import { NEW_WORKBOOK, PALETTES, addChart, chartSvg, colName, evaluate, fmt, isSheetPath, newSheet, parseCsv, parseRef, parseWorkbook, serializeWorkbook, sheetCsv, toCsv, type Chart, type ChartType, type Workbook } from "./sheet";
 import DOMPurify from "dompurify";
 import { MEETING_TEMPLATE, actionCards, decisions, isMeeting, isOverdue, markdownToDocx, meetingSummary, parseIcs, parseMeeting, parseTasks, people, reminders, setCell, sortTable, sortTasks, toggleTaskLine, tsvToTable, weeklyReview } from "./work";
@@ -118,8 +119,30 @@ async function currentIdentity(): Promise<Identity | undefined> {
   return auth.isAuthenticated() ? auth.getIdentity() : undefined;
 }
 
-const registry = (): Registry => registryActor(REGISTRY, { agentOptions: { identity: S.identity, rootKey: env.IC_ROOT_KEY } });
-const notebookOf = (id: string): NotebookApi => notebookActor(id, { agentOptions: { identity: S.identity, rootKey: env.IC_ROOT_KEY } });
+// --- "working" indicator: every canister update call shows a progress bar and a label while it runs
+// (updates take a couple of seconds on mainnet); queries stay silent unless they drag on past a second.
+const BUSY_LABELS: Record<string, string> = { join_community: "Joining the community…", post: "Posting…", edit_message: "Saving your edit…", create_post: "Posting…", comment_post: "Posting your comment…", vote_post: "Voting…", vote_comment: "Voting…", react: "Reacting…", vote: "Voting…", post_poll: "Posting the poll…", post_gist: "Sharing the note…", post_fund: "Starting the fundraiser…", post_plan_fund: "Starting the fundraiser…", donate: "Sending ICP…", rain: "Making it rain…", link_github: "Asking GitHub…", share_post: "Sharing…", pin_message: "Pinning…", delete_message: "Deleting…", delete_post: "Deleting…", create_notebook: "Spawning your notebook (about a minute)…", create_notebook_paid_by: "Spawning your notebook (about a minute)…", top_up_notebook: "Converting ICP to cycles…", pay: "Paying…", write: "Saving…", rename: "Renaming…", delete: "Deleting…", set_share: "Updating sharing…", report_bug: "Sending…", report_idea: "Sending…", buy: "Buying…", list_notebook: "Listing…", upgrade_all: "Upgrading notebooks…", restore: "Restoring…", comment: "Posting your comment…", reply: "Posting your reply…" };
+const busyCalls = new Map<number, string>();
+let busySeq = 0;
+function busyRender() {
+  let el = document.getElementById("busy");
+  const labels = [...busyCalls.values()];
+  if (!labels.length) { el?.remove(); return; }
+  if (!el) { el = Object.assign(document.createElement("div"), { id: "busy" }); el.setAttribute("role", "status"); el.setAttribute("aria-live", "polite"); document.body.append(el); }
+  el.innerHTML = `<div class="busy-bar"></div><div class="busy-pill"><span class="spin"></span>${esc(labels[labels.length - 1])}</div>`;
+}
+function trackCall<T>(method: string, p: Promise<T>): Promise<T> {
+  const id = ++busySeq;
+  const label = BUSY_LABELS[method] ?? (QUERY_METHODS.has(method) ? "Loading…" : "Working…");
+  const delay = QUERY_METHODS.has(method) ? 1200 : 120;
+  const t = window.setTimeout(() => { busyCalls.set(id, label); busyRender(); }, delay);
+  return p.finally(() => { clearTimeout(t); if (busyCalls.delete(id)) busyRender(); });
+}
+function tracked<T extends object>(actor: T): T {
+  return new Proxy(actor, { get(target, key) { const v = Reflect.get(target, key); if (typeof v !== "function" || typeof key !== "string") return v; return (...args: unknown[]) => { const r = (v as (...a: unknown[]) => unknown).apply(target, args); return r instanceof Promise ? trackCall(key, r) : r; }; } });
+}
+const registry = (): Registry => tracked(registryActor(REGISTRY, { agentOptions: { identity: S.identity, rootKey: env.IC_ROOT_KEY } }));
+const notebookOf = (id: string): NotebookApi => tracked(notebookActor(id, { agentOptions: { identity: S.identity, rootKey: env.IC_ROOT_KEY } }));
 const nb = (): NotebookApi => notebookOf(S.notebook!.canister.toText());
 
 // ---------- state ----------
