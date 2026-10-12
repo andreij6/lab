@@ -64,3 +64,8 @@ test("goals and the Anki export", () => {
   assert.deepEqual(p, { done: 3, goal: 5, ratio: 0.6 });
   assert.equal(ankiTsv([{ front: "a\tb", back: "c\nd" }], "Deck"), "#separator:tab\n#html:true\n#deck:Deck\na b\tc<br>d\n");
 });
+
+test("kit fields are not glossary terms", () => {
+  const g = glossary([{ path: "a.md", content: "Claim:: x\nQ:: y\n- Flood date:: Year 1\nOsmosis:: water moves" }]);
+  assert.deepEqual(g.map((e) => e.term), ["Osmosis"]);
+});

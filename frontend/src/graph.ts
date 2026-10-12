@@ -157,12 +157,14 @@ export class ForceGraph {
         let dy = q.y - p.y;
         let d2 = dx * dx + dy * dy;
         if (d2 < 1) { dx = (Math.random() - 0.5) * 2; dy = (Math.random() - 0.5) * 2; d2 = 1; }
+        // short-range repulsion: unbounded range spread 60 notes over ~3,000 units, dots shrank to nothing when fitted
+        if (d2 > 22500) continue;
         const f = (this.repulsion * a) / d2;
         const fx = dx * f, fy = dy * f;
         p.vx -= fx; p.vy -= fy; q.vx += fx; q.vy += fy;
       }
-      p.vx -= p.x * 0.035 * a;
-      p.vy -= p.y * 0.035 * a;
+      p.vx -= p.x * 0.06 * a;
+      p.vy -= p.y * 0.06 * a;
     }
     for (const { a: p, b: q } of this.edges) {
       const dx = q.x - p.x, dy = q.y - p.y;
@@ -193,7 +195,7 @@ export class ForceGraph {
     for (const { a, b } of this.edges) {
       const lit = focus && (a === focus || b === focus);
       c.strokeStyle = lit ? this.colors.current : this.colors.edge;
-      c.globalAlpha = lit ? 0.9 : focus ? 0.12 : 0.35;
+      c.globalAlpha = lit ? 0.9 : this.hover ? 0.12 : 0.3;
       c.beginPath();
       c.moveTo(a.x, a.y);
       c.lineTo(b.x, b.y);
@@ -204,7 +206,8 @@ export class ForceGraph {
       const isCur = n.id === this.current;
       const matched = !this.style.match || this.style.match.has(n.id);
       const lit = (!focus || n === focus || near!.has(n.id)) && matched;
-      c.globalAlpha = lit ? 1 : 0.2;
+      // hovering spotlights a neighbourhood; the open note alone only softens the rest, so the map stays readable
+      c.globalAlpha = lit ? 1 : this.hover || this.style.match ? 0.2 : 0.6;
       if (isCur || n === this.hover) {
         c.fillStyle = this.colors.halo;
         c.beginPath();
@@ -220,7 +223,7 @@ export class ForceGraph {
         c.lineTo(n.x, n.y + n.r * 1.3);
         c.lineTo(n.x - n.r * 1.3, n.y);
         c.closePath();
-      } else c.arc(n.x, n.y, n.r, 0, Math.PI * 2);
+      } else c.arc(n.x, n.y, Math.max(n.r, 3 / this.k), 0, Math.PI * 2);
       c.fill();
       if (n.unresolved) {
         c.strokeStyle = this.colors.ghost;

@@ -538,6 +538,8 @@ function decorateTables(root: ParentNode) {
   });
 }
 function afterRender(root: ParentNode = document) {
+  const segOn = document.querySelector<HTMLElement>(".wsbar .segmented .tab[aria-selected=\"true\"]");
+  if (segOn) segOn.parentElement!.scrollLeft = segOn.offsetLeft - segOn.parentElement!.clientWidth / 2 + segOn.offsetWidth / 2;
   const dark = S.theme.mode === "dark";
   decorateCode(root);
   void renderDiagrams(root, dark);
@@ -972,15 +974,9 @@ function notebooksPage(): string {
 function shell(body: string): string {
   const i = S.info;
   const low = lowCycles(i);
-  const segAll = `<nav class="segmented" role="tablist" aria-label="View">
-      <button type="button" role="tab" class="tab" aria-selected="${S.tab === "notes"}" data-action="tab" data-tab="notes">${icon("notes")}<span class="lbl">Notes</span></button>
-      <button type="button" role="tab" class="tab" aria-selected="${S.tab === "chat"}" data-action="tab" data-tab="chat">${icon("chat")}<span class="lbl">Chat</span></button>
-      <button type="button" role="tab" class="tab" aria-selected="${S.tab === "graph"}" data-action="tab" data-tab="graph">${icon("graph")}<span class="lbl">Graph</span></button>
-      <button type="button" role="tab" class="tab" aria-selected="${S.tab === "study"}" data-action="tab" data-tab="study">${icon("check")}<span class="lbl">Study</span></button>
-      <button type="button" role="tab" class="tab" aria-selected="${S.tab === "work"}" data-action="tab" data-tab="work">${icon("briefcase")}<span class="lbl">Work</span></button>
-      <button type="button" role="tab" class="tab" aria-selected="${S.tab === "manage"}" data-action="tab" data-tab="manage">${icon("bolt")}<span class="lbl">Manage</span>${i ? `<span class="pill ${low ? "low" : ""}">${tc(i.cycles)}</span>` : ""}</button>
-    </nav>`;
-  const seg = segAll.replace(/<button type="button" role="tab" class="tab" aria-selected="[^"]*" data-action="tab" data-tab="(\w+)">[\s\S]*?<\/button>/g, (m, t: string) => (featureOn(t as Tab) ? m : ""));
+  const segTab = (t: Tab, label: string, ic: string, extra = "") => featureOn(t) ? `<button type="button" role="tab" class="tab" aria-selected="${S.tab === t}" data-action="tab" data-tab="${t}" aria-label="${label}">${icon(ic)}<span class="lbl">${label}</span>${extra}</button>` : "";
+  // every enabled tab, not a fixed six: the kits were only reachable through the ⋯ sheet on phones
+  const seg = `<nav class="segmented" role="tablist" aria-label="View">${segTab("notes", "Notes", "file")}${FEATURES.map((f) => segTab(f.id, f.label.replace(" with your notes", ""), f.icon)).join("")}${segTab("manage", "Manage", "bolt", i ? `<span class="pill ${low ? "low" : ""}">${tc(i.cycles)}</span>` : "")}</nav>`;
   const mobileNav = S.mobile && (S.tab === "notes" || S.tab === "chat")
     ? `<nav class="mobilebar" aria-label="Panes">
         <button type="button" class="mtab" aria-selected="${S.mobilePane === "files"}" data-action="mpane" data-pane="files">${icon("folder")}Files</button>
@@ -1003,7 +999,7 @@ function shell(body: string): string {
 /** The vertical icon bar: sections of the open notebook on top, the app-wide places at the bottom. From a page without a notebook, a section opens the last notebook. */
 function ribbonHtml(i?: Info, low = false): string {
   if (S.mobile) return "";
-  const inNb = !!S.notebook && !S.community && !S.market && !S.admin;
+  const inNb = !!S.notebook && !S.community && !S.board && !S.market && !S.admin;
   const rb = (tab: Tab, label: string, ic: string, extra = "") => !featureOn(tab) ? "" : `<button type="button" class="rb ${inNb && S.tab === tab ? "on" : ""}" data-action="ribbon-tab" data-tab="${tab}" title="${label}" aria-label="${label}" aria-pressed="${inNb && S.tab === tab}">${icon(ic)}${extra}</button>`;
   return `<nav class="ribbon" aria-label="Sections">
       <div class="rb-group">${rb("notes", "Notes", "file")}${rb("chat", "Chat with your notes", "chat")}${rb("graph", "Knowledge graph", "graph")}${rb("study", `Study${dueTotal() ? ` · ${dueTotal()} cards due` : ""}`, "check", dueTotal() ? `<i class="rb-count">${dueTotal()}</i>` : "")}${rb("work", `Work${overdueCount() ? ` · ${overdueCount()} overdue` : ""}`, "briefcase", overdueCount() ? `<i class="rb-count danger">${overdueCount()}</i>` : "")}${rb("organize", "Organize: saved searches, triage, rules, tidy-up", "sliders")}${rb("research", "Research: sources, citations, claims, thesis", "book")}${rb("writing", "Writing: manuscript, story bible, timeline", "edit")}${rb("care", "Care: log, appointments, care team", "heart")}${rb("software", "Software: decisions, runbooks, changelog", "terminal")}${rb("trips", S.trips.watching.some((w) => w.overdue && !w.closed) ? "Trips · someone is overdue" : "Trips", "mountain", S.trips.watching.some((w) => w.overdue && !w.closed) ? `<i class="rb-dot"></i>` : "")}</div>
@@ -1691,7 +1687,7 @@ function boardPage(): string {
       <section class="main chatpane board">${main}</section>
       <aside class="aside" aria-label="Rules">${aside}</aside>
     </div>
-    ${S.mobile ? `<nav class="mobilebar" aria-label="Panes"><button type="button" class="mtab" data-action="chat-pane" data-pane="files">${icon("list")}Topics</button><button type="button" class="mtab" aria-selected="true" data-action="chat-pane" data-pane="note">${icon("book")}Posts</button><button type="button" class="mtab" data-action="chat-pane" data-pane="links">${icon("help")}Rules</button><button type="button" class="mtab" data-action="nav-home">${icon("book")}Notes</button></nav>` : ""}
+    ${S.mobile ? `<nav class="mobilebar" aria-label="Panes"><button type="button" class="mtab" data-action="chat-pane" data-pane="files">${icon("tag")}Topics</button><button type="button" class="mtab" aria-selected="true" data-action="chat-pane" data-pane="note">${icon("pin")}Posts</button><button type="button" class="mtab" data-action="chat-pane" data-pane="links">${icon("help")}Rules</button><button type="button" class="mtab" data-action="nav-home">${icon("book")}Notes</button></nav>` : ""}
   </div></div>`;
 }
 type PostPrefill = { notebook?: string; path?: string; text?: string; title?: string; body?: string; topic?: string };
@@ -1738,7 +1734,7 @@ function communityPage(): string {
       <section class="main chatpane">${chatHtmlC()}</section>
       <aside class="aside" id="onlinepane" aria-label="Online">${onlineHtml()}</aside>
     </div>
-    ${S.mobile ? `<nav class="mobilebar" aria-label="Panes"><button type="button" class="mtab" data-action="chat-pane" data-pane="files">${icon("list")}Channels</button><button type="button" class="mtab" aria-selected="true" data-action="chat-pane" data-pane="note">${icon("chat")}Chat</button><button type="button" class="mtab" data-action="chat-pane" data-pane="links">${icon("person")}Online</button><button type="button" class="mtab" data-action="nav-home">${icon("book")}Notes</button></nav>` : ""}
+    ${S.mobile ? `<nav class="mobilebar" aria-label="Panes"><button type="button" class="mtab" data-action="chat-pane" data-pane="files">${icon("list")}Channels</button><button type="button" class="mtab" aria-selected="true" data-action="chat-pane" data-pane="note">${icon("chat")}Chat</button><button type="button" class="mtab" data-action="chat-pane" data-pane="links">${icon("users")}Online</button><button type="button" class="mtab" data-action="nav-home">${icon("book")}Notes</button></nav>` : ""}
   </div></div>`;
 }
 async function createPoll() {
@@ -2211,9 +2207,9 @@ function careTab(): string {
   const qs = careQuestions(notes, last ? new Date(frontmatter(last.content).data.date!).getTime() : 0);
   const checks = S.trips.mine.filter((w) => !w.closed && /check-in/i.test(w.title));
   return `<section class="main" style="overflow:auto"><div class="page wide kit">
-    <div class="callout" data-callout="info" data-color="blue"><div class="callout-title">${icon("help")}<span>Personal notes</span></div><div class="callout-content">For keeping track and preparing conversations with clinicians. This is not a medical record and gives no medical advice.</div></div>
+    <div class="md"><div class="callout" data-callout="info" data-color="blue"><div class="callout-title">${icon("help")}<span>Personal notes</span></div><div class="callout-content">For keeping track and preparing conversations with clinicians. This is not a medical record and gives no medical advice.</div></div></div>
     <div class="card band"><div class="row"><h2>${icon("columns")} Log</h2><span class="right-actions"><button type="button" class="btn btn-primary" data-action="care-dose">${icon("plus")}Dose</button><button type="button" class="btn" data-action="care-symptom">${icon("plus")}Symptom</button>${log ? `<button type="button" class="btn btn-ghost" data-action="open" data-path="Care/Log.sheet">Open log</button>` : ""}</span></div>
-      ${rows.length > 1 ? `<div class="runs">${rows.slice(-6).reverse().filter((r) => r[0]).map((r) => `<div class="run"><span><b>${esc(String(r[3] ?? ""))}</b> <span class="small muted">${esc(String(r[2] ?? ""))}${r[4] ? ` · ${esc(String(r[4]))}` : ""}${r[5] !== null && r[5] !== "" ? ` · severity ${esc(String(r[5]))}/10` : ""}${r[6] ? ` · ${esc(String(r[6]))}` : ""}</span></span><span class="small faint">${esc(String(r[0]))} ${esc(String(r[1] ?? ""))}</span></div>`).join("")}</div>` : `<p class="muted small">Log doses and symptoms with two taps; the log sheet charts severity by day.</p>`}
+      ${rows.length > 1 ? `<div class="runs">${rows.slice(1).slice(-6).reverse().filter((r) => r[0]).map((r) => `<div class="run"><span><b>${esc(String(r[3] ?? ""))}</b> <span class="small muted">${esc(String(r[2] ?? ""))}${r[4] ? ` · ${esc(String(r[4]))}` : ""}${r[5] != null && r[5] !== "" ? ` · severity ${esc(String(r[5]))}/10` : ""}${r[6] ? ` · ${esc(String(r[6]))}` : ""}</span></span><span class="small faint">${esc(String(r[0]))} ${esc(String(r[1] ?? ""))}</span></div>`).join("")}</div>` : `<p class="muted small">Log doses and symptoms with two taps; the log sheet charts severity by day.</p>`}
     </div>
     <div class="grid2">
       <div class="card band"><div class="row"><h2>${icon("calendar")} Appointments</h2><span class="right-actions"><button type="button" class="btn" data-action="appt-new">${icon("plus")}Appointment</button></span></div>
@@ -2272,10 +2268,10 @@ function softwareTab(): string {
   const graph = adrs.length ? `<svg viewBox="0 0 520 ${H}" class="adr-graph" role="img" aria-label="Decision records and what supersedes what">${adrs.map((a, i) => { const by = supersededBy.get(a.path); const j = by ? adrs.findIndex((x) => x.path === by) : -1; return j >= 0 ? `<path d="M 30 ${y(i)} C 6 ${y(i)}, 6 ${y(j)}, 30 ${y(j)}" fill="none" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#arr)"/>` : ""; }).join("")}<defs><marker id="arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--accent)"/></marker></defs>${adrs.map((a, i) => { const st = (frontmatter(a.content).data.status ?? "proposed").toLowerCase(); return `<g><circle cx="38" cy="${y(i)}" r="6" fill="${st === "accepted" ? "#4fc27a" : st === "proposed" ? "#4f8cff" : "#888"}"/><text x="52" y="${y(i) + 4}" font-size="12" fill="currentColor">${esc(base(a.path).slice(0, 60))}</text></g>`; }).join("")}</svg>` : "";
   return `<section class="main" style="overflow:auto"><div class="page wide kit">
     <div class="card band"><div class="row"><h2>${icon("template")} Decision records</h2><span class="right-actions"><button type="button" class="btn btn-primary" data-action="adr-new">${icon("plus")}New ADR</button></span></div>
-      ${adrs.length ? `<div class="runs">${adrs.map((a) => { const d = frontmatter(a.content).data; const by = supersededBy.get(a.path); return `<div class="run"><span><a href="#" data-action="open" data-path="${esc(a.path)}">${esc(base(a.path))}</a>${by ? ` <span class="small faint">→ superseded by ${esc(base(by))}</span>` : ""}</span><span class="row-actions">${pill((d.status ?? "proposed").toLowerCase())}<select class="input" name="adrstatus" data-path="${esc(a.path)}" aria-label="Status of ${esc(base(a.path))}" style="max-width:130px">${ADR_STATUSES.map((s) => `<option ${s === (d.status ?? "proposed").toLowerCase() ? "selected" : ""}>${s}</option>`).join("")}</select></span></div>`; }).join("")}</div>${graph}` : `<p class="muted small">Architecture decisions with a status and what they supersede, numbered ADR-0001 onwards.</p>`}
+      ${adrs.length ? `<div class="runs">${adrs.map((a) => { const d = frontmatter(a.content).data; const by = supersededBy.get(a.path); return `<div class="run adr-row"><span><a href="#" data-action="open" data-path="${esc(a.path)}">${esc(base(a.path))}</a>${by ? ` <span class="small faint">→ superseded by ${esc(base(by))}</span>` : ""}</span><span class="row-actions"><select class="input" name="adrstatus" data-path="${esc(a.path)}" aria-label="Status of ${esc(base(a.path))}" style="max-width:130px">${ADR_STATUSES.map((s) => `<option ${s === (d.status ?? "proposed").toLowerCase() ? "selected" : ""}>${s}</option>`).join("")}</select></span></div>`; }).join("")}</div>${graph}` : `<p class="muted small">Architecture decisions with a status and what they supersede, numbered ADR-0001 onwards.</p>`}
     </div>
     <div class="grid2">
-      <div class="card band"><div class="row"><h2>${icon("command")} Runbooks</h2><span class="right-actions"><button type="button" class="btn" data-action="runbook-new">${icon("plus")}Runbook</button></span></div>
+      <div class="card band"><div class="row"><h2>${icon("terminal")} Runbooks</h2><span class="right-actions"><button type="button" class="btn" data-action="runbook-new">${icon("plus")}Runbook</button></span></div>
         <p class="small muted">Every code block in a note gets a Copy button; Python blocks also get Run. Post-mortems that link a runbook show up under it.</p>
         ${runbooks.length ? `<div class="runs">${runbooks.map((r) => { const d = frontmatter(r.content).data; const linked = pms(r.path); return `<div class="run"><span><a href="#" data-action="open" data-path="${esc(r.path)}">${esc(base(r.path))}</a> <span class="small faint">${esc(d.service ?? "")}${d.last_reviewed ? ` · reviewed ${esc(d.last_reviewed)}` : ""}</span>${linked.length ? `<div class="small">${linked.map((p) => `<a href="#" data-action="open" data-path="${esc(p)}">${esc(base(p))}</a>`).join(", ")}</div>` : ""}</span></div>`; }).join("")}</div>` : ""}</div>
       <div class="card band"><div class="row"><h2>${icon("history")} Changelog</h2><span class="right-actions"><button type="button" class="btn" data-action="change-new">${icon("plus")}Change</button><button type="button" class="btn btn-primary" data-action="changelog-build" ${cl.changes.length ? "" : "disabled"}>Build &amp; publish</button></span></div>
@@ -3317,6 +3313,7 @@ function graphTab(): string {
 // --- workspace: manage tab (cycles, export, canister)
 
 function manageTab(): string {
+  if (S.manageTab === "market" && !flag("market")) S.manageTab = "finance";
   const i = S.info;
   const v = S.notebook!;
   const low = lowCycles(i);
@@ -3332,7 +3329,7 @@ function manageTab(): string {
       <div class="stat"><div class="label">Topped up</div><div class="num">${i ? `${icp(i.total_topped_up_e8s)} ICP` : "…"}</div><div class="small muted">${i ? `→ ${tc(i.total_cycles_from_topups)}` : ""}</div></div>
     </div>
     <p class="small muted nudge">Canister <code>${v.canister.toText()}</code> · created ${when(v.created_at)} · controllers: you and the registry.</p>
-    <nav class="segmented sub" role="tablist" aria-label="Manage sections">${MANAGE_TABS.map(([k, label, ic]) => `<button type="button" role="tab" class="tab" aria-selected="${S.manageTab === k}" data-action="manage-tab" data-tab="${k}">${icon(ic)}<span class="lbl">${label}</span></button>`).join("")}</nav>
+    <nav class="segmented sub" role="tablist" aria-label="Manage sections">${MANAGE_TABS.filter(([k]) => k !== "market" || flag("market")).map(([k, label, ic]) => `<button type="button" role="tab" class="tab" aria-selected="${S.manageTab === k}" data-action="manage-tab" data-tab="${k}">${icon(ic)}<span class="lbl">${label}</span></button>`).join("")}</nav>
     ${S.manageTab === "notebook" ? featuresCard() : ""}
     ${S.manageTab === "notebook" ? `<form class="card band" data-form="nb-meta"><h2>${esc(notebookEmoji(v))} Icon and description</h2><p class="muted small">What the notebook's card shows on the list. Leave the icon empty to let the app pick one from the name.</p><div class="row tight"><label class="field"><span class="label">Icon (one emoji)</span><input class="input" name="emoji" value="${esc(v.emoji ?? "")}" placeholder="${esc(notebookEmoji(v))}" maxlength="4" style="max-width:90px;font-size:1.3rem;text-align:center"></label><label class="field" style="flex:1;min-width:220px"><span class="label">Description</span><input class="input" name="desc" value="${esc(v.description ?? "")}" maxlength="280" placeholder="What it is for, who it is for"></label><button type="submit" class="btn btn-primary" style="align-self:flex-end" ${S.busy ? "disabled" : ""}>Save</button></div></form>` : ""}
     ${S.manageTab === "finance" ? `
@@ -5501,11 +5498,11 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
     case "noop": return;
     case "ribbon-tab": {
       const tab = el.dataset.tab as Tab;
-      if (S.notebook && !S.community && !S.market && !S.admin) return onAction("tab", el, ev!);
+      if (S.notebook && !S.community && !S.board && !S.market && !S.admin) return onAction("tab", el, ev!);
       const id = S.notebook?.canister.toText() ?? store("nb-last")?.match(/notebook\/([a-z0-9-]+)/)?.[1] ?? S.notebooks?.[0]?.canister.toText();
       if (!id) { location.hash = "#/"; return; }
       S.tab = tab;
-      S.community = undefined; clearInterval(chatTimer); S.market = undefined; S.admin = undefined;
+      S.community = undefined; clearInterval(chatTimer); S.board = undefined; S.market = undefined; S.admin = undefined;
       const same = S.notebook?.canister.toText() === id;
       location.hash = `#/notebook/${id}`;
       if (same) render();
@@ -6738,12 +6735,10 @@ window.addEventListener("hashchange", () => {
   if (S.market) {
     S.market = undefined;
     render();
-    if (!location.hash.startsWith("#/notebook/")) return;
   }
   if (S.admin) {
     S.admin = undefined;
     render();
-    if (!location.hash.startsWith("#/notebook/")) return;
   }
   if (S.shared) {
     S.shared = undefined;

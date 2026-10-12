@@ -3,6 +3,10 @@
 // ponytail: summaries and questions are extractive; the LLM replaces `summarise` and `questionsFor`.
 import { frontmatter, headings, outsideCode, section, type NoteLike } from "./notes.ts";
 
+/** `Claim::`, `Q::` and friends are fields the kits read, not glossary terms. */
+const FIELD = /^(claim|q|ask|due|date|status|priority|source|owner)$|\sdate$/i;
+const termLine = (line: string) => { const m = /^([^:`\n]{1,80}?)::\s*(.+)$/.exec(line.trim()); return m && !FIELD.test(m[1].trim().replace(/^[-*]\s+/, "")) ? m : null; };
+
 /** `Term:: definition` lines outside quiz notes make the glossary. */
 export type Entry = { term: string; definition: string; path: string };
 export function glossary(notes: NoteLike[]): Entry[] {
@@ -12,7 +16,7 @@ export function glossary(notes: NoteLike[]): Entry[] {
     const fm = frontmatter(n.content);
     if (fm.data.quiz) continue;
     for (const line of outsideCode(fm.body, (x) => x).split("\n")) {
-      const m = /^([^:`\n]{1,80}?)::\s*(.+)$/.exec(line.trim());
+      const m = termLine(line);
       if (m) out.push({ term: m[1].trim(), definition: m[2].trim(), path: n.path });
     }
   }
@@ -36,7 +40,7 @@ export function cardsFromNote(content: string, title: string): string {
     add(s.replace(/==([^=\n]+)==/g, "{{$1}}"));
   }
   for (const line of body.split("\n")) {
-    const m = /^([^:`\n]{1,80}?)::\s*(.+)$/.exec(line.trim());
+    const m = termLine(line);
     if (m) add(`${m[1].trim()}::${m[2].trim()}`);
   }
   for (const h of headings(content)) {
