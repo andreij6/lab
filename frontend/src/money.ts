@@ -120,3 +120,72 @@ export function recordNetWorth(md: string, date: string, total: number): string 
   return lines.join("\n");
 }
 export const NET_WORTH_NOTE = `# Net worth\n\nOne row per account. Amounts are dollars (a debt is negative) or a coin quantity like \`0.05 BTC\`, priced live.\n\n| Account | Kind | Amount |\n| --- | --- | --- |\n| Checking | cash | 2,500 |\n| Savings | cash | 8,000 |\n| Retirement | investments | 20,000 |\n| Bitcoin | crypto | 0.05 BTC |\n| Credit card | debt | -600 |\n\n## History\n\n`;
+
+// ---- templates: two more ways to budget, and FIRE and Coast FIRE calculators
+
+const sheet = (name: string, rows: string[][], charts: Parameters<typeof serializeWorkbook>[0]["sheets"][number]["charts"] = []) => ({ name, rows, charts });
+/** 50/30/20: needs half of take-home pay, wants 30%, savings 20%. Each line is tagged Need, Want or Save. */
+export function fiftyThirtyTwentyWorkbook(): string {
+  const lines = [["Rent or mortgage", "Need", "1500"], ["Groceries", "Need", "400"], ["Utilities", "Need", "150"], ["Transport", "Need", "200"], ["Eating out", "Want", "200"], ["Fun", "Want", "250"], ["Subscriptions", "Want", "60"], ["Emergency fund", "Save", "500"], ["Retirement", "Save", "500"]];
+  const first = 4, last = first + lines.length - 1;
+  const kind = (label: string, tag: string, pct: string, r: number) => [label, pct, `=$B$1*B${r}`, `=SUMIF($B$${first}:$B$${last}, "${tag}", $C$${first}:$C$${last})`, `=C${r}-D${r}`];
+  const s = last + 3;
+  return serializeWorkbook({ sheets: [sheet("50-30-20", [
+    ["Take-home pay a month", "5000", "Tag each line Need, Want or Save"], ["", "", ""], ["Line", "Kind", "Amount"], ...lines, ["", "", ""],
+    ["Kind", "Target %", "Target", "Planned", "Room left"], kind("Needs", "Need", "50%", s), kind("Wants", "Want", "30%", s + 1), kind("Savings", "Save", "20%", s + 2),
+    ["Total", `=SUM(B${s}:B${s + 2})`, `=SUM(C${s}:C${s + 2})`, `=SUM(D${s}:D${s + 2})`, `=C${s + 3}-D${s + 3}`],
+  ], [{ id: "fifty", type: "bar", title: "Target and planned", labels: `A${s}:A${s + 2}`, values: [`C${s}:C${s + 2}`, `D${s}:D${s + 2}`], legend: "bottom" }])] });
+}
+/** Zero-based: every dollar of income gets a job until Left to assign is 0. */
+export function zeroBasedWorkbook(): string {
+  const jobs = [["Rent or mortgage", "1500"], ["Groceries", "450"], ["Utilities", "150"], ["Transport", "200"], ["Debt payments", "300"], ["Emergency fund", "500"], ["Retirement", "600"], ["Fun", "200"], ["Gifts", "100"]];
+  const first = 7, last = first + jobs.length - 1;
+  return serializeWorkbook({ sheets: [sheet("Zero-based", [
+    ["Income this month", "Amount"], ["Paycheck", "4500"], ["Side income", "500"], ["Total income", "=SUM(B2:B3)"], ["", ""],
+    ["Job for the money", "Assigned", "Spent", "Left"], ...jobs.map(([j, a], i) => [j, a, "0", `=B${first + i}-C${first + i}`]),
+    ["Total", `=SUM(B${first}:B${last})`, `=SUM(C${first}:C${last})`, `=SUM(D${first}:D${last})`], ["", ""],
+    ["Left to assign (make it 0)", `=B4-B${last + 1}`],
+  ])] });
+}
+const YEARS = 50;
+/** FIRE: the nest egg that pays for a year of spending at a safe withdrawal rate, and how long saving takes to reach it. */
+export function fireWorkbook(): string {
+  const proj = Array.from({ length: YEARS }, (_, i) => { const r = i + 2; return [String(i + 1), `=FIRE!$B$2+A${r}`, i ? `=F${r - 1}` : "=FIRE!$B$3", "=FIRE!$B$4", `=C${r}*FIRE!$B$6`, `=C${r}+D${r}+E${r}`, "=FIRE!$B$10"]; });
+  return serializeWorkbook({ sheets: [
+    sheet("FIRE", [
+      ["Your numbers", "Value", "Notes"], ["Current age", "30", ""], ["Invested now", "50000", "Everything invested for retirement"], ["Saving each year", "20000", "Added at the end of each year"],
+      ["Spending each year in retirement", "40000", "In today's dollars"], ["Expected return after inflation", "5%", "Stocks have returned about 5-7% a year after inflation"], ["Safe withdrawal rate", "4%", "The 4% rule; 3.5% is more cautious"],
+      ["", "", ""], ["Results", "", ""], ["FIRE number", "=ROUND(B5/B7, 0)", "Spending ÷ withdrawal rate"],
+      ["Years to FIRE", "=IF(B3>=B10, 0, ROUND(NPER(B6, -B4, -B3, B10), 1))", ""], ["FIRE age", "=ROUND(B2+B11, 1)", ""],
+      ["Saving a year to get there in 10 years", "=ROUND(-PMT(B6, 10, -B3, B10), 0)", ""],
+    ]),
+    sheet("Projection", [["Year", "Age", "Start", "Saved", "Growth", "End", "FIRE number"], ...proj], [{ id: "fire", type: "line", title: "Invested and the FIRE number", labels: `B2:B${YEARS + 1}`, values: [`F2:F${YEARS + 1}`, `G2:G${YEARS + 1}`], legend: "bottom" }]),
+  ] });
+}
+/** Coast FIRE: invested enough today that growth alone reaches the FIRE number by retirement age, so saving can stop. */
+export function coastFireWorkbook(): string {
+  const proj = Array.from({ length: YEARS }, (_, i) => {
+    const r = i + 2;
+    // once coasting, saving stops and growth does the rest
+    return [String(i), `=Coast!$B$2+A${r}`, i ? `=IF(E${r - 1}=1, C${r - 1}*(1+Coast!$B$6), C${r - 1}*(1+Coast!$B$6)+Coast!$B$8)` : "=Coast!$B$4", `=Coast!$B$11/(1+Coast!$B$6)^MAX(0, Coast!$B$3-B${r})`, `=IF(C${r}>=D${r}, 1, 0)`];
+  });
+  return serializeWorkbook({ sheets: [
+    sheet("Coast", [
+      ["Your numbers", "Value", "Notes"], ["Current age", "30", ""], ["Retirement age", "60", ""], ["Invested now", "50000", ""],
+      ["Spending each year in retirement", "40000", "In today's dollars"], ["Expected return after inflation", "5%", ""], ["Safe withdrawal rate", "4%", ""],
+      ["Saving each year until you coast", "15000", "Stops once you reach your Coast FIRE number"], ["", "", ""], ["Results", "", ""],
+      ["FIRE number", "=ROUND(B5/B7, 0)", "Needed at retirement"], ["Coast FIRE number today", "=ROUND(B11/(1+B6)^(B3-B2), 0)", "Grows to the FIRE number by retirement with no more saving"],
+      ["Invested now grows to", "=ROUND(B4*(1+B6)^(B3-B2), 0)", "By retirement, saving nothing more"], ["Coasting already?", `=IF(B4>=B12, "Yes", "Not yet")`, ""],
+      ["Still needed today", "=MAX(0, B12-B4)", ""], ["Coast age", `=IFERROR(INDEX(Projection!B2:B${YEARS + 1}, MATCH(1, Projection!E2:E${YEARS + 1})), "Not within ${YEARS} years")`, "When you can stop saving"],
+    ]),
+    sheet("Projection", [["Year", "Age", "Invested", "Coast number at this age", "Coasting"], ...proj], [{ id: "coast", type: "line", title: "Invested and the Coast FIRE number", labels: `B2:B${YEARS + 1}`, values: [`C2:C${YEARS + 1}`, `D2:D${YEARS + 1}`], legend: "bottom" }]),
+  ] });
+}
+/** A value from an evaluated sheet by its label in column A. */
+export const byLabel = (vals: Value[][] | undefined, label: string): Value | undefined => vals?.find((r) => String(r[0] ?? "").trim().toLowerCase() === label.toLowerCase())?.[1];
+export const MONEY_TEMPLATES: { path: string; label: string; make: () => string }[] = [
+  { path: "Money/50-30-20 budget.sheet", label: "50/30/20 budget", make: fiftyThirtyTwentyWorkbook },
+  { path: "Money/Zero-based budget.sheet", label: "Zero-based budget", make: zeroBasedWorkbook },
+  { path: "Money/FIRE.sheet", label: "FIRE calculator", make: fireWorkbook },
+  { path: "Money/Coast FIRE.sheet", label: "Coast FIRE calculator", make: coastFireWorkbook },
+];

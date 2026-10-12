@@ -101,3 +101,45 @@ test("home: upkeep moves on when done; items roll up into an inventory with warr
   assert.deepEqual(warrantiesEnding(its).map((i) => i.name), ["Fridge"]);
   assert.equal(parseTasks([{ path: "f.md", content: fridge }])[0].due, "2026-10-31");
 });
+
+test("money templates: 50/30/20, zero-based, FIRE and Coast FIRE compute", async () => {
+  const { MONEY_TEMPLATES, byLabel } = await import("./money.ts");
+  const vals = (path: string) => evaluate(parseWorkbook(MONEY_TEMPLATES.find((t) => t.path === path)!.make()));
+  // spreadsheet basics the calculators lean on
+  const one = (f: string) => evaluate(parseWorkbook(JSON.stringify({ sheets: [{ name: "S", rows: [[f, "4%", "$1,200"]] }] }))).get("S")![0];
+  assert.deepEqual(one("=B1*C1").slice(0, 3), [48, 0.04, 1200]);
+  assert.equal(Math.round(one("=FV(5%, 10, -100, -1000)")[0] as number), 2887);
+  assert.equal(Math.round(one("=PV(5%, 10, -100)")[0] as number), 772);
+  assert.equal(Math.round((one("=PMT(5%, 10, 0, 1000)")[0] as number) * 100), -7950);
+  assert.equal(Math.round((one("=NPER(5%, -100, -1000, 2886)")[0] as number) * 10), 100);
+  assert.equal(one("=LOG(1000)")[0], 3);
+  const ft = vals("Money/50-30-20 budget.sheet").get("50-30-20")!;
+  assert.deepEqual(ft.filter((r) => ["Needs", "Wants", "Savings"].includes(String(r[0]))).map((r) => [r[0], r[2], r[3], r[4]]), [["Needs", 2500, 2250, 250], ["Wants", 1500, 510, 990], ["Savings", 1000, 1000, 0]]);
+  assert.equal(byLabel(vals("Money/Zero-based budget.sheet").get("Zero-based"), "Left to assign (make it 0)"), 1000);
+  const fire = vals("Money/FIRE.sheet");
+  assert.equal(byLabel(fire.get("FIRE"), "FIRE number"), 1_000_000);
+  assert.equal(byLabel(fire.get("FIRE"), "Years to FIRE"), 23.3);
+  assert.equal(byLabel(fire.get("FIRE"), "FIRE age"), 53.3);
+  assert.equal(byLabel(fire.get("FIRE"), "Saving a year to get there in 10 years"), 73029);
+  // the projection agrees with the formula: below the number after 23 years, above after 24
+  const end = (y: number) => fire.get("Projection")![y][5] as number;
+  assert.ok(end(23) < 1_000_000 && end(24) > 1_000_000, `${end(23)} ${end(24)}`);
+  const coast = vals("Money/Coast FIRE.sheet").get("Coast")!;
+  assert.deepEqual(["FIRE number", "Coast FIRE number today", "Invested now grows to", "Coasting already?", "Still needed today"].map((l) => byLabel(coast, l)), [1_000_000, 231377, 216097, "Not yet", 181377]);
+  // coast age by brute force: save 15k a year until invested ≥ the coast number at that age
+  let inv = 50000, age = 30;
+  while (inv < 1_000_000 / 1.05 ** (60 - age)) { inv = inv * 1.05 + 15000; age++; }
+  assert.equal(byLabel(coast, "Coast age"), age);
+});
+
+test("charts read a column letter or a range", async () => {
+  const { chartData } = await import("./sheet.ts");
+  const vals = evaluate(parseWorkbook(JSON.stringify({ sheets: [{ name: "S", rows: [["Item", "Amount"], ["a", "1"], ["b", "2"], ["", ""], ["Kind", "Target"], ["x", "5"], ["y", "6"]] }] }))).get("S")!;
+  assert.deepEqual(chartData(vals, { id: "1", type: "bar", title: "", labels: "A", values: ["B"] }), { labels: ["a", "b"], data: [[1, 2]], names: ["Amount"] });
+  assert.deepEqual(chartData(vals, { id: "2", type: "bar", title: "", labels: "A6:A7", values: ["B6:B7"] }), { labels: ["x", "y"], data: [[5, 6]], names: ["Target"] });
+  const { budgetWorkbook, MONEY_TEMPLATES } = await import("./money.ts");
+  for (const src of [budgetWorkbook(), ...MONEY_TEMPLATES.map((t) => t.make())]) {
+    const wb = parseWorkbook(src), ev = evaluate(wb);
+    for (const sh of wb.sheets) for (const ch of sh.charts) assert.ok(chartData(ev.get(sh.name)!, ch).labels.length >= 3, `${sh.name} ${ch.id}`);
+  }
+});

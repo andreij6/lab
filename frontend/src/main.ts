@@ -24,7 +24,7 @@ import { countByDay, dayKey, gridWeeks, level, streak } from "./activity";
 import { examples } from "./examples";
 import { minDepositE8s } from "./pricing";
 import { APPLICATIONS_BOARD, EXPERIENCE_TEMPLATE, PERSON_TEMPLATE, RESUME_TEMPLATE, STAGES, STORIES_DECK, addApplication, addDays, applicationCard, applications, compileResume, contacts, experience, isExperience, markContacted, parseStar, searchStats, storyCard, updateApplication, waiting } from "./career";
-import { NET_WORTH_NOTE, SUBSCRIPTION_TEMPLATE, budgetTotals, budgetWorkbook, cancelSubscription, holdings, netWorth, netWorthHistory, recordNetWorth, renewSubscription, subscriptionTotals, subscriptions } from "./money";
+import { MONEY_TEMPLATES, NET_WORTH_NOTE, SUBSCRIPTION_TEMPLATE, budgetTotals, byLabel, budgetWorkbook, cancelSubscription, holdings, netWorth, netWorthHistory, recordNetWorth, renewSubscription, subscriptionTotals, subscriptions } from "./money";
 import { CALENDAR_BOARD, LANES, LIMIT, POST_TEMPLATE, calendar, logResults, placeCard, post, posts, results } from "./creator";
 import { WORKOUT_TEMPLATE, newRecords, pace, progress, records, weekly, workouts } from "./fitness";
 import { ITEM_TEMPLATE, UPKEEP_TEMPLATE, doneUpkeep, inventory, items, upkeep, warrantiesEnding } from "./home";
@@ -38,7 +38,7 @@ import { QUERY_METHODS } from "./queries";
 import { ADR_STATUSES, CITE_KEY, RUNBOOK_TEMPLATE, adrTemplate, careQuestions, careSummary, careWorkbook, changelog, citeIn, citedKeys, claims, compileThesis, continuity, fromCrossref, manuscript, nextAdr, parseBibtex, sourceFromNote, sourceNote, timeline, type Source, type Style } from "./kits";
 import { applyRule, isFaded, keepLater, lint, ms as nsToMs, nextToResurface, periodPath, periodRollup, propertyColumns, renameProperty, renameTag, retarget as retargetLinks, runQuery, setProperty, splitAtHeadings, type Issue, type OrgNote, type Period, type PropColumn, type Resurface, type Rule } from "./organize";
 import { DECKS, GEAR_BASE_REF, localStamp, REVIEW_TEMPLATE, TRIP_TEMPLATE, applyReviewToGear, baseWeight, fieldEntry, foodWorkbook, gearWorkbook, isGearWorkbook, parseGpx, routeNote, trackBlock, waterWorkbook } from "./outdoor";
-import { NEW_WORKBOOK, PALETTES, addChart, chartSvg, colName, evaluate, fmt, isSheetPath, newSheet, parseCsv, parseRef, parseWorkbook, serializeWorkbook, sheetCsv, toCsv, type Chart, type ChartType, type Workbook } from "./sheet";
+import { NEW_WORKBOOK, PALETTES, addChart, chartSvg, colName, evaluate, fmt, isSheetPath, newSheet, parseCsv, parseRef, parseWorkbook, serializeWorkbook, sheetCsv, toCsv, type Chart, type ChartType, type Value, type Workbook } from "./sheet";
 import DOMPurify from "dompurify";
 import { MEETING_TEMPLATE, actionCards, decisions, isMeeting, isOverdue, markdownToDocx, meetingSummary, parseIcs, parseMeeting, parseTasks, people, addPeriod, reminders, setCell, sortTable, sortTasks, toggleTaskLine, tsvToTable, weeklyReview } from "./work";
 import { ankiTsv, cardsFromNote, cite, explain, glossary, goalProgress, questionsFor, sources, summarise } from "./study";
@@ -2648,6 +2648,7 @@ function moneyTab(): string {
           <div class="tags nudge">${nw.byKind.map((k) => `<span class="tag-chip"><span>${esc(k.kind)}</span><span class="cnt">${usd(k.total)}</span></span>`).join("")}</div>` : `<p class="small muted">A table of your accounts: dollars, debts as negatives, or coins like <code>0.05 BTC</code> priced live. Record today adds the total to its history.</p>`}
       </div>
     </div>
+    ${fireCard()}
     <div class="card band"><div class="row"><h2>${icon("calendar")} Subscriptions</h2><span class="right-actions"><button type="button" class="btn btn-primary" data-action="money-sub-add">${icon("plus")}Subscription</button></span></div>
       ${active.length ? `<div class="career-stats"><div><b>${usd(tot.monthly)}</b><span>a month</span></div><div><b>${usd(tot.yearly)}</b><span>a year</span></div><div><b>${active.length}</b><span>active</span></div></div>
         <div class="runs">${active.map((s) => `<div class="run"><span><a href="#" data-action="open" data-path="${esc(s.path)}">${esc(s.name)}</a> <span class="small muted">${usd(s.cost)} every ${esc(s.every)}${/year|quarter|week|day|\d/.test(s.every) ? ` · ${usd(s.monthly)} a month` : ""}</span> <span class="small ${s.inDays !== undefined && s.inDays <= 3 ? "danger" : "muted"}">${s.renews ? `renews ${inDaysText(s.inDays)}` : ""}</span></span><span class="row-actions"><button type="button" class="btn btn-ghost" data-action="money-sub-renewed" data-path="${esc(s.path)}" title="It renewed: move the reminder to the next renewal">Renewed</button><button type="button" class="btn btn-ghost" data-action="money-sub-cancel" data-path="${esc(s.path)}">Cancelled</button></span></div>`).join("")}</div>`
@@ -2655,6 +2656,19 @@ function moneyTab(): string {
       ${subs.length > active.length ? `<p class="small muted">Cancelled: ${subs.filter((s) => s.status !== "active").map((s) => `<a href="#" data-action="open" data-path="${esc(s.path)}">${esc(s.name)}</a>`).join(", ")}</p>` : ""}
     </div>
   </div></section>`;
+}
+/** The budgeting and FIRE templates, and what the FIRE sheets say once they exist. */
+function fireCard(): string {
+  const sheetVals = (path: string, name: string) => { const src = textOf(path); return src ? evaluate(parseWorkbook(src)).get(name) : undefined; };
+  const fire = sheetVals("Money/FIRE.sheet", "FIRE"), coast = sheetVals("Money/Coast FIRE.sheet", "Coast");
+  const show = (v: Value | undefined, kind: "usd" | "years" | "text") => (v === undefined || v === null ? "–" : typeof v === "number" ? (kind === "usd" ? usd(v) : String(v)) : esc(String(v)));
+  const stat = (v: string, label: string) => `<div><b>${v}</b><span>${label}</span></div>`;
+  return `<div class="card band"><div class="row"><h2>${icon("target")} Budgets and FIRE</h2></div>
+    <p class="small muted">Spreadsheets to copy into this notebook: two more ways to budget, and calculators for financial independence (FIRE) and Coast FIRE. Change your numbers at the top; everything below recalculates.</p>
+    <div class="row tight wrap">${MONEY_TEMPLATES.map((t) => `<button type="button" class="btn ${note(t.path) ? "btn-ghost" : ""}" data-action="money-template" data-path="${esc(t.path)}">${note(t.path) ? icon("columns") : icon("plus")}${esc(t.label)}</button>`).join("")}</div>
+    ${fire ? `<div class="band-title">FIRE</div><div class="career-stats">${stat(show(byLabel(fire, "FIRE number"), "usd"), "FIRE number")}${stat(show(byLabel(fire, "Years to FIRE"), "years"), "years to go")}${stat(show(byLabel(fire, "FIRE age"), "years"), "FIRE age")}</div>` : ""}
+    ${coast ? `<div class="band-title">Coast FIRE</div><div class="career-stats">${stat(show(byLabel(coast, "Coast FIRE number today"), "usd"), "Coast FIRE number today")}${stat(show(byLabel(coast, "Coasting already?"), "text"), "coasting already?")}${stat(show(byLabel(coast, "Coast age"), "years"), "age you can stop saving")}</div>` : ""}
+  </div>`;
 }
 async function moneyAction(action: string, el: HTMLElement) {
   const today = dayKey(new Date());
@@ -2671,6 +2685,13 @@ async function moneyAction(action: string, el: HTMLElement) {
       await writeNote(MONEY_BUDGET, serializeWorkbook(wb));
       toast(`Saved ${month}; the new month starts with nothing spent.`, "ok");
       return render();
+    }
+    case "money-template": {
+      const t = MONEY_TEMPLATES.find((x) => x.path === p);
+      if (!t) return;
+      if (!note(t.path)) await createQuiet(t.path, t.make());
+      S.tab = "notes";
+      return open(t.path);
     }
     case "money-net-open": { if (!note(MONEY_NET)) await createQuiet(MONEY_NET, NET_WORTH_NOTE); S.tab = "notes"; return open(MONEY_NET); }
     case "money-net-record": {
@@ -3683,7 +3704,7 @@ function sheetHtml(path: string, text: string): string {
   const cell = (r: number, c: number) => {
     const raw = sh.rows[r]?.[c] ?? "";
     const v = vals[r]?.[c] ?? null;
-    const f = fmt(v);
+    const f = cellText(raw, v);
     return `<td><input class="cell ${typeof v === "number" ? "num" : ""} ${f.startsWith("#") && raw.startsWith("=") ? "err" : ""} ${raw.startsWith("=") ? "fx" : ""}" name="cell" data-path="${esc(path)}" data-s="${si}" data-r="${r}" data-c="${c}" data-raw="${esc(raw)}" value="${esc(f)}" title="${raw.startsWith("=") ? esc(raw) : ""}" aria-label="${colName(c)}${r + 1}" autocomplete="off" spellcheck="false" ${ro ? "readonly" : ""}></td>`;
   };
   const head = `<tr><th class="rn"></th>${Array.from({ length: ncols }, (_, c) => `<th>${colName(c)}</th>`).join("")}</tr>`;
@@ -3708,7 +3729,7 @@ function syncSheet(path: string) {
       const r = Number(inp.dataset.r), c = Number(inp.dataset.c);
       const raw = sh.rows[r]?.[c] ?? "";
       const v = vals[r]?.[c] ?? null;
-      const f = fmt(v);
+      const f = cellText(raw, v);
       inp.dataset.raw = raw;
       inp.title = raw.startsWith("=") ? raw : "";
       inp.classList.toggle("num", typeof v === "number");
@@ -3734,6 +3755,8 @@ function commitCell(inp: HTMLInputElement) {
   void save(p);
 }
 const cellAt = (inp: HTMLInputElement, dr: number, dc: number) => inp.closest("table")?.querySelector<HTMLInputElement>(`input[name=cell][data-r="${Number(inp.dataset.r) + dr}"][data-c="${Number(inp.dataset.c) + dc}"]`);
+/** What a cell shows: a formula's result, or what was typed (so 4% stays 4%, not 0.04). */
+const cellText = (raw: string, v: Value) => (raw.startsWith("=") ? fmt(v) : raw);
 function newSheetNote(folder?: string) {
   const where = folder ?? (cur() ? dir(cur()!) : "");
   const have = new Set(paths());
@@ -7444,7 +7467,7 @@ document.addEventListener("paste", (ev) => {
 });
 document.addEventListener("focusout", (ev) => {
   const ta = ev.target as HTMLTextAreaElement;
-  if (ta?.name === "cell") { const inp = ta as unknown as HTMLInputElement; commitCell(inp); inp.value = fmt(evaluate(wbOf(inp.dataset.path!)).get(wbOf(inp.dataset.path!).sheets[Number(inp.dataset.s)]?.name ?? "")?.[Number(inp.dataset.r)]?.[Number(inp.dataset.c)] ?? null); return; }
+  if (ta?.name === "cell") { const inp = ta as unknown as HTMLInputElement; commitCell(inp); const wb = wbOf(inp.dataset.path!), sh = wb.sheets[Number(inp.dataset.s)], r = Number(inp.dataset.r), c = Number(inp.dataset.c); inp.value = cellText(sh?.rows[r]?.[c] ?? "", evaluate(wb).get(sh?.name ?? "")?.[r]?.[c] ?? null); return; }
   if (ta?.name !== "nbsrc") return;
   const p = ta.dataset.path!; const i = Number(ta.dataset.i);
   const nb = parseNotebook(draftOf(p).text);

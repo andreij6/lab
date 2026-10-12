@@ -124,6 +124,8 @@ function crit(c: Value): (v: Value) => boolean {
   }
   return (v) => v === c;
 }
+/** The first `n` arguments as numbers, missing optional ones as 0. */
+const tvm = (a: (Value | Value[])[], n: number): number[] => Array.from({ length: n }, (_, i) => (a[i] === undefined ? 0 : num(a[i] as Value)));
 const FUNCS: Record<string, (args: (Value | Value[])[]) => Value> = {
   SUM: (a) => nums(a).reduce((x, y) => x + y, 0),
   AVERAGE: (a) => { const n = nums(a); if (!n.length) throw new Error("#DIV/0!"); return n.reduce((x, y) => x + y, 0) / n.length; },
@@ -157,6 +159,20 @@ const FUNCS: Record<string, (args: (Value | Value[])[]) => Value> = {
   INDEX: (a) => { const r = a[0] as Range; const w = r.width ?? 1; const row = num(a[1] as Value) - 1; const col = a[2] === undefined ? 0 : num(a[2] as Value) - 1; const v = r[row * w + col]; if (v === undefined) throw new Error("#REF!"); return v; },
   MATCH: (a) => { const key = a[0] as Value; const r = flat(a[1]); const i = r.findIndex((v) => v === key || (typeof v === "string" && typeof key === "string" && v.toLowerCase() === key.toLowerCase())); if (i < 0) throw new Error("#N/A"); return i + 1; },
   IFERROR: (a) => { const v = a[0] as Value; return typeof v === "string" && v.startsWith("#") ? (a[1] as Value) ?? "" : v; },
+  LN: (a) => { const n = num(a[0] as Value); if (n <= 0) throw new Error("#NUM!"); return Math.log(n); },
+  LOG: (a) => { const n = num(a[0] as Value), b = a[1] === undefined ? 10 : num(a[1] as Value); if (n <= 0 || b <= 0 || b === 1) throw new Error("#NUM!"); return b === 10 ? Math.log10(n) : Math.log(n) / Math.log(b); },
+  EXP: (a) => Math.exp(num(a[0] as Value)),
+  // the time-value-of-money functions, with Excel's signs: money paid out is negative
+  FV: (a) => { const [r, n, pmt, pv, t] = tvm(a, 5); const g = (1 + r) ** n; return r ? -(pv * g + pmt * (1 + r * t) * ((g - 1) / r)) : -(pv + pmt * n); },
+  PV: (a) => { const [r, n, pmt, fv, t] = tvm(a, 5); const g = (1 + r) ** n; return r ? -(fv + pmt * (1 + r * t) * ((g - 1) / r)) / g : -(fv + pmt * n); },
+  PMT: (a) => { const [r, n, pv, fv, t] = tvm(a, 5); if (!n) throw new Error("#NUM!"); const g = (1 + r) ** n; return r ? -(r * (fv + pv * g)) / ((1 + r * t) * (g - 1)) : -(pv + fv) / n; },
+  NPER: (a) => {
+    const [r, pmt, pv, fv, t] = tvm(a, 5);
+    if (!r) { if (!pmt) throw new Error("#NUM!"); return -(pv + fv) / pmt; }
+    const x = (pmt * (1 + r * t) - fv * r) / (pmt * (1 + r * t) + pv * r);
+    if (!(x > 0)) throw new Error("#NUM!");
+    return Math.log(x) / Math.log(1 + r);
+  },
   PI: () => Math.PI,
   TODAY: () => new Date().toISOString().slice(0, 10),
 };
@@ -275,8 +291,11 @@ export function evaluate(wb: Workbook): Map<string, Value[][]> {
 }
 function literal(raw: string): Value {
   if (raw === "") return null;
-  if (/^-?\d+(\.\d+)?$/.test(raw.trim())) return Number(raw);
-  if (/^-?\d{1,3}(,\d{3})+(\.\d+)?$/.test(raw.trim())) return Number(raw.replace(/,/g, ""));
+  const t = raw.trim();
+  // 4% is 0.04; $1,200 and 1,200 are 1200
+  if (/^-?\d+(\.\d+)?%$/.test(t)) return Number(t.slice(0, -1)) / 100;
+  if (/^-?\$?\d+(\.\d+)?$/.test(t)) return Number(t.replace("$", ""));
+  if (/^-?\$?\d{1,3}(,\d{3})+(\.\d+)?$/.test(t)) return Number(t.replace(/[$,]/g, ""));
   if (/^(true|false)$/i.test(raw.trim())) return raw.trim().toLowerCase() === "true";
   return raw;
 }
@@ -294,13 +313,23 @@ export const sheetCsv = (vals: Value[][]): string => toCsv(vals);
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
 export const chartColors = (ch: Chart): string[] => (ch.colors?.length ? ch.colors : PALETTES[ch.palette ?? "default"] ?? PALETTES.default);
 /** The series of a chart: labels from the label column, one number array per value column, header names. */
+/** A chart's column: a letter ("A", read from row 2 down to the first blank) or a range ("A2:A9"). */
+function chartSpan(ref: string): { c: number; from: number; to?: number } {
+  const m = /^\$?([A-Za-z]{1,3})(?:\$?(\d+)(?::\$?[A-Za-z]{1,3}\$?(\d+))?)?$/.exec(ref.trim());
+  return m ? { c: colIndex(m[1]), from: m[2] ? Number(m[2]) - 1 : 1, to: m[3] ? Number(m[3]) - 1 : undefined } : { c: -1, from: 1 };
+}
 export function chartData(vals: Value[][], ch: Chart): { labels: string[]; data: number[][]; names: string[] } {
-  const lc = colIndex(ch.labels);
-  const series = ch.values.map((v) => colIndex(v));
-  const labels: string[] = [];
-  for (let r = 1; r < vals.length; r++) { const l = vals[r]?.[lc]; if (l === null || l === undefined || l === "") break; labels.push(fmt(l)); }
-  const data = series.map((c) => labels.map((_, i) => { const v = vals[i + 1]?.[c]; return typeof v === "number" ? v : 0; }));
-  const names = series.map((c) => fmt(vals[0]?.[c] ?? colName(c)));
+  const L = chartSpan(ch.labels);
+  const labels: string[] = [], rows: number[] = [];
+  for (let r = L.from; r < vals.length && (L.to === undefined || r <= L.to); r++) {
+    const l = vals[r]?.[L.c];
+    if (l === null || l === undefined || l === "") { if (L.to === undefined) break; continue; }
+    labels.push(fmt(l)); rows.push(r);
+  }
+  const series = ch.values.map(chartSpan);
+  const data = series.map((x) => rows.map((r) => { const v = vals[r]?.[x.c]; return typeof v === "number" ? v : 0; }));
+  // series names from the row above the labels
+  const names = series.map((x) => fmt(vals[Math.max(0, L.from - 1)]?.[x.c] ?? colName(x.c)));
   return { labels, data, names };
 }
 export function chartSvg(vals: Value[][], ch: Chart): string {
