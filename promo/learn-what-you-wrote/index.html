@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Lab: Learn what you wrote</title>
+<link rel="stylesheet" href="../shared/base.css">
+<style>
+  .wbody { display: grid; grid-template-columns: 430px 1fr; }
+  .note { padding: 28px 30px; border-right: 1px solid var(--line); position: relative; }
+  .note .tb { display: flex; justify-content: flex-end; margin-bottom: 14px; }
+  .note h1 { font-size: 32px; letter-spacing: -.02em; margin-bottom: 14px; }
+  .note p { font-size: 19px; line-height: 1.6; color: var(--fg-2); margin-bottom: 14px; }
+  .note mark { background: linear-gradient(90deg, hsl(48 96% 60% / .35) var(--w, 0%), transparent var(--w, 0%)); color: var(--fg); border-radius: 4px; padding: 0 2px; }
+  .note code { font-family: var(--mono); font-size: 16px; color: var(--accent-2); }
+  .study { position: relative; padding: 26px 30px; }
+  .stats { display: flex; gap: 12px; }
+  .stat { flex: 1; background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }
+  .stat small { font-size: 12px; font-weight: 800; color: var(--fg-3); letter-spacing: .08em; text-transform: uppercase; } .stat b { display: block; font-size: 32px; margin-top: 4px; } .stat b.acc { color: var(--accent-2); }
+  #card { left: 30px; right: 30px; top: 150px; height: 300px; perspective: 1400px; }
+  #card .face { position: absolute; inset: 0; border-radius: 18px; background: var(--bg-2); border: 1px solid var(--line); box-shadow: 0 24px 70px rgba(0,0,0,.45); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 30px; backface-visibility: hidden; }
+  #card .face small { position: absolute; top: 18px; left: 22px; font-size: 13px; font-weight: 800; color: var(--fg-3); letter-spacing: .08em; text-transform: uppercase; }
+  #card .face .q { font-size: 28px; line-height: 1.4; font-weight: 600; }
+  #card .face .gap { display: inline-block; min-width: 90px; border-bottom: 3px solid var(--accent); }
+  #card .face .a { font-size: 30px; font-weight: 800; color: var(--accent-2); margin-top: 14px; }
+  #card .back { transform: rotateY(180deg); }
+  #card .inner { position: absolute; inset: 0; transform-style: preserve-3d; }
+  .acts { position: absolute; left: 30px; right: 30px; top: 474px; display: flex; gap: 12px; justify-content: center; }
+  .acts .btn { flex: 1; justify-content: center; }
+  #toast { left: 0; right: 0; top: 548px; margin: 0 auto; width: max-content; padding: 10px 18px; border-radius: 12px; background: hsl(142 70% 45% / .18); color: var(--ok); font-size: 17px; font-weight: 700; }
+  #done { left: 30px; right: 30px; top: 150px; height: 300px; border-radius: 18px; background: var(--bg-2); border: 1px solid hsl(142 70% 55% / .4); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; text-align: center; }
+  #done h3 { font-size: 34px; } #done p { font-size: 19px; color: var(--fg-2); }
+  .fly { width: 120px; height: 76px; border-radius: 10px; background: var(--bg-3); border: 1px solid hsl(212 86% 60% / .45); z-index: 8; padding: 16px 14px; display: flex; flex-direction: column; gap: 10px; } .fly i { height: 7px; border-radius: 9px; background: var(--fg-3); opacity: .6; } .fly i + i { width: 60%; background: var(--accent-2); }
+  #tag { left: 0; right: 0; bottom: 40px; text-align: center; font-size: 30px; font-weight: 700; letter-spacing: -.01em; } #tag em { font-style: normal; color: var(--accent-2); }
+</style></head>
+<body><div id="stage">
+  <div class="win abs">
+    <div class="bar"><i></i><i></i><i></i><b>Research <em>/ Study</em></b></div>
+    <div class="wbody">
+      <div class="note">
+        <div class="tb"><span class="btn" id="make"><svg class="i"><use href="#i-check"/></svg>Make flashcards</span></div>
+        <h1>Sleep and learning</h1>
+        <p>On nights with 7+ hours, recall of the previous day's cards was <mark id="m1">23% higher</mark>.</p>
+        <p>Reviews done <mark id="m2">just before bed</mark> held up best a week later.</p>
+        <p><code>Spaced repetition::</code> reviewing right before you would forget.</p>
+      </div>
+      <div class="study">
+        <div class="stats"><div class="stat"><small>Due today</small><b class="acc" id="due">0</b></div><div class="stat"><small>Reviewed</small><b id="rev">0</b></div><div class="stat"><small>Streak</small><b id="streak">3 days</b></div></div>
+        <div id="card" class="abs"><div class="inner" id="inner"><div class="face front" id="front"></div><div class="face back" id="back"></div></div></div>
+        <div class="acts" id="acts"><span class="btn" id="b-again">Again</span><span class="btn" id="b-hard">Hard</span><span class="btn" id="b-good">Good</span><span class="btn" id="b-easy">Easy</span></div>
+        <div class="acts" id="showa"><span class="btn primary" id="b-show">Show answer</span></div>
+        <div id="toast" class="abs"></div>
+        <div id="done" class="abs"><h3>✅ Done for today</h3><p>3 reviewed · all three remembered</p><p>Next up: Thursday</p></div>
+      </div>
+    </div>
+  </div>
+  <div class="fly abs" id="f1"><i></i><i></i></div><div class="fly abs" id="f2"><i></i><i></i></div><div class="fly abs" id="f3"><i></i><i></i></div>
+  <div id="tag" class="abs">Your notes become <em>flashcards</em>.</div>
+</div>
+<script src="../shared/base.js"></script>
+<script>
+const { $, seg, ease, inout, pop, show, cursor, at, run, cards } = Promo;
+cards({ title: "Learn what you wrote.", subtitle: "Highlights become flashcards, spaced for you.", heading: "Learn what you wrote" });
+// the three cards the note makes: two clozes from the highlights, one from the Term:: line
+const CARDS = [
+  { kind: "Cloze", q: 'After 7+ hours of sleep, recall was <span class="gap"></span> higher.', a: "23%", show: 6.6, rate: "b-good", at: 7.5, next: "Next review in 4 days" },
+  { kind: "Definition", q: "Spaced repetition", a: "Reviewing right before you would forget.", show: 8.7, rate: "b-easy", at: 9.5, next: "Next review in 9 days" },
+  { kind: "Cloze", q: 'Reviews done <span class="gap"></span> held up best.', a: "just before bed", show: 10.5, rate: "b-good", at: 11.2, next: "Next review in 4 days" },
+];
+function scene(t) {
+  // highlight sweeps across the two phrases, then Make cards
+  $("m1").style.setProperty("--w", `${ease(seg(t, 3.0, 3.5)) * 100}%`);
+  $("m2").style.setProperty("--w", `${ease(seg(t, 3.6, 4.1)) * 100}%`);
+  $("make").classList.toggle("hot", t >= 4.55 && t < 4.85);
+  // three cards fly from the note into the study panel
+  const [mx, my] = at("#make"), [cx, cy] = at("#card");
+  ["f1", "f2", "f3"].forEach((id, i) => {
+    const p = inout(seg(t, 4.8 + i * .18, 5.5 + i * .18));
+    const el = $(id);
+    el.style.left = `${mx - 60 + (cx - mx) * p}px`; el.style.top = `${my - 38 + (cy - my) * p - Math.sin(p * Math.PI) * 120}px`;
+    el.style.opacity = p > 0 && p < 1 ? 1 : 0; el.style.transform = `rotate(${(1 - p) * -12 + i * 4}deg)`;
+  });
+  const made = [5.5, 5.68, 5.86].filter((x) => t >= x).length;
+  // review: front, show answer, flip, rate, next
+  const ci = t < 8.0 ? 0 : t < 9.9 ? 1 : 2;
+  const c = CARDS[ci];
+  const reviewed = CARDS.filter((x) => t >= x.at + .1).length;
+  $("due").textContent = String(made - reviewed);
+  $("rev").textContent = String(reviewed);
+  $("streak").textContent = reviewed === 3 ? "4 days" : "3 days";
+  const inCard = t >= 5.9 && t < 12.0;
+  const enter = ci === 0 ? ease(seg(t, 5.9, 6.2)) : ease(seg(t, CARDS[ci - 1].at + .3, CARDS[ci - 1].at + .6));
+  show($("card"), inCard ? enter : 0, (1 - enter) * 24);
+  $("front").innerHTML = `<small>${c.kind} · Sleep and learning</small><div class="q">${c.q}</div>`;
+  $("back").innerHTML = `<small>${c.kind} · Sleep and learning</small><div class="q">${c.q.replace('<span class="gap"></span>', `<b style="color:var(--accent-2)">${c.a}</b>`)}</div>${c.kind === "Definition" ? `<div class="a">${c.a}</div>` : ""}`;
+  const flip = ease(seg(t, c.show + .1, c.show + .45));
+  $("inner").style.transform = `rotateY(${flip * 180}deg)`;
+  const flipped = t >= c.show + .1;
+  show($("showa"), inCard && !flipped ? 1 : 0);
+  show($("acts"), inCard && flipped && t < c.at + .3 ? 1 : 0);
+  ["b-again", "b-hard", "b-good", "b-easy"].forEach((b) => $(b).classList.toggle("hot", b === c.rate && t >= c.at - .05 && t < c.at + .3));
+  $("b-show").classList.toggle("hot", t >= c.show - .05 && t < c.show + .1);
+  // toast with the next interval
+  const last = CARDS.filter((x) => t >= x.at && t < x.at + .9).pop();
+  $("toast").textContent = last ? `✓ ${last.next}` : "";
+  show($("toast"), last ? 1 : 0);
+  const d = ease(seg(t, 12.0, 12.35));
+  show($("done"), d, 0, .96 + pop(seg(t, 12.0, 12.4)) * .04);
+  // the cursor visits each button
+  const keys = [[3.9, 520, 700], [4.55, ...at("#make")]];
+  for (const x of CARDS) { keys.push([x.show - .45, ...at("#b-show")], [x.show, ...at("#b-show")], [x.at - .4, ...at(`#${x.rate}`)], [x.at, ...at(`#${x.rate}`)]); }
+  cursor(t, keys, [4.55, ...CARDS.flatMap((x) => [x.show, x.at])]);
+  const tg = ease(seg(t, 12.3, 12.7));
+  show($("tag"), tg * (1 - ease(seg(t, 12.95, 13.2))), (1 - tg) * 12);
+}
+run(15, scene);
+</script></body></html>

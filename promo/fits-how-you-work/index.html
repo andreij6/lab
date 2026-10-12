@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Lab: Fits how you work</title>
+<link rel="stylesheet" href="../shared/base.css">
+<style>
+  .wbody { display: grid; grid-template-columns: 64px 1fr; }
+  .rib { background: var(--bg-2); border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; gap: 8px; padding-top: 16px; }
+  .rb { width: 44px; height: 44px; border-radius: 11px; display: grid; place-items: center; color: var(--fg-2); }
+  .rb svg { width: 22px; height: 22px; } .rb.on { background: var(--accent-dim); color: var(--accent-2); box-shadow: inset 3px 0 0 var(--accent); }
+  .pane { position: relative; padding: 26px 30px; }
+  .pane h3 { font-size: 26px; margin-bottom: 16px; display: flex; align-items: center; gap: 10px; } .pane h3 svg { width: 24px; height: 24px; color: var(--accent-2); }
+  .panel { position: absolute; inset: 26px 30px; }
+  .card { background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; margin-bottom: 12px; font-size: 18px; color: var(--fg-2); }
+  .card b { color: var(--fg); } .chip { display: inline-flex; padding: 2px 10px; border-radius: 8px; background: var(--accent-dim); color: var(--accent-2); font-weight: 700; font-size: 16px; margin-right: 8px; }
+  .ok { color: var(--ok); font-weight: 700; font-size: 15px; float: right; } .miss { color: var(--danger); font-weight: 700; font-size: 15px; float: right; }
+  #dlg { left: 110px; top: 95px; width: 740px; background: var(--bg-3); border: 1px solid var(--line); border-radius: 20px; box-shadow: 0 40px 120px rgba(0,0,0,.65); padding: 26px 28px; z-index: 5; }
+  #dlg .st { font-size: 14px; font-weight: 800; color: var(--fg-3); letter-spacing: .08em; text-transform: uppercase; }
+  #dlg h4 { font-size: 30px; margin: 6px 0 4px; letter-spacing: -.01em; } #dlg p { font-size: 17px; color: var(--fg-3); }
+  .presets { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 14px; }
+  .pre { height: 38px; padding: 0 16px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg-2); display: inline-flex; align-items: center; font-size: 17px; font-weight: 600; color: var(--fg-2); }
+  .pre.on { background: var(--accent); color: #fff; border-color: transparent; }
+  .tools { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+  .tool { height: 92px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg-2); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; font-size: 15px; font-weight: 600; color: var(--fg-3); position: relative; }
+  .tool svg { width: 26px; height: 26px; } .tool.on { border-color: hsl(212 86% 60% / .6); background: var(--accent-dim); color: var(--fg); } .tool.on svg { color: var(--accent-2); }
+  .tool .tick { position: absolute; top: 8px; right: 8px; width: 20px; height: 20px; border-radius: 6px; border: 2px solid var(--fg-3); display: grid; place-items: center; }
+  .tool.on .tick { background: var(--accent); border-color: var(--accent); } .tool .tick svg { width: 13px; height: 13px; stroke: #fff; stroke-width: 3; }
+  #dlg .row { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+  .dots { display: flex; gap: 6px; margin-right: auto; align-items: center; } .dots i { width: 9px; height: 9px; border-radius: 50%; background: var(--bg-1); } .dots i.on { background: var(--accent); }
+  #tag { left: 0; right: 0; bottom: 40px; text-align: center; font-size: 30px; font-weight: 700; letter-spacing: -.01em; } #tag em { font-style: normal; color: var(--accent-2); }
+</style></head>
+<body><div id="stage">
+  <div class="win abs">
+    <div class="bar"><i></i><i></i><i></i><b>Thesis <em id="crumb">/ Notes</em></b></div>
+    <div class="wbody">
+      <div class="rib" id="rib"></div>
+      <div class="pane">
+        <div class="panel" id="p-notes"><h3><svg class="i"><use href="#i-file"/></svg>index</h3><div class="card">Welcome to <b>Thesis</b>. Start in <b>Projects/</b>, or press ⌘K to open any note.</div></div>
+        <div class="panel" id="p-research"><h3><svg class="i"><use href="#i-cap"/></svg>Research</h3>
+          <div class="card"><span class="chip">(Harris et al., 2020)</span>Array programming with NumPy</div>
+          <div class="card"><span class="chip">(Smith &amp; Lee, 2020)</span>Sleep and memory in students</div>
+          <div class="card"><b>Claim::</b> Sleep helps memory <span class="ok">supported</span></div>
+          <div class="card"><b>Claim::</b> Naps beat coffee <span class="miss">needs a source</span></div></div>
+        <div class="panel" id="p-trips"><h3><svg class="i"><use href="#i-mountain"/></svg>Trips</h3>
+          <div class="card"><b>Lost Coast</b> · back by 18:00 <span class="ok">left with @ada</span>
+            <svg viewBox="0 0 700 170" style="width:100%;height:170px;margin-top:10px"><path d="M20 140 C 90 120, 120 60, 190 70 S 300 140, 360 100 S 470 30, 540 50 S 640 110, 680 90" fill="none" stroke="hsl(212 86% 65%)" stroke-width="5" stroke-linecap="round"/><circle cx="20" cy="140" r="9" fill="#4ade80"/><circle cx="680" cy="90" r="9" fill="#f87171"/></svg>
+            10.0 km · ↑ 173 m from a GPX file</div>
+          <div class="card"><b>Gear list</b> · base weight 5.1 kg <span class="ok">−340 g since last trip</span></div>
+          <div class="card"><b>Field journal</b> · 2 entries, written offline</div></div>
+        <div class="panel" id="p-study"><h3><svg class="i"><use href="#i-check"/></svg>Study</h3>
+          <div class="card"><b>21 cards</b> due across 4 decks</div><div class="card">Knots · First aid · Navigation · Biology</div></div>
+      </div>
+    </div>
+    <div id="dlg" class="abs">
+      <div class="st">Step 4 of 5</div><h4>Choose your tools</h4><p>Pick a preset or tick your own. Change them any time in Manage.</p>
+      <div class="presets" id="presets"></div>
+      <div class="tools" id="tools"></div>
+      <div class="row"><span class="dots"><i></i><i></i><i></i><i class="on"></i><i></i></span><span class="btn">Back</span><span class="btn primary" id="finish">Next</span></div>
+    </div>
+  </div>
+  <div id="tag" class="abs">Turn on what you need. <em>Hide the rest.</em></div>
+</div>
+<script src="../shared/base.js"></script>
+<script>
+const { $, seg, ease, pop, show, icon, cursor, at, run, cards } = Promo;
+cards({ title: "Lab fits how you work.", subtitle: "Students, researchers, writers, hikers.", heading: "Fits how you work" });
+const TOOLS = [["chat", "Chat", "chat"], ["graph", "Graph", "graph"], ["study", "Study", "check"], ["work", "Work", "briefcase"], ["organize", "Organize", "sliders"], ["research", "Research", "cap"], ["writing", "Writing", "edit"], ["care", "Care", "heart"], ["software", "Software", "terminal"], ["trips", "Trips", "mountain"]];
+const PRESETS = ["Student", "Researcher", "Writer", "Caregiver", "Developer", "Hiker", "Everything"];
+const RESEARCHER = ["chat", "graph", "organize", "research", "study"];
+function scene(t) {
+  const picked = t >= 4.1 ? new Set(RESEARCHER) : new Set();
+  if (t >= 5.6) picked.add("trips");
+  $("presets").innerHTML = PRESETS.map((p) => `<span class="pre${p === "Researcher" && t >= 4.1 ? " on" : ""}" id="pre-${p}">${p}</span>`).join("");
+  $("tools").innerHTML = TOOLS.map(([id, label, ic]) => { const on = picked.has(id); const at2 = id === "trips" ? 5.6 : 4.1 + RESEARCHER.indexOf(id) * .07; return `<span class="tool${on ? " on" : ""}" id="tool-${id}" style="transform:scale(${on ? Math.max(1, pop(seg(t, at2, at2 + .3))) : 1})"><span class="tick">${on ? icon("check") : ""}</span>${icon(ic)}${label}</span>`; }).join("");
+  $("finish").classList.toggle("hot", t >= 6.85 && t < 7.15);
+  const d = ease(seg(t, 2.8, 3.1)) * (1 - ease(seg(t, 7.1, 7.4)));
+  show($("dlg"), d, (1 - ease(seg(t, 2.8, 3.1))) * 20, .97 + d * .03);
+
+  // the ribbon shows only what was picked, in the app's order; each new one slides in
+  const ribTools = TOOLS.filter(([id]) => picked.has(id));
+  const tour = [["research", 7.6], ["trips", 9.3], ["study", 11.0]];
+  const cur = t < 7.6 ? "notes" : [...tour].reverse().find(([, a]) => t >= a)[0];
+  $("rib").innerHTML = [["notes", "file"], ...ribTools.map(([id, , ic]) => [id, ic]), ["manage", "bolt"]].map(([id, ic]) => {
+    const at2 = id === "trips" ? 5.6 : RESEARCHER.includes(id) ? 4.1 + RESEARCHER.indexOf(id) * .07 : 0;
+    const p = at2 ? ease(seg(t, at2 + .1, at2 + .45)) : 1;
+    return `<span class="rb${id === cur ? " on" : ""}" id="rb-${id}" style="opacity:${p};transform:translateX(${(1 - p) * -20}px)">${icon(ic)}</span>`;
+  }).join("");
+  // after Next: a tour of the tools that were switched on
+  for (const id of ["notes", "research", "trips", "study"]) {
+    const a = id === "notes" ? 0 : tour.find(([x]) => x === id)[1];
+    const e = id === "notes" ? 1 : ease(seg(t, a, a + .35));
+    show($(`p-${id}`), id === cur ? e : 0, (1 - e) * 16);
+  }
+  $("crumb").textContent = `/ ${cur === "notes" ? "Notes" : cur[0].toUpperCase() + cur.slice(1)}`;
+  cursor(t, [[3.3, 640, 760], [4.0, ...at("#pre-Researcher")], [5.5, ...at("#tool-trips")], [6.85, ...at("#finish")], [7.5, ...at("#rb-research")], [9.2, ...at("#rb-trips")], [10.9, ...at("#rb-study")]], [4.0, 5.5, 6.85, 7.5, 9.2, 10.9]);
+  const tg = ease(seg(t, 12.2, 12.6));
+  show($("tag"), tg * (1 - ease(seg(t, 12.95, 13.2))), (1 - tg) * 12);
+}
+run(15, scene);
+</script></body></html>

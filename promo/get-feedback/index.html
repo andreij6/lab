@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Lab: Get feedback</title>
+<link rel="stylesheet" href="../shared/base.css">
+<style>
+  .wbody { display: grid; grid-template-columns: 230px 1fr; }
+  .chans { background: var(--bg-2); border-right: 1px solid var(--line); padding: 16px 12px; }
+  .sec { font-size: 12px; font-weight: 800; color: var(--fg-3); letter-spacing: .08em; text-transform: uppercase; padding: 12px 8px 6px; display: flex; gap: 6px; align-items: center; }
+  .sec:first-child { padding-top: 0; }
+  .ch { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 10px; border-radius: 8px; font-size: 17px; color: var(--fg-2); }
+  .ch b { color: var(--fg-3); font-weight: 700; } .ch.on { background: var(--bg-3); color: var(--fg); }
+  .main { position: relative; display: flex; flex-direction: column; }
+  .head { height: 54px; display: flex; align-items: center; gap: 10px; padding: 0 22px; border-bottom: 1px solid var(--line); font-size: 19px; }
+  .head b { color: var(--fg-3); } .head span { color: var(--fg-3); font-size: 16px; }
+  .feed { flex: 1; padding: 18px 22px; display: flex; flex-direction: column; justify-content: flex-end; gap: 14px; overflow: hidden; }
+  .msg { display: flex; gap: 12px; }
+  .av { width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; font-size: 15px; color: #fff; flex: none; }
+  .msg .who { font-size: 17px; font-weight: 700; } .msg .who small { color: var(--fg-3); font-weight: 500; margin-left: 8px; font-size: 14px; }
+  .msg .tx { font-size: 18px; color: var(--fg); line-height: 1.45; margin-top: 2px; max-width: 560px; }
+  .msg .tx .men { color: var(--accent-2); background: var(--accent-dim); border-radius: 5px; padding: 0 4px; }
+  .gist { margin-top: 10px; width: 520px; border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 12px; background: var(--bg-2); padding: 14px 16px; }
+  .gist .gh { display: flex; align-items: center; gap: 10px; font-size: 17px; } .gist .gh small { color: var(--fg-3); } .gist .gh .open { margin-left: auto; font-size: 14px; color: var(--accent-2); font-weight: 700; }
+  .gist h5 { font-size: 16px; color: var(--fg-2); margin-top: 8px; font-weight: 600; }
+  .gist p { font-size: 15px; color: var(--fg-3); line-height: 1.45; }
+  .reacts { display: flex; gap: 8px; margin-top: 10px; }
+  .re { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--line); font-size: 15px; color: var(--fg-2); }
+  .re.mine { border-color: hsl(212 86% 60% / .6); background: var(--accent-dim); color: var(--accent-2); }
+  .typing { font-size: 15px; color: var(--fg-3); height: 20px; }
+  .comp { margin: 0 22px 18px; height: 54px; border-radius: 14px; background: var(--bg-2); border: 1px solid var(--line); display: flex; align-items: center; padding: 0 18px; font-size: 18px; color: var(--fg-3); }
+  #dlg { left: 230px; top: 150px; width: 500px; background: var(--bg-3); border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 30px 90px rgba(0,0,0,.6); padding: 22px 24px; z-index: 5; }
+  #dlg h4 { font-size: 22px; margin-bottom: 6px; } #dlg p { font-size: 15px; color: var(--fg-3); margin-bottom: 14px; line-height: 1.4; }
+  #dlg .in { min-height: 50px; border-radius: 10px; background: var(--bg-1); border: 1px solid var(--line); padding: 12px 14px; font-size: 18px; line-height: 1.4; }
+  #dlg .row { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
+  #tag { left: 0; right: 0; bottom: 40px; text-align: center; font-size: 30px; font-weight: 700; letter-spacing: -.01em; }
+  #tag em { font-style: normal; color: var(--accent-2); }
+</style></head>
+<body><div id="stage">
+  <div class="win abs">
+    <div class="bar"><i></i><i></i><i></i><b>Community <em>/ #general</em></b></div>
+    <div class="wbody">
+      <div class="chans">
+        <div class="sec">Lab</div><div class="ch on"><b>#</b>general</div><div class="ch"><b>#</b>help</div>
+        <div class="sec">Notebooks</div><div class="ch"><b>#</b>notebooks</div><div class="ch"><b>#</b>study</div><div class="ch"><b>#</b>agents</div>
+        <div class="sec">Build</div><div class="ch"><b>#</b>developers</div>
+      </div>
+      <div class="main">
+        <div class="head"><b>#</b>general<span>Anything goes</span></div>
+        <div class="feed" id="feed"></div>
+        <div class="comp">Message #general</div>
+      </div>
+    </div>
+    <div id="dlg" class="abs">
+      <h4>Share “Thesis outline” in #general</h4>
+      <p>A snapshot of the note goes with your message. Your notebook stays private.</p>
+      <div class="in" id="cmt"></div>
+      <div class="row"><span class="btn">Cancel</span><span class="btn primary" id="share">Share</span></div>
+    </div>
+  </div>
+  <div id="tag" class="abs">Share a snapshot. <em>Keep the notebook.</em></div>
+</div>
+<script src="../shared/base.js"></script>
+<script>
+const { $, seg, ease, pop, show, typed, cursor, at, run, cards } = Promo;
+cards({ title: "Get feedback.", subtitle: "Share a note, hear what people think.", heading: "Get feedback" });
+const AV = { quasar: ["QU", "#2563eb"], ada: ["AD", "#9333ea"], bob: ["BO", "#0d9488"], cy: ["CY", "#ea580c"] };
+const msg = (who, time, html, extra = "", o = 1, dy = 0) => `<div class="msg" style="opacity:${o};transform:translateY(${dy}px)"><span class="av" style="background:${AV[who][1]}">${AV[who][0]}</span><div><div class="who">${who}<small>${time}</small></div><div class="tx">${html}</div>${extra}</div></div>`;
+const COMMENT = "Does the argument in section 2 hold up?";
+function scene(t) {
+  // the share dialog: a comment, then Share
+  const d = ease(seg(t, 2.9, 3.2)) * (1 - ease(seg(t, 5.0, 5.25)));
+  show($("dlg"), d, (1 - ease(seg(t, 2.9, 3.2))) * 20, .97 + d * .03);
+  $("cmt").innerHTML = typed(COMMENT, t, 3.3, 4.6);
+  $("share").classList.toggle("hot", t >= 4.85 && t < 5.1);
+  cursor(t, [[3.9, 700, 820], [4.85, ...at("#share")]], [4.85]);
+
+  // the gist lands, then the replies and reactions
+  const g = ease(seg(t, 5.2, 5.6));
+  const thumbs = t < 6.6 ? 0 : t < 7.4 ? 1 : t < 9.6 ? 2 : 3, bulb = t < 8.2 ? 0 : t < 10.4 ? 1 : 2, fire = t < 11.2 ? 0 : 1;
+  const re = (e, n, mine, at2) => (n ? `<span class="re${mine ? " mine" : ""}" style="transform:scale(${pop(seg(t, at2, at2 + .3)) || 1})">${e} ${n}</span>` : "");
+  const gist = `<div class="gist"><div class="gh">📄 <b>Thesis outline</b><small>Research</small><span class="open">Open ↗</span></div><h5>1. Sleep matters more than hours studied</h5><h5>2. Review before bed beats review in the morning</h5><p>My own logs: recall 23% higher after 7+ hours…</p></div>
+    <div class="reacts">${re("👍", thumbs, false, thumbs === 3 ? 9.6 : thumbs === 2 ? 7.4 : 6.6)}${re("💡", bulb, false, bulb === 2 ? 10.4 : 8.2)}${re("🔥", fire, false, 11.2)}</div>`;
+  let html = t >= 5.2 ? msg("quasar", "2:14 PM", COMMENT, gist, g, (1 - g) * 20) : "";
+  const reply = (who, time, txt, a) => { const p = ease(seg(t, a, a + .35)); return t >= a ? msg(who, time, txt, "", p, (1 - p) * 16) : ""; };
+  html += reply("ada", "2:15 PM", `<span class="men">@quasar</span> Section 2 needs a source. Say the 23% is your own data.`, 7.0);
+  html += reply("bob", "2:15 PM", `Love the structure. Point 3 could be a table.`, 8.8);
+  html += reply("cy", "2:16 PM", `Ran the same test last term and got 19%. Happy to share my notes.`, 11.6);
+  html += `<div class="typing">${t >= 10.5 && t < 11.6 ? "cy is typing…" : ""}</div>`;
+  $("feed").innerHTML = html;
+
+  const tg = ease(seg(t, 12.0, 12.4));
+  show($("tag"), tg * (1 - ease(seg(t, 12.9, 13.2))), (1 - tg) * 12);
+}
+run(15, scene);
+</script></body></html>

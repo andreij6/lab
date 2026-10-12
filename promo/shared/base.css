@@ -1,0 +1,47 @@
+/* Shared look for every promo scene: Lab's Velocity dark palette, the title and end cards, the app
+   window chrome, the cursor. A scene adds its own CSS for what happens inside the window. */
+:root {
+  --bg: oklch(17% 0.01 281); --bg-1: oklch(23.5% 0.00125 281); --bg-2: oklch(27.5% 0.00375 281); --bg-3: oklch(31% 0.004 281);
+  --line: oklch(100% 0.05 281 / 0.08); --fg: oklch(90% 0.004 281); --fg-2: oklch(72% 0.004 281); --fg-3: oklch(55% 0.008 281);
+  --accent: hsl(212 86% 55%); --accent-2: hsl(212 86% 70%); --accent-dim: hsl(212 86% 55% / .16); --ok: #4ade80; --gold: #fde68a; --danger: #f87171;
+  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 1080px; height: 1080px; overflow: hidden; background: var(--bg); color: var(--fg); font-family: var(--sans); -webkit-font-smoothing: antialiased; }
+#stage { position: relative; width: 1080px; height: 1080px; overflow: hidden;
+  background: radial-gradient(900px 600px at 80% -10%, hsl(212 86% 40% / .35), transparent 60%), radial-gradient(800px 600px at -10% 110%, hsl(250 70% 45% / .30), transparent 60%), var(--bg); }
+.abs { position: absolute; }
+svg.i { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+#title { inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 28px; text-align: center; padding: 0 60px; }
+#title .logo { width: 132px; height: 132px; filter: drop-shadow(0 18px 40px hsl(212 86% 50% / .45)); }
+#title h1 { font-size: 100px; font-weight: 800; letter-spacing: -.035em; line-height: 1.02; }
+#title p { font-size: 38px; color: var(--fg-2); font-weight: 500; letter-spacing: -.01em; }
+
+#head { left: 70px; right: 70px; top: 54px; display: flex; align-items: center; gap: 18px; }
+#head .logo { width: 54px; height: 54px; }
+#head h2 { font-size: 46px; font-weight: 800; letter-spacing: -.03em; }
+#head span { margin-left: auto; font-size: 24px; color: var(--fg-3); font-weight: 600; }
+
+.win { left: 60px; top: 150px; width: 960px; height: 770px; border-radius: 22px; background: var(--bg-1); border: 1px solid var(--line); box-shadow: 0 40px 120px rgba(0,0,0,.6); overflow: hidden; }
+.bar { height: 46px; display: flex; align-items: center; gap: 10px; padding: 0 18px; border-bottom: 1px solid var(--line); background: var(--bg-2); }
+.bar i { width: 13px; height: 13px; border-radius: 50%; background: #ff5f57; } .bar i:nth-child(2) { background: #febc2e; } .bar i:nth-child(3) { background: #28c840; }
+.bar b { margin-left: 14px; font-size: 17px; color: var(--fg-2); font-weight: 600; } .bar b em { font-style: normal; color: var(--fg-3); font-weight: 500; }
+.wbody { position: absolute; top: 46px; left: 0; right: 0; bottom: 0; }
+
+.btn { display: inline-flex; align-items: center; gap: 8px; height: 44px; padding: 0 18px; border-radius: 12px; font-size: 18px; font-weight: 600; background: var(--bg-3); color: var(--fg); border: 1px solid var(--line); }
+.btn.primary { background: var(--accent); border-color: transparent; color: #fff; }
+.btn.hot { outline: 3px solid hsl(212 86% 70% / .7); outline-offset: 2px; }
+.pill { display: inline-flex; align-items: center; height: 28px; padding: 0 12px; border-radius: 999px; font-size: 15px; font-weight: 700; background: var(--accent-dim); color: var(--accent-2); }
+.caret { display: inline-block; width: 2px; height: 1.1em; background: var(--accent-2); vertical-align: -.15em; margin-left: 1px; }
+
+#cursor { width: 34px; height: 34px; left: 0; top: 0; z-index: 50; }
+#ripple { width: 60px; height: 60px; border-radius: 50%; border: 3px solid var(--accent-2); z-index: 49; }
+
+#end { inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 24px; background: radial-gradient(700px 500px at 50% 40%, hsl(212 86% 40% / .35), transparent 70%), var(--bg); z-index: 60; }
+#end .logo { width: 150px; height: 150px; filter: drop-shadow(0 18px 40px hsl(212 86% 50% / .5)); }
+#end h1 { font-size: 96px; font-weight: 800; letter-spacing: -.035em; }
+#end p { font-size: 34px; color: var(--fg-2); line-height: 1.35; max-width: 860px; }
+#end .url { margin-top: 14px; font-size: 26px; color: var(--accent-2); font-weight: 600; background: var(--accent-dim); border-radius: 999px; padding: 12px 28px; }
+#title { z-index: 60; }

@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Lab: Link your thinking</title>
+<link rel="stylesheet" href="../shared/base.css">
+<style>
+  .wbody { display: grid; grid-template-columns: 1fr 380px; }
+  .ed { padding: 34px 40px; border-right: 1px solid var(--line); position: relative; }
+  .ed .path { font-family: var(--mono); font-size: 14px; color: var(--fg-3); margin-bottom: 18px; }
+  .ed h1 { font-size: 40px; letter-spacing: -.02em; margin-bottom: 18px; }
+  .ed p { font-size: 22px; line-height: 1.6; color: var(--fg-2); margin-bottom: 16px; }
+  .ed p.cur { color: var(--fg); }
+  .wl { color: var(--accent-2); background: var(--accent-dim); border-radius: 6px; padding: 0 4px; }
+  .br { color: var(--fg-3); }
+  #ac { left: 0; top: 0; width: 330px; background: var(--bg-3); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,.55); padding: 6px; z-index: 5; }
+  #ac div { display: flex; align-items: center; gap: 10px; height: 42px; padding: 0 12px; border-radius: 8px; font-size: 18px; color: var(--fg-2); }
+  #ac div.on { background: var(--accent); color: #fff; }
+  .side { position: relative; background: var(--bg-2); }
+  .side .h { font-size: 13px; font-weight: 800; color: var(--fg-3); letter-spacing: .1em; text-transform: uppercase; padding: 18px 22px 0; display: flex; gap: 8px; align-items: center; }
+  .side .h .n { color: var(--accent-2); }
+  #graph { position: absolute; left: 0; top: 40px; width: 380px; height: 400px; }
+  #graph line { stroke: hsl(212 30% 60% / .45); stroke-width: 2; }
+  #graph line.new { stroke: var(--accent-2); stroke-width: 3; }
+  #graph circle { fill: oklch(77% 0.004 281); }
+  #graph circle.cur { fill: var(--accent); }
+  #graph text { fill: var(--fg-2); font-size: 15px; font-family: var(--sans); text-anchor: middle; }
+  #graph text.cur { fill: var(--fg); font-weight: 700; }
+  #back { position: absolute; left: 0; right: 0; top: 446px; bottom: 0; border-top: 1px solid var(--line); }
+  #back .row { display: flex; align-items: center; gap: 10px; height: 44px; margin: 4px 14px; padding: 0 12px; border-radius: 9px; font-size: 18px; color: var(--fg-2); background: var(--bg-1); }
+  #back .row .i { color: var(--accent-2); }
+  #back .row small { margin-left: auto; color: var(--fg-3); font-size: 14px; }
+  #count { left: 0; right: 0; bottom: 36px; text-align: center; font-size: 20px; color: var(--fg-2); font-weight: 600; }
+</style></head>
+<body><div id="stage">
+  <div class="win abs">
+    <div class="bar"><i></i><i></i><i></i><b>Research <em>/ Sleep and learning</em></b></div>
+    <div class="wbody">
+      <div class="ed">
+        <div class="path">Research/Sleep and learning.md</div>
+        <h1>Sleep and learning</h1>
+        <p>Two weeks of tracking: on nights with 7+ hours, recall of the previous day's cards was 23% higher.</p>
+        <p class="cur" id="line"></p>
+        <p>- Naps under 20 minutes made no difference.<br>- Caffeine after 3 pm cost about an hour of sleep.</p>
+        <p><span class="wl" style="background:none">#sleep</span> <span class="wl" style="background:none">#study</span></p>
+        <div id="ac" class="abs"></div>
+      </div>
+      <div class="side">
+        <div class="h">Graph</div>
+        <svg id="graph" viewBox="0 0 380 400"></svg>
+        <div id="back"><div class="h">Backlinks <span class="n" id="bn"></span></div><div id="brows"></div></div>
+      </div>
+    </div>
+  </div>
+  <div id="count" class="abs"></div>
+</div>
+<script src="../shared/base.js"></script>
+<script>
+const { $, seg, ease, pop, show, icon, typed, cursor, at, run, cards } = Promo;
+cards({ title: "Link your thinking.", subtitle: "Type [[ and your notes connect themselves.", heading: "Link your thinking" });
+
+// the local graph: the open note, its new links, and neighbours that were already there
+const N = {
+  sleep: [190, 190, "Sleep and learning"], spaced: [88, 92, "Spaced repetition"], exam: [300, 300, "Exam plan"],
+  daily: [86, 300, "2026-10-11"], coffee: [306, 82, "Coffee experiments"], anki: [64, 196, "Biology"],
+};
+const OLD = [["daily", "sleep"], ["coffee", "sleep"], ["daily", "spaced"], ["anki", "spaced"]];
+const NEW = [["sleep", "spaced", 5.6], ["sleep", "exam", 8.7]];
+// a wider notebook appears when the graph zooms out at the end
+const FAR = Array.from({ length: 34 }, (_, i) => { const a = i * 2.39996, r = 150 + (i % 7) * 28; return [190 + Math.cos(a) * r, 200 + Math.sin(a) * r * .95]; });
+// each outer note links to its nearest one or two, so the zoomed-out map reads as a network
+const NEAREST = FAR.map(([x, y], i) => FAR.map(([u, v], j) => [Math.hypot(u - x, v - y), j]).filter(([, j]) => j !== i).sort((a, b) => a[0] - b[0]).slice(0, i % 3 ? 1 : 2).map(([, j]) => j));
+
+const LINE1 = "See also ";
+const L1 = "Spaced repetition", L2 = "Exam plan";
+function scene(t) {
+  // typing "See also [[Spa", the completion list, then the rest of the sentence
+  const a1 = 3.0, a2 = 4.2;               // "See also [[Spa"
+  const pick1 = 5.3, mid = 6.6, a3 = 7.2, pick2 = 8.5;
+  let html = "";
+  if (t < pick1) html = typed(LINE1 + "[[Spa", t, a1, a2);
+  else if (t < mid) html = `${LINE1}<span class="wl"><span class="br">[[</span>${L1}<span class="br">]]</span></span>`;
+  else if (t < pick2) html = `${LINE1}<span class="wl"><span class="br">[[</span>${L1}<span class="br">]]</span></span>${typed(" and [[Ex", t, mid, a3)}`;
+  else html = `${LINE1}<span class="wl"><span class="br">[[</span>${L1}<span class="br">]]</span></span> and <span class="wl"><span class="br">[[</span>${L2}<span class="br">]]</span></span>.`;
+  $("line").innerHTML = html + '<span id="mark"></span>';
+
+  // the completion popup under the caret
+  const ac = $("ac");
+  const open1 = t >= a2 && t < pick1, open2 = t >= a3 && t < pick2;
+  if (open1 || open2) {
+    const r = $("mark").getBoundingClientRect(), base = document.querySelector(".ed").getBoundingClientRect();
+    ac.style.left = `${Math.min(r.left - base.left - 50, 230)}px`; ac.style.top = `${r.bottom - base.top + 10}px`;
+    const items = open1 ? ["Spaced repetition", "Spanish verbs", "Space and time"] : ["Exam plan", "Exam week (2025)", "Examples of recall"];
+    const sel = (open1 ? t - a2 : t - a3) > .55 ? 0 : -1;
+    ac.innerHTML = items.map((x, i) => `<div class="${i === sel ? "on" : ""}">${icon("file")}${x}</div>`).join("");
+    const p = ease(seg(t, open1 ? a2 : a3, (open1 ? a2 : a3) + .25));
+    show(ac, p, (1 - p) * -8);
+  } else show(ac, 0);
+
+  // the graph: old edges, then each new link draws itself in as it is made
+  const zoom = ease(seg(t, 11.3, 12.4));
+  const k = 1 - zoom * .42, cx = 190, cy = 200;
+  const P = (x, y) => [cx + (x - cx) * k, cy + (y - cy) * k];
+  let g = "";
+  const farO = zoom;
+  // the wider notebook: each outer note links to a neighbour or two, a few to the notes in view
+  const near = ["daily", "coffee", "exam", "anki"];
+  FAR.forEach(([x, y], i) => {
+    const [px, py] = P(x, y);
+    const to = [...NEAREST[i].map((j) => FAR[j]), i % 5 === 0 ? N[near[i % 4]] : null].filter(Boolean);
+    for (const q of to) { const [qx, qy] = P(q[0], q[1]); g += `<line x1="${px}" y1="${py}" x2="${qx}" y2="${qy}" style="opacity:${farO * .4}"/>`; }
+  });
+  for (const [a, b] of OLD) { const [x1, y1] = P(...N[a].slice(0, 2)), [x2, y2] = P(...N[b].slice(0, 2)); g += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`; }
+  for (const [a, b, when] of NEW) {
+    const p = ease(seg(t, when, when + .7));
+    if (p <= 0) continue;
+    const [x1, y1] = P(...N[a].slice(0, 2)), [x2, y2] = P(...N[b].slice(0, 2));
+    g += `<line class="new" x1="${x1}" y1="${y1}" x2="${x1 + (x2 - x1) * p}" y2="${y1 + (y2 - y1) * p}"/>`;
+  }
+  FAR.forEach(([x, y]) => { const [px, py] = P(x, y); g += `<circle cx="${px}" cy="${py}" r="${4 * k + 1}" style="opacity:${farO}"/>`; });
+  for (const [id, [x, y, label]] of Object.entries(N)) {
+    const [px, py] = P(x, y);
+    const lit = (id === "spaced" && t >= 5.9) || (id === "exam" && t >= 9.0);
+    const bump = id === "spaced" ? pop(seg(t, 5.9, 6.3)) : id === "exam" ? pop(seg(t, 9.0, 9.4)) : 1;
+    const r = (id === "sleep" ? 13 : 9) * (lit ? Math.max(1, bump) : 1) * (1 - zoom * .3);
+    g += `<circle class="${id === "sleep" || lit ? "cur" : ""}" cx="${px}" cy="${py}" r="${r}"/><text class="${id === "sleep" ? "cur" : ""}" x="${px}" y="${py + r + 20}" style="opacity:${1 - zoom * .85}">${label}</text>`;
+  }
+  $("graph").innerHTML = g;
+
+  // Backlinks of the open note's new neighbour fill in, one by one
+  const rows = [["Sleep and learning", "just now", 9.8], ["2026-10-11", "daily", 10.15], ["Biology", "deck", 10.5]];
+  const nb = rows.filter((r) => t >= r[2]).length || "";
+  $("brows").innerHTML = t < 9.6 ? `<div class="row" style="background:none;color:var(--fg-3)">Open a note to see what links to it</div>` : rows.map(([n, s, when]) => { const p = ease(seg(t, when, when + .3)); return `<div class="row" style="opacity:${p};transform:translateX(${(1 - p) * 16}px)">${icon("links")}${n}<small>${s}</small></div>`; }).join("");
+  document.querySelector("#back .h").innerHTML = t < 9.6 ? 'Backlinks' : `Backlinks of Spaced repetition <span class="n">${nb}</span>`;
+
+  const c = ease(seg(t, 11.6, 12.2));
+  $("count").innerHTML = "48 notes · 71 links, all yours";
+  show($("count"), c * (1 - ease(seg(t, 12.9, 13.2))), (1 - c) * 10);
+  cursor(t, []);
+}
+run(15, scene);
+</script></body></html>
