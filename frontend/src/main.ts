@@ -22,6 +22,7 @@ import { NEW_BOARD, isKanban, moveCard, parseBoard, serializeBoard, type Board }
 import { NEW_CARDS, NEW_CHOICE, graded, parseCards, parseChoice, quizKind, shuffled } from "./quiz";
 import { countByDay, dayKey, gridWeeks, level, streak } from "./activity";
 import { examples } from "./examples";
+import { minDepositE8s } from "./pricing";
 import { APPLICATIONS_BOARD, EXPERIENCE_TEMPLATE, PERSON_TEMPLATE, RESUME_TEMPLATE, STAGES, STORIES_DECK, addApplication, addDays, applicationCard, applications, compileResume, contacts, experience, isExperience, markContacted, parseStar, searchStats, storyCard, updateApplication, waiting } from "./career";
 import { cardKey, isDue, review as srsReview, type Rating, type Sched } from "./srs";
 import { align, isLeanNote, leanCode, parseLean, statementCard, unmentionedHyps } from "./lean";
@@ -44,6 +45,19 @@ import { cacheDel, cacheGet, cacheSet, clearQueue, queueWrite, queued, type Queu
 import { registerSW } from "virtual:pwa-register";
 import { THEMES, applyTheme, loadThemeState, saveThemeState, type ThemeState } from "./themes";
 import { zip } from "./zip";
+
+// ---------- the cycles minting canister: today's ICP price in cycles ----------
+
+const CMC_ID = "rkp4c-7iaaa-aaaaa-aaaca-cai";
+const cmcIdl: IDL.InterfaceFactory = ({ IDL: I }) => I.Service({ get_icp_xdr_conversion_rate: I.Func([], [I.Record({ data: I.Record({ xdr_permyriad_per_icp: I.Nat64, timestamp_seconds: I.Nat64 }), hash_tree: I.Vec(I.Nat8), certificate: I.Vec(I.Nat8) })], ["query"]) });
+/** 10,000ths of an XDR one ICP buys (1 XDR = 1 TC), or undefined when the CMC cannot be reached. */
+async function icpXdrRate(): Promise<bigint | undefined> {
+  try {
+    const agent = HttpAgent.createSync({ identity: S.identity, rootKey: env.IC_ROOT_KEY });
+    const cmc = Actor.createActor<{ get_icp_xdr_conversion_rate: () => Promise<{ data: { xdr_permyriad_per_icp: bigint } }> }>(cmcIdl, { agent, canisterId: CMC_ID });
+    return (await cmc.get_icp_xdr_conversion_rate()).data.xdr_permyriad_per_icp;
+  } catch { return undefined; }
+}
 
 // ---------- ledger (just enough for a signed-in top-up) ----------
 
@@ -3810,18 +3824,23 @@ async function loadNotebooks() {
 
 const DEPOSIT_CHOICES = [1, 3, 5, 10];
 const DEPOSIT_DEFAULT = 3;
-/** How much ICP to turn into the new notebook's cycles: quick amounts (3 by default), any other
- *  amount, or none. Resolves the e8s (0n for none) or null when cancelled. */
-function depositDialog(name: string): Promise<bigint | null> {
+/** How much ICP to turn into the new notebook's cycles: quick amounts (3 by default) or any other
+ *  amount, never under `min` (what starting a notebook costs Lab, see pricing.ts). Resolves the
+ *  e8s, or null when cancelled. */
+function depositDialog(name: string, minE8s: bigint): Promise<bigint | null> {
+  const min = Number(minE8s) / 1e8;
+  const choices = [...new Set([min, ...DEPOSIT_CHOICES].filter((n) => n >= min))].sort((a, b) => a - b).slice(0, 4);
+  const dflt = Math.max(DEPOSIT_DEFAULT, min);
   return new Promise((res) => {
     const scrim = document.createElement("div");
     scrim.className = "scrim";
     scrim.innerHTML = `<form class="modal" role="dialog" aria-modal="true" aria-labelledby="dep-t">
       <h2 id="dep-t">Keep “${esc(name)}” running</h2>
-      <p class="muted">A notebook is its own canister and runs on cycles. Deposit ICP and it becomes this notebook's cycles; top up again any time from Manage.${S.price > 0n ? ` Spawning also costs ${icp(S.price)} ICP.` : ""}</p>
-      <div class="dep-choices" role="radiogroup" aria-label="Deposit">${DEPOSIT_CHOICES.map((n) => `<label class="dep-choice"><input type="radio" name="amt" value="${n}" ${n === DEPOSIT_DEFAULT ? "checked" : ""}><span>${n} ICP</span></label>`).join("")}<label class="dep-choice"><input type="radio" name="amt" value="other"><span>Other</span></label></div>
-      <label class="field dep-other" hidden><span class="label">Amount (ICP)</span><input class="input" name="other" inputmode="decimal" placeholder="2.5"></label>
-      <div class="actions"><button type="button" class="btn btn-ghost" data-x="skip">Create without a deposit</button><button type="button" class="btn" data-x="cancel">Cancel</button><button type="submit" class="btn btn-primary" data-x="ok">${useOisy ? `Pay ${DEPOSIT_DEFAULT} ICP in OISY` : `Deposit ${DEPOSIT_DEFAULT} ICP`}</button></div>
+      <p class="muted">A notebook is its own canister and runs on cycles. The ICP you deposit becomes this notebook's cycles; top up again any time from Manage.${S.price > 0n ? ` Spawning also costs ${icp(S.price)} ICP.` : ""}</p>
+      <div class="dep-choices" role="radiogroup" aria-label="Deposit">${choices.map((n) => `<label class="dep-choice"><input type="radio" name="amt" value="${n}" ${n === dflt ? "checked" : ""}><span>${n} ICP</span></label>`).join("")}<label class="dep-choice"><input type="radio" name="amt" value="other"><span>Other</span></label></div>
+      <label class="field dep-other" hidden><span class="label">Amount (ICP, at least ${min})</span><input class="input" name="other" inputmode="decimal" placeholder="${min + 1}"></label>
+      <p class="small muted">The minimum, ${min} ICP, is about what starting a notebook costs Lab (creating its canister and its first cycles) at today's ICP price.</p>
+      <div class="actions"><button type="button" class="btn" data-x="cancel">Cancel</button><button type="submit" class="btn btn-primary" data-x="ok">${useOisy ? `Pay ${dflt} ICP in OISY` : `Deposit ${dflt} ICP`}</button></div>
     </form>`;
     const f = scrim.querySelector("form")!;
     const other = f.querySelector<HTMLInputElement>("[name=other]")!;
@@ -3830,7 +3849,7 @@ function depositDialog(name: string): Promise<bigint | null> {
       const isOther = f.querySelector<HTMLInputElement>("[name=amt]:checked")!.value === "other";
       f.querySelector<HTMLElement>(".dep-other")!.hidden = !isOther;
       const n = amount();
-      f.querySelector<HTMLElement>("[data-x=ok]")!.textContent = n > 0 ? `${useOisy ? "Pay" : "Deposit"} ${n} ICP${useOisy ? " in OISY" : ""}` : "Enter an amount";
+      f.querySelector<HTMLElement>("[data-x=ok]")!.textContent = n >= min ? `${useOisy ? "Pay" : "Deposit"} ${n} ICP${useOisy ? " in OISY" : ""}` : `At least ${min} ICP`;
     };
     f.addEventListener("change", () => { sync(); if (f.querySelector<HTMLInputElement>("[name=amt]:checked")!.value === "other") other.focus(); });
     other.addEventListener("input", sync);
@@ -3838,11 +3857,10 @@ function depositDialog(name: string): Promise<bigint | null> {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && done(null);
     scrim.addEventListener("click", (e) => e.target === scrim && done(null));
     f.querySelector("[data-x=cancel]")!.addEventListener("click", () => done(null));
-    f.querySelector("[data-x=skip]")!.addEventListener("click", () => done(0n));
     f.addEventListener("submit", (e) => {
       e.preventDefault();
       const n = amount();
-      if (!(n >= 0.01)) return void toast("The smallest deposit is 0.01 ICP.", "error");
+      if (!(n >= min)) return void toast(`The smallest deposit is ${min} ICP.`, "error");
       done(BigInt(Math.round(n * 1e8)));
     });
     document.addEventListener("keydown", onKey);
@@ -3855,7 +3873,7 @@ function depositDialog(name: string): Promise<bigint | null> {
  *  into its cycles. A failed deposit leaves the notebook created; Manage can top it up later. */
 async function createNotebook() {
   if (!S.newNotebook.trim()) return;
-  const deposit = await depositDialog(S.newNotebook.trim());
+  const deposit = await depositDialog(S.newNotebook.trim(), minDepositE8s(await icpXdrRate()));
   if (deposit === null) return;
   S.busy = "create";
   S.error = "";
