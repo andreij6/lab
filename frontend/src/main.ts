@@ -3968,7 +3968,9 @@ async function openNotebook(id: string, path?: string) {
   S.mobilePane = "files";
   graphPos.clear();
   miniPos.clear();
-  location.hash = `#/notebook/${id}`;
+  // a link straight to a note (#/notebook/id/path) already names this notebook: rewriting it pushed
+  // extra history entries, so Back took two presses to leave
+  if (!location.hash.startsWith(`#/notebook/${id}`)) location.hash = `#/notebook/${id}`;
   render();
   try {
     await loadNotebook();
@@ -6487,6 +6489,12 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
 document.addEventListener("click", (ev) => {
   if (!(ev.target as HTMLElement).closest(".ctx-menu")) closeMenu();
   const t = ev.target as HTMLElement;
+  // touch screens have no hover: tapping a chat message shows its actions, tapping elsewhere hides them
+  if (matchMedia("(hover: none)").matches && !t.closest(".mtools")) {
+    const row = t.closest<HTMLElement>(".msgrow");
+    document.querySelectorAll(".msgrow.tools-on").forEach((r) => { if (r !== row) r.classList.remove("tools-on"); });
+    if (row && !t.closest("a, button, input, textarea, .poll, .gist, .fund, .reacts")) row.classList.toggle("tools-on");
+  }
   // a task checkbox in reading view flips its [ ] in the source
   if (t instanceof HTMLInputElement && t.type === "checkbox" && t.closest(".preview")) {
     const pv = t.closest<HTMLElement>(".preview")!;
@@ -7156,8 +7164,10 @@ const sharedRoute = () => location.hash.match(/^#\/shared\/([a-z0-9-]+)\/(.*)$/)
 window.addEventListener("hashchange", () => {
   const sh = sharedRoute();
   if (sh) return void openShared(sh[1], decodeURIComponent(sh[2]));
-  if (location.hash !== "#/community" && S.community) { S.community = undefined; clearInterval(chatTimer); } // leaving the community for any other page
-  if (!location.hash.startsWith("#/board") && S.board) S.board = undefined;
+  // leaving the community or the board for another page; the notebook under them needs drawing again
+  let left = false;
+  if (location.hash !== "#/community" && S.community) { S.community = undefined; clearInterval(chatTimer); left = true; }
+  if (!location.hash.startsWith("#/board") && S.board) { S.board = undefined; left = true; }
   const bm = /^#\/board(?:\/(\d+))?$/.exec(location.hash);
   if (bm) { if (S.identity) return void loadBoard(undefined, bm[1] ? BigInt(bm[1]) : undefined); location.hash = "#/"; return; }
   if (location.hash === "#/admin") {
@@ -7206,6 +7216,8 @@ window.addEventListener("hashchange", () => {
     const path = m[2] ? decodeURIComponent(m[2]) : undefined;
     if (S.notebook?.canister.toText() !== m[1]) void (async () => { if (!S.notebooks) await loadNotebooks(); await openNotebook(m[1], path); })();
     else if (path && path !== cur() && note(path)) void open(path);
+    // back (or a typed link) from the community or board to the notebook already open: without this the old page stayed on screen
+    else if (left) render();
   }
 });
 setInterval(() => {
