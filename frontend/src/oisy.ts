@@ -32,7 +32,7 @@ export class Oisy {
     const p = this.pending.get(m.id);
     if (!p) return;
     this.pending.delete(m.id);
-    if (m.error) p.rej(new Error(`OISY: ${ERRORS[m.error.code] ?? m.error.message ?? `error ${m.error.code}`}`));
+    if (m.error) p.rej(new Error(`OISY: ${ERRORS[m.error.code] ?? m.error.message ?? `error ${m.error.code}`}${this.methods.has(m.id) ? ` (${this.methods.get(m.id)})` : ""}`));
     else p.res(m.result);
   };
   private closedPoll = 0;
@@ -83,9 +83,14 @@ export class Oisy {
     if (!this.win || !this.origin) return Promise.reject(new Error("OISY: not connected"));
     const id = ++this.seq;
     const p = new Promise<unknown>((res, rej) => this.pending.set(id, { res, rej }));
-    this.win.postMessage({ jsonrpc: "2.0", id, method, params } satisfies Rpc, this.origin);
-    return p;
+    // OISY validates requests strictly: a method that takes no params must not carry a `params` key
+    // at all (even undefined), or the signer answers 2000 "not supported".
+    const msg: Rpc = params === undefined ? { jsonrpc: "2.0", id, method } : { jsonrpc: "2.0", id, method, params };
+    this.methods.set(id, method);
+    this.win.postMessage(msg, this.origin);
+    return p.finally(() => this.methods.delete(id));
   }
+  private methods = new Map<number | string, string>();
 
   /** ICRC-49: ask the wallet to sign and submit a canister call; resolves once the wallet has the certificate. */
   callCanister(args: { canisterId: string; sender: string; method: string; arg: Uint8Array }): Promise<{ contentMap: string; certificate: string }> {
