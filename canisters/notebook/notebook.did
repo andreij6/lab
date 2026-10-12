@@ -143,28 +143,29 @@ type Renamed = record {
 type Result = variant { Ok : vec AgentKey; Err : NotebookError };
 type Result_1 = variant { Ok : vec Attempt; Err : NotebookError };
 type Result_10 = variant { Ok : DepositState; Err : NotebookError };
-type Result_11 = variant { Ok : vec text; Err : NotebookError };
-type Result_12 = variant { Ok : vec Revision; Err : NotebookError };
-type Result_13 = variant { Ok : vec FileMeta; Err : NotebookError };
-type Result_14 = variant { Ok : vec AttestationView; Err : NotebookError };
-type Result_15 = variant { Ok : vec principal; Err : NotebookError };
-type Result_16 = variant {
+type Result_11 = variant { Ok : nat; Err : NotebookError };
+type Result_12 = variant { Ok : vec text; Err : NotebookError };
+type Result_13 = variant { Ok : vec Revision; Err : NotebookError };
+type Result_14 = variant { Ok : vec FileMeta; Err : NotebookError };
+type Result_15 = variant { Ok : vec AttestationView; Err : NotebookError };
+type Result_16 = variant { Ok : vec principal; Err : NotebookError };
+type Result_17 = variant {
   Ok : vec record { principal; nat8 };
   Err : NotebookError;
 };
-type Result_17 = variant { Ok : Note; Err : NotebookError };
-type Result_18 = variant { Ok : vec Note; Err : NotebookError };
-type Result_19 = variant { Ok : Page; Err : NotebookError };
+type Result_18 = variant { Ok : Note; Err : NotebookError };
+type Result_19 = variant { Ok : vec Note; Err : NotebookError };
 type Result_2 = variant { Ok : vec Comment; Err : NotebookError };
-type Result_20 = variant { Ok : Renamed; Err : NotebookError };
-type Result_21 = variant { Ok : FolderRenamed; Err : NotebookError };
-type Result_22 = variant { Ok : vec Hit; Err : NotebookError };
-type Result_23 = variant { Ok : Share; Err : NotebookError };
-type Result_24 = variant { Ok : vec Share; Err : NotebookError };
-type Result_25 = variant { Ok : Attempt; Err : NotebookError };
-type Result_26 = variant { Ok : TopUp; Err : text };
-type Result_27 = variant { Ok : FileMeta; Err : NotebookError };
-type Result_28 = variant { Ok : Imported; Err : NotebookError };
+type Result_20 = variant { Ok : Page; Err : NotebookError };
+type Result_21 = variant { Ok : Renamed; Err : NotebookError };
+type Result_22 = variant { Ok : FolderRenamed; Err : NotebookError };
+type Result_23 = variant { Ok : vec Hit; Err : NotebookError };
+type Result_24 = variant { Ok : Share; Err : NotebookError };
+type Result_25 = variant { Ok : vec Share; Err : NotebookError };
+type Result_26 = variant { Ok : Attempt; Err : NotebookError };
+type Result_27 = variant { Ok : TopUp; Err : text };
+type Result_28 = variant { Ok : FileMeta; Err : NotebookError };
+type Result_29 = variant { Ok : Imported; Err : NotebookError };
 type Result_3 = variant { Ok : AskAnswer; Err : NotebookError };
 type Result_4 = variant { Ok : NoteAttestation; Err : NotebookError };
 type Result_5 = variant { Ok : Audit; Err : NotebookError };
@@ -242,48 +243,51 @@ service : (Init) -> {
   // Delete a folder with everything in it; returns how many files went.
   delete_folder : (text) -> (Result_9);
   deposits : () -> (Result_10) query;
+  // Send this notebook's cycles to `to` (another of the owner's notebooks, or the registry) just
+  // before the registry deletes it, so they are not burnt with the canister. Registry only.
+  drain_cycles : (principal) -> (Result_11);
   // Every folder, sorted, including empty ones.
-  folders : () -> (Result_11) query;
+  folders : () -> (Result_12) query;
   get_settings : () -> (Result_6) query;
   // Earlier versions of a note, newest first.
-  history : (text) -> (Result_12) query;
+  history : (text) -> (Result_13) query;
   // Every request is upgraded to an update call: update responses need no certification, so the
   // API works through any gateway.
   http_request : (HttpRequest) -> (HttpResponse) query;
   http_request_update : (HttpRequest) -> (HttpResponse);
   info : () -> (Info) query;
   // Every file in the notebook (metadata only), sorted by path.
-  list : () -> (Result_13) query;
+  list : () -> (Result_14) query;
   // Files a sharee may read under `prefix` ("" for everything shared with them).
-  list_shared : (text) -> (Result_13) query;
+  list_shared : (text) -> (Result_14) query;
   // Create a folder (and its ancestors); creating an existing folder is fine.
   mkdir : (text) -> (Result_6);
   my_role : (text) -> (opt Role) query;
   // Attestations on a note with whether each still matches the current content (anyone who can read it).
-  note_attestations : (text) -> (Result_14) query;
+  note_attestations : (text) -> (Result_15) query;
   // "I am looking at this note": kept two minutes, so a group sees who is here.
-  ping : (text) -> (Result_15);
+  ping : (text) -> (Result_16);
   // Everyone's mark on a note, for the group (anyone who can read the note).
-  progress : (text) -> (Result_16) query;
+  progress : (text) -> (Result_17) query;
   published : () -> (opt text) query;
-  read : (text) -> (Result_17) query;
+  read : (text) -> (Result_18) query;
   // The whole notebook (attachments listed without content), so the client can index links,
   // tags and search locally.
-  read_all : () -> (Result_18) query;
+  read_all : () -> (Result_19) query;
   // Notes after `after` (exclusive), up to `limit` of them or ~1.5 MB, whichever first.
-  read_page : (opt text, nat32) -> (Result_19) query;
+  read_page : (opt text, nat32) -> (Result_20) query;
   // Read a shared note: public shares need no sign-in; private ones need a listed principal.
-  read_shared : (text) -> (Result_17) query;
+  read_shared : (text) -> (Result_18) query;
   // Move or rename a file; `[[links]]` to a renamed note are rewritten in every other note.
-  rename : (text, text) -> (Result_20);
+  rename : (text, text) -> (Result_21);
   // Move or rename a folder: every file under it moves, and `[[links]]` follow.
-  rename_folder : (text, text) -> (Result_21);
+  rename_folder : (text, text) -> (Result_22);
   // Answer a comment; the reply inherits the note and needs the same permission as commenting there.
   reply : (nat64, text) -> (Result_7);
   // One earlier version in full; restore it by writing it back.
-  revision : (text, nat64) -> (Result_17) query;
+  revision : (text, nat64) -> (Result_18) query;
   revoke_agent_key : (text) -> (Result_8);
-  search_notes : (text, nat32) -> (Result_22) query;
+  search_notes : (text, nat32) -> (Result_23) query;
   // Mark where you are with a note: 1 read, 2 reviewing, 3 known (0 clears).
   set_progress : (text, nat8) -> (Result_8);
   // Publish `folder` ("" for the whole notebook, except Agents/ and attachments) at /p/; `None` unpublishes.
@@ -291,35 +295,35 @@ service : (Init) -> {
   set_settings : (text) -> (Result_8);
   // Share with explicit permissions: what the link allows (view, comment or edit; editing needs a
   // sign-in) and who may view, comment or edit. Replaces an earlier share of the same path.
-  set_share : (ShareArgs) -> (Result_23);
+  set_share : (ShareArgs) -> (Result_24);
   // Share a note, a folder, or the whole notebook ("") with readers and editors.
-  share : (text, bool, vec principal, vec principal) -> (Result_23);
+  share : (text, bool, vec principal, vec principal) -> (Result_24);
   // What a viewer may know about a share: the notebook's name, whether it is public, and their role.
   share_info : (text) -> (opt record { text; bool }) query;
   // Share a note with everyone (`public`) or with `principals` (readers); replaces an earlier share.
-  share_note : (text, bool, vec principal) -> (Result_23);
-  shares : () -> (Result_24) query;
+  share_note : (text, bool, vec principal) -> (Result_24);
+  shares : () -> (Result_25) query;
   // A finished quiz or deck session on a shared note; the owner sees who scored what.
-  submit_attempt : (text, nat32, nat32) -> (Result_25);
+  submit_attempt : (text, nat32, nat32) -> (Result_26);
   // Convert everything that arrived since the last run, now instead of at the next 10-minute tick.
   sweep_deposits : () -> (Result_6);
   // Convert whatever ICP sits on the account (minus one fee) into cycles now.
-  sweep_topups : () -> (Result_26);
+  sweep_topups : () -> (Result_27);
   // Pull `amount_e8s` the caller approved on the ICP ledger and turn it into this canister's cycles.
-  top_up : (nat64) -> (Result_26);
+  top_up : (nat64) -> (Result_27);
   // Pull `amount_e8s` that `payer` (an OISY wallet, for instance) approved for this canister on the
   // ICP ledger and convert it; the ledger's allowance is the authorization, the owner just triggers it.
-  top_up_from : (principal, nat64) -> (Result_26);
+  top_up_from : (principal, nat64) -> (Result_27);
   topups : (nat32) -> (vec TopUp) query;
   // Hand the notebook to a new owner. Only the registry calls this, after a sale or an ICRC-7
   // transfer it brokered. Agent keys and the auto top-up payer belonged to the old owner, so they go.
   transfer_owner : (principal) -> (Result_8);
   unshare_note : (text) -> (Result_8);
-  who_is_here : (text) -> (Result_15) query;
+  who_is_here : (text) -> (Result_16) query;
   // Create or overwrite a file.
-  write : (text, text) -> (Result_27);
+  write : (text, text) -> (Result_28);
   // Import many files at once (a vault upload); bad names are reported, not fatal.
-  write_many : (vec record { text; text }, bool) -> (Result_28);
+  write_many : (vec record { text; text }, bool) -> (Result_29);
   // An editor's write to a shared note (owner-style rules apply; never under Agents/).
-  write_shared : (text, text) -> (Result_27);
+  write_shared : (text, text) -> (Result_28);
 }

@@ -298,10 +298,12 @@ fn price() -> u64 {
     PRICE.with_borrow(|p| *p.get())
 }
 
-/// Pull the price from the caller's ICRC-2 allowance into the registry's account.
+/// Pull the price from the caller's ICRC-2 allowance into the registry's account. Paying for
+/// yourself uses your registered wallet when you have one.
 async fn charge(payer: Principal, e8s: u64) -> Result<(), String> {
+    let payer = if payer == msg_caller() { WALLETS.with_borrow(|w| w.get(&payer)).unwrap_or(payer) } else { payer };
     let tf = TransferFromArgs {
-        spender_subaccount: None,
+        spender_subaccount: spender_sub(payer),
         from: Account { owner: payer, subaccount: None },
         to: Account { owner: canister_self(), subaccount: None },
         amount: Nat::from(e8s),
@@ -316,6 +318,32 @@ async fn charge(payer: Principal, e8s: u64) -> Result<(), String> {
         .candid()
         .map_err(|e| e.to_string())?;
     r.map(|_| ()).map_err(|e| format!("payment refused: {e:?}. Approve {} ICP for the registry first.", (e8s + ICP_FEE) as f64 / 1e8))
+}
+
+/// An allowance on someone else's account must be granted to the registry's subaccount for the
+/// caller, so an approval made for one person's call cannot be spent by another caller who names
+/// the same payer. Paying from your own account needs no subaccount.
+fn spender_sub(payer: Principal) -> Option<[u8; 32]> {
+    let me = msg_caller();
+    (payer != me).then(|| cmc_subaccount(me).0)
+}
+
+/// Register (or with None, forget) the wallet you pay from, e.g. your OISY account.
+#[update]
+fn set_wallet(wallet: Option<Principal>) -> Result<(), String> {
+    let me = msg_caller();
+    if me == Principal::anonymous() {
+        return Err("sign in first".into());
+    }
+    WALLETS.with_borrow_mut(|w| match wallet {
+        Some(x) if x != me && x != Principal::anonymous() => w.insert(me, x),
+        _ => w.remove(&me),
+    });
+    Ok(())
+}
+#[query]
+fn my_wallet() -> Option<Principal> {
+    WALLETS.with_borrow(|w| w.get(&msg_caller()))
 }
 
 fn cmc_subaccount(canister: Principal) -> Subaccount {
@@ -555,6 +583,58 @@ fn forget_notebook(canister: Principal) -> Result<(), String> {
     })
 }
 
+/// The notebook canister's error type, as it arrives over Candid.
+#[derive(CandidType, Deserialize, Debug)]
+enum NotebookErr {
+    Unauthorized,
+    NotFound,
+    Exists,
+    Invalid(String),
+}
+
+/// Delete a notebook you own for good: its cycles go to `refund_to` (another notebook of yours)
+/// or, when that is None, to the registry; then the canister is stopped and deleted and every
+/// registry record of it (listing, token, attestation) goes. Notes and history cannot come back.
+#[update]
+async fn delete_notebook(canister: Principal, refund_to: Option<Principal>) -> Result<Nat, String> {
+    let me = msg_caller();
+    match NOTEBOOKS.with_borrow(|m| m.get(&canister)) {
+        Some(v) if v.0.owner == me => {}
+        Some(_) => return Err("not your notebook".into()),
+        None => return Err("unknown notebook".into()),
+    }
+    let to = match refund_to {
+        Some(t) if t == canister => return Err("pick a different notebook for the cycles".into()),
+        Some(t) => match NOTEBOOKS.with_borrow(|m| m.get(&t)) {
+            Some(v) if v.0.owner == me => t,
+            _ => return Err("the cycles can only go to another notebook of yours".into()),
+        },
+        None => canister_self(),
+    };
+    // off the market first, so nobody buys it mid-deletion
+    LISTINGS.with_borrow_mut(|m| m.remove(&canister));
+    // the freezing reserve (90 days of idle burn) would block the payout: drop it, the canister is going anyway
+    let _ = mgmt::update_settings(&mgmt::UpdateSettingsArgs { canister_id: canister, settings: mgmt::CanisterSettings { freezing_threshold: Some(Nat::from(0u8)), ..Default::default() } }).await;
+    // a frozen or broken notebook cannot pay out; deleting it still has to work
+    // a notebook that answers but cannot pay out stops the deletion, so no cycles are burnt by surprise
+    let moved = match Call::unbounded_wait(canister, "drain_cycles").with_arg(to).await {
+        Ok(r) => match r.candid::<Result<Nat, NotebookErr>>() {
+            Ok(Ok(n)) => n,
+            Ok(Err(e)) => return Err(format!("could not move the cycles out, so nothing was deleted: {e:?}")),
+            Err(e) => return Err(format!("could not move the cycles out, so nothing was deleted: {e}")),
+        },
+        Err(_) => Nat::from(0u8),
+    };
+    mgmt::stop_canister(&mgmt::StopCanisterArgs { canister_id: canister }).await.map_err(|e| format!("stop_canister: {e:?}"))?;
+    mgmt::delete_canister(&mgmt::DeleteCanisterArgs { canister_id: canister }).await.map_err(|e| format!("delete_canister: {e:?}"))?;
+    NOTEBOOKS.with_borrow_mut(|m| m.remove(&canister));
+    ATTESTATIONS.with_borrow_mut(|m| m.remove(&canister));
+    if let Some(id) = ID_OF.with_borrow_mut(|m| m.remove(&canister)) {
+        TOKEN_IDS.with_borrow_mut(|m| m.remove(&id));
+    }
+    Ok(moved)
+}
+
 /// Upgrade every notebook to the wasm embedded in this registry (controller only).
 #[update]
 async fn upgrade_notebooks() -> Result<u32, String> {
@@ -641,7 +721,7 @@ fn token(symbol: &str) -> Result<Token, String> {
 /// Pull `amount` of `tok` from `payer`'s ICRC-2 allowance into the registry's account on that ledger.
 async fn pull(tok: &Token, payer: Principal, amount: &Nat) -> Result<Nat, String> {
     let tf = TransferFromArgs {
-        spender_subaccount: None,
+        spender_subaccount: spender_sub(payer),
         from: Account { owner: payer, subaccount: None },
         to: Account { owner: canister_self(), subaccount: None },
         amount: amount.clone(),
@@ -790,7 +870,7 @@ async fn pay(canister: Principal, symbol: String, amount: Nat, payer: Option<Pri
             top_up_icp(canister, e8s, payer).await
         }
         Route::Cycles => {
-            let arg = WithdrawFromArgs { spender_subaccount: None, from: Account { owner: payer, subaccount: None }, to: canister, amount: amount.clone(), created_at_time: Some(time()) };
+            let arg = WithdrawFromArgs { spender_subaccount: spender_sub(payer).map(|s| s.to_vec()), from: Account { owner: payer, subaccount: None }, to: canister, amount: amount.clone(), created_at_time: Some(time()) };
             let r: Result<Nat, candid::Reserved> = Call::unbounded_wait(tok.ledger, "withdraw_from").with_arg(&arg).await.map_err(|e| format!("cycles ledger: {e}"))?.candid().map_err(|e| e.to_string())?;
             r.map_err(|_| "cycles ledger refused the withdrawal: approve the amount plus one fee for the registry first".to_string())?;
             Ok(amount)
@@ -975,7 +1055,6 @@ async fn retry_pending() {
 // verified for a day. Channels are made by admins; anyone verified posts. Messages are keyed
 // "channel#id" so a channel pages with a range scan.
 
-const CHAT_VERIFY_NS: u64 = 86_400_000_000_000; // a day
 const CHAT_PRESENCE_NS: u64 = 120_000_000_000; // two minutes
 
 #[derive(CandidType, Deserialize, Clone, Debug)]
@@ -1099,8 +1178,7 @@ thread_local! {
     static MESSAGES: RefCell<StableBTreeMap<String, C<Message>, Mem>> = RefCell::new(StableBTreeMap::init(MM.with_borrow(|m| m.get(MemoryId::new(16)))));
     static NEXT_MSG: RefCell<ic_stable_structures::StableCell<u64, Mem>> = RefCell::new(ic_stable_structures::StableCell::init(MM.with_borrow(|m| m.get(MemoryId::new(17))), 1));
     static CHAT_PRESENCE: RefCell<StableBTreeMap<Principal, C<(String, u64)>, Mem>> = RefCell::new(StableBTreeMap::init(MM.with_borrow(|m| m.get(MemoryId::new(18)))));
-    /// ICP (e8s) a member must hold to post; 1 e8s means "any ICP at all"
-    static CHAT_MIN: RefCell<ic_stable_structures::StableCell<u64, Mem>> = RefCell::new(ic_stable_structures::StableCell::init(MM.with_borrow(|m| m.get(MemoryId::new(19))), 1));
+    // memory 19 held the minimum ICP balance to chat; owning a notebook replaced it
 }
 
 fn seed_channels() {
@@ -1134,6 +1212,8 @@ thread_local! {
     /// feature flags: name -> on; unknown names fall back to FLAG_DEFAULTS
     static FLAGS: RefCell<StableBTreeMap<String, u8, Mem>> = RefCell::new(StableBTreeMap::init(MM.with_borrow(|m| m.get(MemoryId::new(29)))));
     static WATCHES: RefCell<StableBTreeMap<u64, C<Watch>, Mem>> = RefCell::new(StableBTreeMap::init(MM.with_borrow(|m| m.get(MemoryId::new(30)))));
+    /// the wallet a person pays from when it is not their sign-in principal (their OISY account)
+    static WALLETS: RefCell<StableBTreeMap<Principal, Principal, Mem>> = RefCell::new(StableBTreeMap::init(MM.with_borrow(|m| m.get(MemoryId::new(32)))));
     static NEXT_WATCH: RefCell<ic_stable_structures::StableCell<u64, Mem>> = RefCell::new(ic_stable_structures::StableCell::init(MM.with_borrow(|m| m.get(MemoryId::new(31))), 1));
 }
 
@@ -1617,13 +1697,18 @@ fn check_channel(name: &str) -> Result<String, String> {
 }
 fn member_ok(p: Principal) -> Result<Member, String> {
     let m = MEMBERS.with_borrow(|m| m.get(&p).map(|c| c.0)).ok_or("join the community first")?;
-    if m.verified_until < time() {
-        return Err("your ICP check has lapsed; join again".into());
+    if !owns_a_notebook(p) {
+        return Err(NEED_NOTEBOOK.into());
     }
     Ok(m)
 }
+const NEED_NOTEBOOK: &str = "you need a notebook to chat: create one first";
+// ponytail: a scan of every notebook per message; an owner -> count index when notebooks reach the tens of thousands
+fn owns_a_notebook(p: Principal) -> bool {
+    NOTEBOOKS.with_borrow(|m| m.iter().any(|e| e.value().0.owner == p))
+}
 
-/// Join or renew: the ledger must show the caller holds at least the minimum ICP. Verified for a day.
+/// Join or rename: anyone who owns a notebook may chat; no ICP needs to sit in the wallet.
 #[update]
 async fn join_community(handle: String) -> Result<Member, String> {
     let me = msg_caller();
@@ -1640,14 +1725,11 @@ async fn join_community(handle: String) -> Result<Member, String> {
     if MEMBERS.with_borrow(|m| m.iter().any(|e| e.value().0.handle.eq_ignore_ascii_case(&handle) && *e.key() != me)) {
         return Err("that handle is taken".into());
     }
-    let bal: Nat = Call::unbounded_wait(LEDGER, "icrc1_balance_of").with_arg(&Account { owner: me, subaccount: None }).await.map_err(|e| format!("ledger: {e}"))?.candid().map_err(|e| e.to_string())?;
-    let e8s: u64 = bal.0.try_into().unwrap_or(u64::MAX);
-    let min = CHAT_MIN.with_borrow(|m| *m.get());
-    if e8s < min {
-        return Err(format!("you need ICP in your wallet to chat: hold at least {} ICP", min as f64 / 1e8));
+    if !owns_a_notebook(me) {
+        return Err(NEED_NOTEBOOK.into());
     }
     let joined_at = MEMBERS.with_borrow(|m| m.get(&me).map(|c| c.0.joined_at)).unwrap_or_else(time);
-    let mem = Member { principal: me, handle, joined_at, verified_until: time() + CHAT_VERIFY_NS, balance_e8s: e8s };
+    let mem = Member { principal: me, handle, joined_at, verified_until: u64::MAX, balance_e8s: 0 };
     MEMBERS.with_borrow_mut(|m| m.insert(me, C(mem.clone())));
     Ok(mem)
 }
@@ -1657,18 +1739,6 @@ fn my_membership() -> Option<Member> {
     MEMBERS.with_borrow(|m| m.get(&msg_caller()).map(|c| c.0))
 }
 
-#[update]
-fn set_chat_min(e8s: u64) -> Result<(), String> {
-    if !admin(&msg_caller()) {
-        return Err("admin only".into());
-    }
-    CHAT_MIN.with_borrow_mut(|m| m.set(e8s.max(1)));
-    Ok(())
-}
-#[query]
-fn chat_min() -> u64 {
-    CHAT_MIN.with_borrow(|m| *m.get())
-}
 
 #[query]
 fn channels() -> Vec<Channel> {
@@ -1777,6 +1847,9 @@ async fn donate(channel: String, id: u64, amount_e8s: u64) -> Result<Message, St
         return Err("minimum donation is 0.01 ICP".into());
     }
     let canister = f.canister;
+    if f.plan.is_none() && NOTEBOOKS.with_borrow(|n| !n.contains_key(&canister)) {
+        return Err("that notebook has been deleted".into());
+    }
     if f.plan.is_some() {
         // a plan: the ICP goes to the contributor's wallet, minus one ledger fee
         charge(me, amount_e8s).await?;

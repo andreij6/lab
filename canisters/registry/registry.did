@@ -332,7 +332,6 @@ service : () -> {
   // the seller gets it minus the market fee, and the canister changes hands.
   buy : (principal, opt principal) -> (Result_5);
   channels : () -> (vec Channel) query;
-  chat_min : () -> (nat64) query;
   // "I am OK": resets the check-in clock; a later `return_by` moves the deadline.
   check_in : (nat64, opt nat64) -> (Result_6);
   // The notebook owner (or an admin) stops a fundraiser.
@@ -353,6 +352,10 @@ service : () -> {
   delete_channel : (text) -> (Result);
   // Remove a message you wrote (or any, as an admin); the slot stays with the text blanked.
   delete_message : (text, nat64) -> (Result);
+  // Delete a notebook you own for good: its cycles go to `refund_to` (another notebook of yours)
+  // or, when that is None, to the registry; then the canister is stopped and deleted and every
+  // registry record of it (listing, token, attestation) goes. Notes and history cannot come back.
+  delete_notebook : (principal, opt principal) -> (Result_9);
   // The author or an admin removes a post and its comments for good.
   delete_post : (nat64) -> (Result);
   delete_post_comment : (nat64, nat64) -> (Result);
@@ -394,7 +397,7 @@ service : () -> {
   icrc7_tx_window : () -> (opt nat) query;
   // Is the caller a site admin (a controller or an added admin)?
   is_admin : () -> (bool) query;
-  // Join or renew: the ledger must show the caller holds at least the minimum ICP. Verified for a day.
+  // Join or rename: anyone who owns a notebook may chat; no ICP needs to sit in the wallet.
   join_community : (text) -> (Result_13);
   // Link a GitHub login to the caller: the login's public bio must contain the caller's principal,
   // and the login must be a contributor to the configured repository.
@@ -420,6 +423,7 @@ service : () -> {
   my_notebooks : () -> (vec Notebook) query;
   // Rain that fell on you after `after` (an id), so the app can celebrate it anywhere.
   my_rain : (nat64) -> (vec Rain) query;
+  my_wallet : () -> (opt principal) query;
   // My trips, newest first.
   my_watches : () -> (vec Watch) query;
   notebook : (principal) -> (opt Notebook) query;
@@ -474,7 +478,6 @@ service : () -> {
   report_idea : (text, text, text) -> (Result_21);
   // Roll a notebook back to a snapshot: stop, load, start.
   restore_snapshot : (principal, blob) -> (Result);
-  set_chat_min : (nat64) -> (Result);
   // Admin: switch a feature on or off for everyone.
   set_flag : (text, bool) -> (Result_22);
   // Change one notebook's freezing threshold (controller only): the admin's knob for testing a freeze or granting more time.
@@ -488,6 +491,8 @@ service : () -> {
   set_price : (nat64) -> (Result);
   // Add or change an accepted token (admin or controller).
   set_token : (Token) -> (Result);
+  // Register (or with None, forget) the wallet you pay from, e.g. your OISY account.
+  set_wallet : (opt principal) -> (Result);
   // Leave a trip plan with a community member: they see it, and get an alert if you miss a check-in
   // or are not back by `return_by` (nanoseconds).
   set_watch : (text, text, text, nat64, opt nat32) -> (Result_6);

@@ -120,8 +120,17 @@ const AccountIdl = IDL.Record({ owner: IDL.Principal, subaccount: IDL.Opt(IDL.Ve
 const ApproveArgsIdl = IDL.Record({ fee: IDL.Opt(IDL.Nat), memo: IDL.Opt(IDL.Vec(IDL.Nat8)), from_subaccount: IDL.Opt(IDL.Vec(IDL.Nat8)), created_at_time: IDL.Opt(IDL.Nat64), amount: IDL.Nat, expected_allowance: IDL.Opt(IDL.Nat), expires_at: IDL.Opt(IDL.Nat64), spender: AccountIdl });
 
 /** Candid-encoded `icrc2_approve` arguments, the way the ledger expects them. */
-export function approveArg(spender: string, amountE8s: bigint, expiresAtNs?: bigint): Uint8Array {
-  return new Uint8Array(IDL.encode([ApproveArgsIdl], [{ fee: [], memo: [], from_subaccount: [], created_at_time: [], amount: amountE8s, expected_allowance: [], expires_at: expiresAtNs === undefined ? [] : [expiresAtNs], spender: { owner: Principal.fromText(spender), subaccount: [] } }]));
+/** The registry's spender subaccount for a principal (as the registry derives it): length byte,
+ *  then its bytes, zero-padded to 32. */
+export function principalSubaccount(p: Principal): Uint8Array {
+  const b = p.toUint8Array();
+  const s = new Uint8Array(32);
+  s[0] = b.length;
+  s.set(b, 1);
+  return s;
+}
+export function approveArg(spender: string, amountE8s: bigint, expiresAtNs?: bigint, spenderSubaccount?: Uint8Array): Uint8Array {
+  return new Uint8Array(IDL.encode([ApproveArgsIdl], [{ fee: [], memo: [], from_subaccount: [], created_at_time: [], amount: amountE8s, expected_allowance: [], expires_at: expiresAtNs === undefined ? [] : [expiresAtNs], spender: { owner: Principal.fromText(spender), subaccount: spenderSubaccount ? [spenderSubaccount] : [] } }]));
 }
 
 const TransferArgIdl = IDL.Record({ to: AccountIdl, fee: IDL.Opt(IDL.Nat), memo: IDL.Opt(IDL.Vec(IDL.Nat8)), from_subaccount: IDL.Opt(IDL.Vec(IDL.Nat8)), created_at_time: IDL.Opt(IDL.Nat64), amount: IDL.Nat });
@@ -147,14 +156,14 @@ export async function transferWithOisy(opts: { to: string; amountE8s: bigint; si
  * The whole payment handshake: connect OISY, have the user approve `amountE8s` for `spender` on the
  * ICP ledger, and return the wallet principal our canister will pull from. The popup closes after.
  */
-export async function approveWithOisy(opts: { spender: string; amountE8s: bigint; signerUrl?: string; onStatus?: (s: string) => void; ledger?: string; symbol?: string; decimals?: number }): Promise<string> {
+export async function approveWithOisy(opts: { spender: string; spenderSubaccount?: Uint8Array; amountE8s: bigint; signerUrl?: string; onStatus?: (s: string) => void; ledger?: string; symbol?: string; decimals?: number }): Promise<string> {
   const oisy = new Oisy(opts.signerUrl);
   try {
     opts.onStatus?.("Opening your OISY wallet…");
     const account = await oisy.connect();
     opts.onStatus?.(`Approve ${Number(opts.amountE8s) / 10 ** (opts.decimals ?? 8)} ${opts.symbol ?? "ICP"} in OISY…`);
     // every ICRC-2 ledger (ICP, TCYCLES, ckBTC, ckETH, ckUSDC, ckUSDT) takes the same approve record
-    await oisy.callCanister({ canisterId: opts.ledger ?? ICP_LEDGER, sender: account.owner, method: "icrc2_approve", arg: approveArg(opts.spender, opts.amountE8s) });
+    await oisy.callCanister({ canisterId: opts.ledger ?? ICP_LEDGER, sender: account.owner, method: "icrc2_approve", arg: approveArg(opts.spender, opts.amountE8s, undefined, opts.spenderSubaccount) });
     return account.owner;
   } finally {
     oisy.disconnect();

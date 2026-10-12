@@ -37,8 +37,8 @@ import { ankiTsv, cardsFromNote, cite, explain, glossary, goalProgress, question
 import { isAttachment, renderDiagrams, renderMarkdown } from "./markdown";
 import { section, backlinkContext, base, buildIndex, dir, frontmatter, fuzzy, graphData, headings, resolve, search, setFrontmatter, stem, tree, untitled, type Folder, type Index } from "./notes";
 import { unzip } from "./unzip";
-import { approveWithOisy, transferWithOisy } from "./oisy";
-import { cacheGet, cacheSet, clearQueue, queueWrite, queued, type Queued } from "./offline";
+import { approveWithOisy, principalSubaccount, transferWithOisy } from "./oisy";
+import { cacheDel, cacheGet, cacheSet, clearQueue, queueWrite, queued, type Queued } from "./offline";
 import { registerSW } from "virtual:pwa-register";
 import { THEMES, applyTheme, loadThemeState, saveThemeState, type ThemeState } from "./themes";
 import { zip } from "./zip";
@@ -124,7 +124,7 @@ async function currentIdentity(): Promise<Identity | undefined> {
 
 // --- "working" indicator: every canister update call shows a progress bar and a label while it runs
 // (updates take a couple of seconds on mainnet); queries stay silent unless they drag on past a second.
-const BUSY_LABELS: Record<string, string> = { ask: "Asking the language model…", join_community: "Joining the community…", post: "Posting…", edit_message: "Saving your edit…", create_post: "Posting…", comment_post: "Posting your comment…", vote_post: "Voting…", vote_comment: "Voting…", react: "Reacting…", vote: "Voting…", post_poll: "Posting the poll…", post_gist: "Sharing the note…", post_fund: "Starting the fundraiser…", post_plan_fund: "Starting the fundraiser…", donate: "Sending ICP…", rain: "Making it rain…", link_github: "Asking GitHub…", share_post: "Sharing…", pin_message: "Pinning…", delete_message: "Deleting…", delete_post: "Deleting…", create_notebook: "Spawning your notebook (about a minute)…", create_notebook_paid_by: "Spawning your notebook (about a minute)…", top_up_notebook: "Converting ICP to cycles…", pay: "Paying…", write: "Saving…", rename: "Renaming…", delete: "Deleting…", set_share: "Updating sharing…", report_bug: "Sending…", report_idea: "Sending…", buy: "Buying…", list_notebook: "Listing…", upgrade_all: "Upgrading notebooks…", restore: "Restoring…", comment: "Posting your comment…", reply: "Posting your reply…" };
+const BUSY_LABELS: Record<string, string> = { delete_notebook: "Deleting the notebook…", ask: "Asking the language model…", join_community: "Joining the community…", post: "Posting…", edit_message: "Saving your edit…", create_post: "Posting…", comment_post: "Posting your comment…", vote_post: "Voting…", vote_comment: "Voting…", react: "Reacting…", vote: "Voting…", post_poll: "Posting the poll…", post_gist: "Sharing the note…", post_fund: "Starting the fundraiser…", post_plan_fund: "Starting the fundraiser…", donate: "Sending ICP…", rain: "Making it rain…", link_github: "Asking GitHub…", share_post: "Sharing…", pin_message: "Pinning…", delete_message: "Deleting…", delete_post: "Deleting…", create_notebook: "Spawning your notebook (about a minute)…", create_notebook_paid_by: "Spawning your notebook (about a minute)…", top_up_notebook: "Converting ICP to cycles…", pay: "Paying…", write: "Saving…", rename: "Renaming…", delete: "Deleting…", set_share: "Updating sharing…", report_bug: "Sending…", report_idea: "Sending…", buy: "Buying…", list_notebook: "Listing…", upgrade_all: "Upgrading notebooks…", restore: "Restoring…", comment: "Posting your comment…", reply: "Posting your reply…" };
 const busyCalls = new Map<number, string>();
 let busySeq = 0;
 function busyRender() {
@@ -234,7 +234,7 @@ const S = {
   pomodoro: undefined as { end: number; phase: "work" | "break" } | undefined,
   taskOwner: "" as string,
   clipperKey: undefined as string | undefined,
-  community: undefined as { channel: string; channels: Channel[]; messages: Message[]; online: Online[]; member?: Member; balance?: bigint; min: bigint; loading: boolean; draft: string; replyTo?: Message; unread: Record<string, number>; showOnline: boolean; showChannels: boolean; picker?: { mid?: bigint }; editing?: bigint; pins?: Message[]; showPins?: boolean; fee?: bigint; error?: string; github?: string; repo?: string; firstUnseen?: bigint; atBottom?: boolean; newCount?: number; gistSlide?: Map<bigint, number> } | undefined,
+  community: undefined as { channel: string; channels: Channel[]; messages: Message[]; online: Online[]; member?: Member; balance?: bigint; loading: boolean; draft: string; replyTo?: Message; unread: Record<string, number>; showOnline: boolean; showChannels: boolean; picker?: { mid?: bigint }; editing?: bigint; pins?: Message[]; showPins?: boolean; fee?: bigint; error?: string; github?: string; repo?: string; firstUnseen?: bigint; atBottom?: boolean; newCount?: number; gistSlide?: Map<bigint, number> } | undefined,
   show: undefined as { slides: string[]; i: number; self?: string; dead?: boolean } | undefined,
   mentions: 0, // @mentions of me in the community since I last looked
   org: { q: "", selected: new Set<string>(), triage: false, triageIdx: 0 } as { q: string; sort?: { key: string; dir: number }; selected: Set<string>; triage: boolean; triageIdx: number },
@@ -1448,18 +1448,17 @@ const chatSeen = (): Record<string, string> => { try { return JSON.parse(store(s
 function markChatSeen(channel: string, id: bigint) { const m = chatSeen(); m[channel] = id.toString(); store(seenKeyC(), JSON.stringify(m)); }
 let chatTimer = 0;
 async function loadCommunity(channel?: string) {
-  const c = S.community ?? { channel: channel ?? store("nb-chat-channel") ?? "general", channels: [], messages: [], online: [], min: 1n, loading: true, draft: "", unread: {}, showOnline: !S.mobile && store("nb-chat-aside") !== "0", showChannels: !S.mobile && store("nb-chat-side") !== "0" };
+  const c = S.community ?? { channel: channel ?? store("nb-chat-channel") ?? "general", channels: [], messages: [], online: [], loading: true, draft: "", unread: {}, showOnline: !S.mobile && store("nb-chat-aside") !== "0", showChannels: !S.mobile && store("nb-chat-side") !== "0" };
   if (channel) { c.channel = channel; c.messages = []; c.replyTo = undefined; store("nb-chat-channel", channel); }
   S.mentions = 0;
   c.loading = true;
   S.community = c;
   render();
   try {
-    const [chs, mem, min, gh, repo, fee] = await Promise.all([registry().channels(), registry().my_membership(), registry().chat_min(), registry().my_github(), registry().github_repo(), registry().message_fee().catch(() => 20_000n)]);
+    const [chs, mem, gh, repo, fee] = await Promise.all([registry().channels(), registry().my_membership(), registry().my_github(), registry().github_repo(), registry().message_fee().catch(() => 20_000n)]);
     c.fee = fee;
     c.channels = chs;
     c.member = mem ?? undefined;
-    c.min = min;
     c.github = gh ?? undefined;
     c.repo = repo;
     if (!chs.some((x) => x.name === c.channel)) c.channel = "general";
@@ -1497,7 +1496,7 @@ async function pollCommunity() {
     if (fresh.length) { c.messages.push(...fresh); if (c.atBottom === false) c.newCount = (c.newCount ?? 0) + fresh.filter((m) => m.author.toText() !== S.principal).length; renderChat(); }
     else if (tick % 3 === 0) { const page = await registry().messages(c.channel, 0n, 100); if (page.__kind__ === "Ok" && JSON.stringify(page.Ok, (_, v) => (typeof v === "bigint" ? v.toString() : v)) !== JSON.stringify(c.messages, (_, v) => (typeof v === "bigint" ? v.toString() : v))) { c.messages = page.Ok; renderChat(); } }
     if (tick % 6 === 0) {
-      const on = c.member && c.member.verified_until > BigInt(Date.now()) * 1_000_000n ? await registry().ping_chat(c.channel).then((x) => (x.__kind__ === "Ok" ? x.Ok : c.online)) : await registry().online();
+      const on = verifiedNow(c.member) ? await registry().ping_chat(c.channel).then((x) => (x.__kind__ === "Ok" ? x.Ok : c.online)) : await registry().online();
       if (JSON.stringify(on) !== JSON.stringify(c.online)) { c.online = on; renderOnline(); }
       void refreshUnread();
     }
@@ -1514,15 +1513,21 @@ async function refreshUnread() {
   }));
   if (JSON.stringify(counts) !== JSON.stringify(c.unread)) { c.unread = counts; renderChannels(); }
 }
-const verifiedNow = (m?: Member) => !!m && m.verified_until > BigInt(Date.now()) * 1_000_000n;
+/** Members chat as long as they own a notebook; no ICP has to sit anywhere. */
+const verifiedNow = (m?: Member) => !!m && (S.notebooks?.length ?? 1) > 0;
 function channelsHtml(): string {
   const c = S.community!;
-  const wallet = `<div class="wallet">
+  const status = c.member ? (verifiedNow(c.member) ? `Chatting as <b>@${esc(c.member.handle)}</b>` : "You need a notebook to chat: create one first.") : "Anyone with a notebook can join.";
+  const joinBtn = c.member ? `<button type="button" class="btn btn-ghost" data-action="chat-join" title="Change your handle">${icon("edit")}Handle</button>` : `<button type="button" class="btn btn-primary" data-action="chat-join">${icon("check")}Join</button>`;
+  const wallet = useOisy
+    ? `<div class="wallet"><div class="pane-title">You</div><div class="small muted">${status}</div><div class="row tight nudge">${joinBtn}</div>
+      <div class="small faint">New messages (${icp(c.fee ?? 20_000n)} ICP), rain, donations and board posts are paid from your OISY wallet${S.oisyAccount ? ` ${esc(shortPrincipal(S.oisyAccount))}` : ""}. It asks once to approve about 100 messages.</div></div>`
+    : `<div class="wallet">
       <div class="pane-title">Your wallet</div>
       <div class="wallet-bal"><b>${c.balance === undefined ? "…" : `${icp(c.balance)} ICP`}</b><button type="button" class="btn btn-ghost icon-btn" data-action="wallet-refresh" title="Refresh" aria-label="Refresh balance">${icon("refresh")}</button></div>
-      <div class="small muted">${verifiedNow(c.member) ? `Chatting as <b>@${esc(c.member!.handle)}</b> · checked ${ago(c.member!.verified_until - 86_400_000_000_000n)}` : c.member ? "Your ICP check has lapsed; renew to post." : c.min <= 10_000n ? "Hold any ICP here, then join, to post." : `Hold at least ${icp(c.min)} ICP here to post.`}</div>
-      <div class="row tight nudge"><button type="button" class="btn btn-primary" data-action="wallet-add" title="${useOisy ? "Opens your OISY wallet to send ICP here; no address to copy" : "Locally: shows the command that funds your development account"}">${icon("bolt")}Add ICP${useOisy ? " from OISY" : ""}</button>${verifiedNow(c.member) ? `<button type="button" class="btn btn-ghost" data-action="chat-join" title="Change your handle or renew the check">${icon("edit")}Handle</button>` : `<button type="button" class="btn" data-action="chat-join">${icon("check")}${c.member ? "Renew" : "Join"}</button>`}</div>
-      ${useOisy ? `<div class="small faint">${S.oisyAccount ? `OISY account ${esc(shortPrincipal(S.oisyAccount))} · ` : ""}messages (0.0002 ICP each), rain, donations and posts are paid from this wallet</div>` : `<div class="small faint mono" title="ICP sent to this principal lands in your in-app wallet">${esc(shortPrincipal(S.principal))}<button type="button" class="btn btn-ghost icon-btn" data-action="copy-principal" aria-label="Copy principal">${icon("copy")}</button></div>`}
+      <div class="small muted">${status}</div>
+      <div class="row tight nudge"><button type="button" class="btn" data-action="wallet-add" title="Locally: shows the command that funds your development account">${icon("bolt")}Add ICP</button>${joinBtn}</div>
+      <div class="small faint mono" title="Locally, messages are paid from this principal">${esc(shortPrincipal(S.principal))}<button type="button" class="btn btn-ghost icon-btn" data-action="copy-principal" aria-label="Copy principal">${icon("copy")}</button></div>
     </div>`;
   return `<div class="pane-head"><span class="pane-title" style="padding:0">Channels</span>${S.isAdmin ? `<button type="button" class="btn btn-ghost icon-btn" data-action="chat-new-channel" title="New channel" aria-label="New channel">${icon("plus")}</button>` : ""}</div>
     <div class="chans">${c.channels.map((ch) => `<button type="button" class="chan ${ch.name === c.channel ? "on" : ""}" data-action="chat-channel" data-channel="${esc(ch.name)}" title="${esc(ch.topic)}"><span class="hash">#</span>${esc(ch.name)}${ch.gate ? `<span class="gate-ico" title="Contributors only">${icon("lock")}</span>` : ""}${c.unread[ch.name] ? `<span class="unread">${c.unread[ch.name]}</span>` : ""}${S.isAdmin && ch.name !== "general" ? `<span class="chan-del" data-action="chat-del-channel" data-channel="${esc(ch.name)}" title="Delete channel">${icon("x")}</span>` : ""}</button>`).join("")}</div>
@@ -1621,7 +1626,7 @@ function chatHtmlC(): string {
     ${ch?.gate === "github" && !c.github && verifiedNow(c.member) ? `<div class="gate"><b>#${esc(c.channel)} is for contributors${c.repo ? ` to ${esc(c.repo)}` : ""}.</b> ${c.repo ? `Put your principal <code>${esc(S.principal)}</code><button type="button" class="btn btn-ghost icon-btn" data-action="copy-principal" aria-label="Copy principal">${icon("copy")}</button> in your GitHub bio, then link your login.` : "An admin has not set the repository yet."}${c.repo ? `<button type="button" class="btn btn-primary" data-action="link-github">${icon("link")}Link GitHub</button>` : ""}</div>` : ""}
     <form class="composer" data-form="chat-post">${c.editing !== undefined ? `<div class="replying">${icon("edit")}Editing your message<button type="button" class="btn btn-ghost icon-btn" data-action="chat-edit-cancel" aria-label="Cancel edit">${icon("x")}</button></div>` : ""}${c.replyTo ? `<div class="replying">${icon("links")}Replying to <b>@${esc(c.replyTo.handle)}</b>: ${esc(c.replyTo.text.slice(0, 80))}<button type="button" class="btn btn-ghost icon-btn" data-action="chat-reply-cancel" aria-label="Cancel reply">${icon("x")}</button></div>` : ""}
       <div class="compose-box ${can ? "" : "off"}"><button type="button" class="btn btn-ghost icon-btn" data-action="chat-plus" title="Poll, gist or fundraiser" aria-label="More" ${can ? "" : "disabled"}>${icon("plus")}</button><textarea name="chattext" rows="1" placeholder="${can ? `Message #${esc(c.channel)}` : ch?.gate === "github" && verifiedNow(c.member) ? `Link your GitHub to post in #${esc(c.channel)}` : c.member ? "Renew your ICP check to post" : "Add ICP to your wallet and join to post"}" ${can ? "" : "disabled"} aria-label="Message" title="↵ to send, ⇧↵ for a new line">${esc(c.draft)}</textarea><button type="button" class="btn btn-ghost icon-btn emoji-btn" data-action="chat-emoji" title="Emoji" aria-label="Emoji" ${can ? "" : "disabled"}>☺</button></div>
-      ${can ? `<div class="compose-hint small muted">${icon("bolt")}Each new message costs <b>${icp(c.fee ?? 20_000n)} ICP</b> from your wallet${c.balance !== undefined ? ` · ${icp(c.balance)} ICP left` : ""} · edits, reactions and votes are free</div>` : ""}
+      ${can ? `<div class="compose-hint small muted">${icon("bolt")}Each new message costs <b>${icp(c.fee ?? 20_000n)} ICP</b> from your ${useOisy ? "OISY wallet" : "wallet"}${!useOisy && c.balance !== undefined ? ` · ${icp(c.balance)} ICP left` : ""} · edits, reactions and votes are free</div>` : ""}
       ${c.picker ? `<div class="pop-scrim" data-action="chat-pick-close"></div><div class="emoji-pop" role="dialog" aria-label="Emoji">${c.picker.mid !== undefined ? `<div class="small muted" style="padding:4px 6px">React to <b>@${esc(c.messages.find((m) => m.id === c.picker!.mid)?.handle ?? "")}</b></div>` : ""}<div class="emoji-grid">${CHAT_EMOJI.map((e) => `<button type="button" class="emoji" data-action="chat-pick" data-emoji="${e}" aria-label="${e}">${e}</button>`).join("")}</div></div>` : ""}
     </form>`;
 }
@@ -1676,7 +1681,7 @@ function boardPage(): string {
   const sorted = [...b.posts].sort((x, y) => (b.sort === "new" ? Number(y.created_at - x.created_at) : b.sort === "top" ? score(y) - score(x) : hot(y) - hot(x)));
   const side = `<div class="pane-head"><span class="pane-title" style="padding:0">Topics</span></div>
     <div class="chans"><button type="button" class="chan ${!b.topic ? "on" : ""}" data-action="board-topic" data-topic=""><span class="hash">∗</span>all</button>${b.channels.map((c) => `<button type="button" class="chan ${c.name === b.topic ? "on" : ""}" data-action="board-topic" data-topic="${esc(c.name)}" title="${esc(c.topic)}"><span class="hash">#</span>${esc(c.name)}${c.gate ? `<span class="gate-ico">${icon("lock")}</span>` : ""}</button>`).join("")}</div>
-    <div class="wallet"><div class="pane-title">Posting</div><div class="small muted">A post costs ${icp(b.fee)} ICP from your in-app wallet: about what storing it for 60 days costs in cycles, rounded up to twice the transfer minimum. Comments and votes are free for members.</div>${can ? `<div class="nudge"><button type="button" class="btn btn-primary" data-action="board-new" ${gated ? "disabled" : ""}>${icon("plus")}New post</button></div>` : `<div class="small muted nudge">${b.member ? "Renew your ICP check in the community to post." : "Join the community (hold ICP in your wallet) to post, comment and vote."}</div>`}</div>`;
+    <div class="wallet"><div class="pane-title">Posting</div><div class="small muted">A post costs ${icp(b.fee)} ICP from your ${useOisy ? "OISY wallet" : "wallet"}: about what storing it for 60 days costs in cycles, rounded up to twice the transfer minimum. Comments and votes are free for members.</div>${can ? `<div class="nudge"><button type="button" class="btn btn-primary" data-action="board-new" ${gated ? "disabled" : ""}>${icon("plus")}New post</button></div>` : `<div class="small muted nudge">${b.member ? "You need a notebook to post: create one first." : "Join the community (anyone with a notebook can) to post, comment and vote."}</div>`}</div>`;
   const main = b.open ? (() => { const p = b.open!; const mine = p.author.toText() === S.principal; return `<div class="chat-head"><a href="#/board" class="btn btn-ghost" data-action="nav" title="Back to the list">${icon("chevron")}<span class="small lbl">Posts</span></a><span class="small muted">#${esc(p.topic)}</span><span class="right-actions">${can ? `<button type="button" class="btn btn-ghost" data-action="board-share" data-id="${p.id}" title="Drop a card into a chat channel (0.0002 ICP, like any message)">${icon("chat")}<span class="small lbl">Discuss in chat · 0.0002 ICP</span></button>` : ""}${mine || S.isAdmin ? `<button type="button" class="btn btn-ghost" data-action="board-del" data-id="${p.id}">${icon("trash")}</button>` : ""}</span></div>
     <div class="post-view"><div class="prow"><div class="prow-votes">${voteArrows("post", p, `data-id="${p.id}"`, can)}</div><div class="prow-main"><h2 class="ptitle">${esc(p.title)}</h2><div class="small muted">@${esc(p.handle)} · ${when(p.created_at)} · ${p.comments} comment${p.comments === 1 ? "" : "s"} · gone a week after the last comment</div>${p.body ? `<div class="mtext pbody">${chatText(p.body)}</div>` : ""}${p.gist ? `<div class="gist"><div class="gist-head">${icon("file")}<b>${esc(p.gist.title)}</b><span class="small muted">${esc(p.gist.path)}</span><button type="button" class="btn btn-ghost" data-action="gist-open" data-nb="${p.gist.notebook.toText()}" data-path="${esc(p.gist.path)}">${icon("out")}Open</button></div><div class="gist-body md">${gistMd(p.gist.text)}</div></div>` : ""}</div></div>
       ${can ? `<form class="pc-form top" data-form="board-comment" data-post="${p.id}"><textarea class="input" name="ptext" rows="2" placeholder="Add a comment…" required></textarea><div class="row tight"><button type="submit" class="btn btn-primary">${icon("send")}Comment</button></div></form>` : ""}
@@ -1699,7 +1704,7 @@ type PostPrefill = { notebook?: string; path?: string; text?: string; title?: st
 /** Make sure the board state exists (pinning works from anywhere), then run the new-post flow. */
 async function pinToBoard(pre: PostPrefill) {
   if (!S.board) S.board = { sort: "hot", posts: [], comments: [], channels: await registry().channels(), member: (await registry().my_membership()) ?? undefined, fee: await registry().post_fee(), loading: false, showSide: true, showAside: true };
-  if (!verifiedNow(S.board.member)) return toast("Join the community (hold ICP in your wallet) to pin things to the board.", "info");
+  if (!verifiedNow(S.board.member)) return toast("Join the community (anyone with a notebook can) to pin things to the board.", "info");
   await newPost(pre);
 }
 /** A note as text for a gist: markdown as is, sheets as CSV, Python notebooks as markdown and code blocks. */
@@ -1933,13 +1938,12 @@ setInterval(() => void checkMentions(), 20_000);
 setTimeout(() => void checkMentions(), 2500);
 async function joinCommunity() {
   const c = S.community!;
-  const handle = await ask({ title: c.member ? "Your handle" : "Join the community", label: "Handle", value: c.member?.handle ?? "", placeholder: "ada", body: `Posting needs ${c.min <= 10_000n ? "some" : `at least ${icp(c.min)}`} ICP in your in-app wallet; the registry checks the ledger and remembers it for a day.`, ok: c.member ? "Save" : "Join" });
+  const handle = await ask({ title: c.member ? "Your handle" : "Join the community", label: "Handle", value: c.member?.handle ?? "", placeholder: "ada", body: `Anyone who owns a notebook can chat. New messages cost ${icp(c.fee ?? 20_000n)} ICP each${useOisy ? ", paid from your OISY wallet" : ""}; reactions, votes and edits are free.`, ok: c.member ? "Save" : "Join" });
   if (!handle?.trim()) return;
   try {
     const r = await registry().join_community(handle.trim());
     if (r.__kind__ === "Err") throw new Error(r.Err);
     c.member = r.Ok;
-    c.balance = r.Ok.balance_e8s;
     const on = await registry().ping_chat(c.channel);
     if (on.__kind__ === "Ok") c.online = on.Ok;
     toast(`You are in as @${r.Ok.handle}.`, "ok");
@@ -3351,6 +3355,7 @@ function manageTab(): string {
       <div class="row tight"><button type="button" class="btn btn-primary" data-action="download" ${S.notes ? "" : "disabled"}>${icon("download")}Download notebook (.zip)</button><button type="button" class="btn" data-action="import" ${S.notes ? "" : "disabled"}>${icon("upload")}Import Obsidian vault…</button><button type="button" class="btn" data-action="restore" ${S.notes ? "" : "disabled"}>${icon("history")}Restore from zip…</button><span class="small muted">${S.notes ? `${S.notes.length} files · ${kb(S.notes.reduce((n, x) => n + x.content.length, 0))}` : ""}</span></div>
     </div>
     ${snapshotsCard()}
+    ${deleteCard()}
     ${account()}` : S.manageTab === "sharing" ? `
     ${sharesCard()}
     ${publishCard()}` : S.manageTab === "agents" ? `
@@ -4267,6 +4272,38 @@ async function deleteFolder(path: string) {
 }
 
 /** Everything in the notebook as a zip, built in the browser from what is already loaded. */
+function deleteCard(): string {
+  const i = S.info;
+  return `<div class="card band danger-zone"><h2>${icon("trash")} Delete this notebook</h2><p class="muted small">Deletes the canister for good: every note, attachment, comment and its history. This cannot be undone, so download a zip first. ${i ? `Its ${tc(i.cycles)} left go to another notebook of yours, or to Lab if it is your only one.` : ""}</p>
+    <div class="row tight"><button type="button" class="btn" data-action="download">${icon("download")}Download a zip first</button><button type="button" class="btn btn-danger" data-action="nb-delete">${icon("trash")}Delete notebook…</button></div></div>`;
+}
+async function deleteNotebook() {
+  const nb = S.notebook;
+  if (!nb) return;
+  const others = (S.notebooks ?? []).filter((n) => n.canister.toText() !== nb.canister.toText());
+  let to: string | null = "";
+  if (others.length) {
+    to = await ask({ title: `Where should the cycles go?`, body: `${S.info ? tc(S.info.cycles) : "The cycles"} left in "${nb.name}" move before it is deleted.`, label: "Send them to", choices: [...others.map((n) => ({ value: n.canister.toText(), label: n.name })), { value: "", label: "Lab (the registry)" }], value: others[0].canister.toText(), ok: "Next" });
+    if (to === null) return;
+  }
+  const typed = await ask({ title: `Delete "${nb.name}" forever?`, body: "Every note, attachment and its history will be gone. Nobody, not even Lab, can bring it back.", label: `Type ${nb.name} to confirm`, placeholder: nb.name, ok: "Delete forever", danger: true });
+  if (typed === null) return;
+  if (typed.trim() !== nb.name) return void toast("The name did not match, so nothing was deleted.", "info");
+  await saveAll().catch(() => {});
+  const r = await registry().delete_notebook(nb.canister, to ? Principal.fromText(to) : null).catch((e) => ({ __kind__: "Err", Err: errMsg(e) }) as const);
+  if (r.__kind__ !== "Ok") return void toast(`Not deleted: ${r.Err}`, "error");
+  const id = nb.canister.toText();
+  S.notebooks = others;
+  void cacheSet("nb:list", others);
+  void cacheDel(`nb:${id}`);
+  void queued().then((q) => cacheSet("queue", q.filter((w) => w.canister !== id)));
+  if (store("nb-last")?.includes(id)) store("nb-last", null);
+  S.notebook = undefined;
+  S.notes = undefined;
+  location.hash = "#/";
+  render();
+  toast(`Deleted "${nb.name}"${r.Ok > 0n ? `; ${tc(r.Ok)} moved to ${to ? others.find((n) => n.canister.toText() === to)?.name ?? "your notebook" : "Lab"}` : ""}.`, "ok");
+}
 async function downloadNotebook() {
   if (!S.notes || !S.notebook) return;
   const missing = S.notes.filter((n) => isAttachment(n.path) && !attachments.has(n.path));
@@ -4551,9 +4588,14 @@ async function payFor(canister: Principal, symbol: string, amount: bigint, onSta
 
 async function approvePayment(spender: Principal, amountE8s: bigint, token?: Token): Promise<Principal> {
   if (useOisy) {
-    const owner = await approveWithOisy({ spender: spender.toText(), amountE8s, onStatus: (m) => toast(m, "info"), ledger: token?.ledger.toText(), symbol: token?.symbol, decimals: token?.decimals });
+    // the registry only spends an OISY allowance granted to its subaccount for this sign-in
+    const owner = await approveWithOisy({ spender: spender.toText(), spenderSubaccount: principalSubaccount(S.identity!.getPrincipal()), amountE8s, onStatus: (m) => toast(m, "info"), ledger: token?.ledger.toText(), symbol: token?.symbol, decimals: token?.decimals });
     S.oisyAccount = owner;
     store("nb-oisy", owner);
+    if (store("nb-wallet-set") !== `${S.principal}:${owner}`) {
+      const w = await registry().set_wallet(Principal.fromText(owner));
+      if (w.__kind__ === "Ok") store("nb-wallet-set", `${S.principal}:${owner}`);
+    }
     return Principal.fromText(owner);
   }
   const agent = HttpAgent.createSync({ identity: S.identity, rootKey: env.IC_ROOT_KEY });
@@ -5445,6 +5487,7 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
     case "deck-add": { const k = el.dataset.deck!; await createQuiet(`Skills/${k}.md`, DECKS[k]); S.tab = "notes"; return open(`Skills/${k}.md`); }
     case "conflicts-open": return conflictDialog();
     case "keep-offline": return keepOffline();
+    case "nb-delete": return deleteNotebook();
     case "conflict-mine": case "conflict-theirs": case "conflict-both": return resolveConflict(Number(el.dataset.i), action.slice(9) as "mine" | "theirs" | "both");
     case "chat-clear":
       S.chat.messages = [];

@@ -26,6 +26,10 @@ expect() {
   if printf '%s' "$out" | grep -qF -- "$want"; then echo "  ok: $d"; PASS=$((PASS+1)); else echo "FAIL: $d"; echo "  wanted: $want"; echo "  got: $(printf '%s' "$out" | tr -s ' \n' ' ' | head -c 600)"; exit 1; fi
 }
 reg() { icp canister call registry "$@" --identity "$OWNER"; }
+# an ICRC-2 approval to the registry's subaccount for one caller (how OISY approves for a sign-in)
+LEDGER_ID=ryjl3-tyaaa-aaaaa-aaaba-cai
+subblob() { python3 -c 'import sys,base64; t=sys.argv[1].replace("-","").upper(); t+="="*(-len(t)%8); b=base64.b32decode(t)[4:]; s=bytes([len(b)])+b; s+=bytes(32-len(s)); print("".join("\\%02x"%x for x in s))' "$1"; }
+bound_approve() { icp canister call $LEDGER_ID icrc2_approve "(record { spender = record { owner = principal \"$(icp canister status registry -i)\"; subaccount = opt blob \"$(subblob "$3")\" }; amount = $2 : nat; fee = null; memo = null; from_subaccount = null; created_at_time = null; expected_allowance = null; expires_at = null })" --identity "$1"; }
 
 echo "== create notebook (spawns a canister; the creator is owner + controller)"
 OUT=$(reg create_notebook '("Notes")'); echo "$OUT" | tr -s ' \n' ' '; echo
@@ -216,7 +220,7 @@ icp token approve 0.2001 "$(icp canister status registry -i)" --identity "$OWNER
 expect "top_up_notebook below the minimum is refused" "minimum" reg top_up_notebook "(principal \"$V\", 10, null)"
 expect "a stranger cannot top up through the registry" "not your notebook" icp canister call registry top_up_notebook "(principal \"$V\", 20_000_000, null)" --identity "$OTHER"
 expect "the owner revives it through the registry (ICP -> CMC -> cycles)" "Ok" reg top_up_notebook "(principal \"$V\", 20_000_000, null)"
-icp token transfer 1 "$OTHERP" -q >/dev/null; icp token approve 0.1001 "$(icp canister status registry -i)" --identity "$OTHER" -q >/dev/null
+icp token transfer 1 "$OTHERP" -q >/dev/null; bound_approve "$OTHER" 10_010_000 "$ME" >/dev/null
 expect "the OISY-style payer flow tops up for the owner" "Ok" reg top_up_notebook "(principal \"$V\", 10_000_000, opt principal \"$OTHERP\")"
 icp canister settings update "$V" --freezing-threshold 90d --identity "$OWNER" >/dev/null
 expect "back under the threshold the notebook answers again" "files =" notebook info '()' --query
@@ -343,6 +347,9 @@ icp token transfer 1 "$ME" -q >/dev/null; icp token approve 0.1001 "$(icp canist
 expect "spawning with an allowance works" 'name = "Paid"' reg create_notebook '("Paid")'
 expect "a notebook paid by another account needs that account's allowance" "payment refused" reg create_notebook_paid_by "(\"Paid2\", principal \"$OTHERP\")"
 icp token transfer 1 "$OTHERP" -q >/dev/null; icp token approve 0.1001 "$(icp canister status registry -i)" --identity "$OTHER" -q >/dev/null
+expect "a plain allowance cannot be spent by another caller naming that payer" "payment refused" reg create_notebook_paid_by "(\"Paid2\", principal \"$OTHERP\")"
+expect "the payer approves the registry subaccount bound to the caller" "Ok" bound_approve "$OTHER" 10_010_000 "$ME"
+expect "a stranger cannot spend that bound allowance" "payment refused" icp canister call registry create_notebook_paid_by "(\"Stolen\", principal \"$OTHERP\")" --identity "$OWNER2"
 expect "the OISY-style payer flow spawns for the caller" 'name = "Paid2"' reg create_notebook_paid_by "(\"Paid2\", principal \"$OTHERP\")"
 expect "the fee was collected" "ICP" icp token balance --of-principal "$(icp canister status registry -i)"
 expect "the controller sweeps fees into cycles" "Ok" icp canister call registry sweep_fees '()'
@@ -377,14 +384,15 @@ CA=$(reg notebook_status "(principal \"$V\")" | grep -o 'cycles = [0-9_]*' | hea
 expect "the sweep is recorded" "TCYCLES" notebook deposits '()' --query
 expect "a second sweep finds nothing" "nothing to convert" notebook sweep_deposits '()'
 
-echo "== community: ICP-gated chat with channels and presence (every new message costs twice the ledger fee)"
+echo "== community: chat for anyone with a notebook, channels and presence (every new message costs twice the ledger fee)"
 expect "a message costs twice the ledger fee" "(20_000 : nat64)" icp canister call registry message_fee '()' --query
 icp token approve 0.5 "$(icp canister status registry -i)" --identity "$OWNER" -q >/dev/null; icp token transfer 1 "$OTHERP" -q >/dev/null; icp token approve 0.5 "$(icp canister status registry -i)" --identity "$OTHER" -q >/dev/null; icp token approve 0.5 "$(icp canister status registry -i)" -q >/dev/null
 SUF=$(date +%s | tail -c 5)
 expect "six channels exist" "general" icp canister call registry channels '()' --query
 expect "anonymous cannot join" "sign in" icp canister call registry join_community '("anon")' --identity anonymous
-expect "an empty wallet cannot join" "need ICP" icp canister call registry join_community '("thirdy")' --identity "$OWNER2"
-expect "a funded wallet joins" "handle = \"owner$SUF\"" reg join_community "(\"owner$SUF\")"
+expect "someone without a notebook cannot join" "need a notebook" icp canister call registry join_community '("thirdy")' --identity "$OWNER2"
+icp canister call registry create_notebook '("Other notes")' --identity "$OTHER" >/dev/null
+expect "a notebook owner joins" "handle = \"owner$SUF\"" reg join_community "(\"owner$SUF\")"
 expect "a taken handle is refused" "taken" icp canister call registry join_community "(\"Owner$SUF\")" --identity "$OTHER"
 expect "the other joins too" "handle = \"other$SUF\"" icp canister call registry join_community "(\"other$SUF\")" --identity "$OTHER"
 expect "a non-member cannot post" "join the community" icp canister call registry post '("general", "hi", null)' --identity "$OWNER2"
@@ -493,8 +501,19 @@ expect "the recipient's feed shows it" "from_handle = \"owner$SUF\"" icp caniste
 expect "the giver's feed does not" "(vec {})" reg my_rain '(0)' --query
 expect "the channel announces it" "rained" icp canister call registry messages '("general", 0, 50)' --query
 expect "recent_rain lists it" "recipients = vec" icp canister call registry recent_rain '(5)' --query
-expect "the minimum balance is a setting" "Ok" icp canister call registry set_chat_min '(1_000_000)'
-icp canister call registry set_chat_min '(1)' >/dev/null
+echo "== paying for chat from a registered wallet (OISY), not the sign-in account"
+expect "a member registers their wallet" "Ok" reg set_wallet "(opt principal \"$OTHERP\")"
+expect "my_wallet shows it" "$OTHERP" reg my_wallet '()' --query
+bal() { icp token balance --of-principal "$1" 2>&1 | grep -o '[0-9.]* ICP' | head -1 | tr -d ' ICP' | python3 -c 'import sys; print(round(float(sys.stdin.read())*1e8))'; }
+icp canister call $LEDGER_ID icrc2_approve "(record { spender = record { owner = principal \"$(icp canister status registry -i)\"; subaccount = opt blob \"$(subblob "$ME")\" }; amount = 0 : nat; fee = null; memo = null; from_subaccount = null; created_at_time = null; expected_allowance = null; expires_at = null })" --identity "$OTHER" >/dev/null
+expect "without the wallet's bound allowance the message is refused" "payment refused" reg post '("general", "paid by my wallet", null)'
+expect "the wallet approves the registry subaccount for this member" "Ok" bound_approve "$OTHER" 1_000_000 "$ME"
+WB=$(bal "$OTHERP")
+expect "now the message posts" '"text" = "paid by my wallet"' reg post '("general", "paid by my wallet", null)'
+WA=$(bal "$OTHERP")
+[ $((WB - WA)) -eq 30000 ] && { echo "  ok: the wallet paid the fee plus one ledger fee ($WB -> $WA)"; PASS=$((PASS+1)); } || { echo "FAIL: wallet paid $((WB - WA)) e8s, expected 30000"; exit 1; }
+expect "forgetting the wallet works" "Ok" reg set_wallet '(null)'
+expect "and my_wallet is empty again" "(null)" reg my_wallet '()' --query
 
 echo "== feature flags"
 expect "flags are listed with the market off" 'name = "market"' icp canister call registry flags '()' --query
@@ -548,6 +567,22 @@ elif echo "$UP" | grep -q "rate limited"; then echo "  ok: upgrade hit the local
 else fail "upgrade: $UP"; fi
 expect "data survived the upgrade" "journal" notebook read '("Daily/2026-10-10.md")' --query
 expect "top-up totals survived the upgrade" "total_topped_up_e8s = 80_000_000" notebook info '()' --query
+echo "== delete a notebook: its cycles move to another of yours, then the canister is gone"
+nbid() { grep -o 'canister = principal "[^"]*"' | head -1 | sed 's/.*"\(.*\)"/\1/'; }
+DA=$(reg create_notebook '("Doomed")' | nbid); DB=$(reg create_notebook '("Keeper")' | nbid)
+[ -n "$DA" ] && [ -n "$DB" ] || { echo "FAIL: could not spawn the delete-test notebooks"; exit 1; }
+cyc() { icp canister status "$1" --identity "$OWNER" 2>&1 | grep -o 'Cycles: [0-9_]*' | tr -d 'Cycles: _'; }
+KB=$(cyc "$DB")
+expect "a stranger cannot delete it" "not your notebook" icp canister call registry delete_notebook "(principal \"$DA\", null)" --identity "$OTHER"
+expect "the cycles cannot go to the notebook itself" "different notebook" reg delete_notebook "(principal \"$DA\", opt principal \"$DA\")"
+expect "nor to a canister that is not one of your notebooks" "another notebook of yours" reg delete_notebook "(principal \"$DA\", opt principal \"$(icp canister status registry 2>&1 | grep -o 'Canister Id: [a-z0-9-]*' | cut -d' ' -f3)\")"
+expect "the owner deletes it, its cycles going to Keeper" "Ok =" reg delete_notebook "(principal \"$DA\", opt principal \"$DB\")"
+KA=$(cyc "$DB")
+if [ "$KA" -gt $((KB + 500000000000)) ]; then echo "  ok: Keeper gained the cycles ($KB -> $KA)"; PASS=$((PASS+1)); else echo "FAIL: Keeper did not gain cycles ($KB -> $KA)"; exit 1; fi
+if icp canister status "$DA" --identity "$OWNER" 2>&1 | grep -q "Status: Running"; then echo "FAIL: the deleted canister still runs"; exit 1; else echo "  ok: the deleted canister is gone"; PASS=$((PASS+1)); fi
+if reg my_notebooks '()' --query | grep -qF "$DA"; then echo "FAIL: the deleted notebook is still listed"; exit 1; else echo "  ok: it is no longer listed"; PASS=$((PASS+1)); fi
+expect "deleting it again is refused" "unknown notebook" reg delete_notebook "(principal \"$DA\", null)"
+expect "with no target the cycles go to Lab" "Ok =" reg delete_notebook "(principal \"$DB\", null)"
 expect "forget_notebook refuses a stranger" "not your notebook" icp canister call registry forget_notebook "(principal \"$V\")" --identity "$OTHER"
 expect "forget_notebook works for the owner" "Ok" reg forget_notebook "(principal \"$V\")"
 for PAIDID in $(reg my_notebooks '()' --query | grep -o 'canister = principal "[^"]*"' | sed 's/.*"\(.*\)"/\1/'); do reg forget_notebook "(principal \"$PAIDID\")" >/dev/null; done

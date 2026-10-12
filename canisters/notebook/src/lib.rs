@@ -852,6 +852,27 @@ fn transfer_owner(new_owner: Principal) -> Result<(), NotebookError> {
     Ok(())
 }
 
+/// Kept back when draining: the replica reserves ~37B for the deposit call and its reply.
+// ponytail: a flat 0.05 TC margin; read the shortfall out of InsufficientLiquidCycleBalance and retry if it matters
+const DRAIN_KEEP: u128 = 50_000_000_000;
+
+/// Send this notebook's cycles to `to` (another of the owner's notebooks, or the registry) just
+/// before the registry deletes it, so they are not burnt with the canister. Registry only.
+#[update]
+async fn drain_cycles(to: Principal) -> Result<Nat, NotebookError> {
+    if msg_caller() != config().registry {
+        return Err(NotebookError::Unauthorized);
+    }
+    // liquid = what may be spent after the reserves; the margin pays for the deposit call itself
+    let amount = ic_cdk::api::canister_liquid_cycle_balance().saturating_sub(DRAIN_KEEP);
+    if amount > 0 {
+        ic_cdk_management_canister::deposit_cycles(&ic_cdk_management_canister::DepositCyclesArgs { canister_id: to }, amount)
+            .await
+            .map_err(|e| NotebookError::Invalid(format!("deposit_cycles: {e:?}")))?;
+    }
+    Ok(Nat::from(amount))
+}
+
 // ---------------------------------------------------------------- attestations: a checker, a comparator or a reviewer vouches for a note
 //
 // Each record binds to the content it saw by hash, so an edit to the prose or to the Lean it refers
