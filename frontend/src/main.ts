@@ -792,7 +792,45 @@ function panebar(left: { on: boolean; what: string; action: string; off?: boolea
 const brand = () => `<a class="brand" href="#/" data-action="nav" title="Lab: organize your thoughts, get feedback, build a knowledge base"><span class="mark"></span>Lab</a>`;
 /** Phones: every top bar collapses its secondary actions into one ⋯ menu. */
 const moreBtn = () => `<button type="button" class="btn btn-ghost icon-btn" data-action="more-menu" title="More" aria-label="More">${icon("more")}</button>`;
+/** Phones: the ⋯ button opens a full-screen list of every major route, the current one marked. */
+function routeSheet(el: HTMLElement) {
+  const nbId = S.notebook?.canister.toText();
+  const inNb = !!S.notebook && !S.community && !S.board && !S.market && !S.admin;
+  type R = { label: string; icon: string; on: boolean; go: () => void; sub?: boolean };
+  const tab = (t: Tab, label: string, ic: string): R => ({ label, icon: ic, sub: true, on: inNb && S.tab === t, go: () => { const i = document.createElement("i"); i.dataset.tab = t; if (!inNb) { S.community = undefined; S.board = undefined; S.market = undefined; S.admin = undefined; location.hash = `#/notebook/${nbId}`; } void onAction("tab", i, new MouseEvent("click")); } });
+  const routes: R[] = [
+    { label: "Your notebooks", icon: "list", on: !S.notebook && !S.community && !S.board && !S.market && !S.admin, go: () => { location.hash = "#/"; } },
+    ...(S.notebook ? [{ label: S.notebook.name, icon: "book", on: inNb && S.tab === "notes", go: () => { if (!inNb) location.hash = `#/notebook/${nbId}`; else { const i = document.createElement("i"); i.dataset.tab = "notes"; void onAction("tab", i, new MouseEvent("click")); } } } as R, tab("chat", "Chat with your notes", "chat"), tab("graph", "Graph", "graph"), tab("study", "Study", "check"), tab("work", "Work", "briefcase"), tab("manage", "Manage", "bolt")] : []),
+    { label: "Community", icon: "person", on: !!S.community, go: () => { location.hash = "#/community"; } },
+    { label: "Board", icon: "list", on: !!S.board, go: () => { location.hash = "#/board"; } },
+    { label: "Market", icon: "tag", on: !!S.market, go: () => { location.hash = "#/market"; } },
+    ...(S.isAdmin ? [{ label: "Admin", icon: "bug", on: !!S.admin, go: () => { location.hash = "#/admin"; } } as R] : []),
+  ];
+  const extras: R[] = [
+    ...(inNb ? [{ label: "Search or open a note", icon: "search", on: false, go: () => openPalette() } as R] : []),
+    { label: "Help and support", icon: "help", on: false, go: () => void onAction("help", el, new MouseEvent("click")) },
+    { label: "Appearance", icon: "palette", on: false, go: () => void onAction("theme-menu", el, new MouseEvent("click")) },
+    { label: "Sign out", icon: "out", on: false, go: () => void onAction("sign-out", el, new MouseEvent("click")) },
+  ];
+  const sheet = document.createElement("div");
+  sheet.className = "route-sheet";
+  sheet.setAttribute("role", "dialog");
+  sheet.setAttribute("aria-label", "Go to");
+  const row = (r: R, i: number) => `<button type="button" class="route ${r.sub ? "sub" : ""} ${r.on ? "on" : ""}" data-i="${i}" ${r.on ? 'aria-current="page"' : ""}>${icon(r.icon)}<span>${esc(r.label)}</span>${r.on ? icon("check") : ""}</button>`;
+  sheet.innerHTML = `<div class="route-head">${brand()}<button type="button" class="btn btn-ghost icon-btn" data-close aria-label="Close">${icon("x")}</button></div>
+    <div class="route-list">${routes.map(row).join("")}<div class="route-sep"></div>${extras.map((r, i) => row(r, routes.length + i)).join("")}</div>`;
+  const all = [...routes, ...extras];
+  const close = () => sheet.remove();
+  sheet.addEventListener("click", (e) => {
+    const b = (e.target as HTMLElement).closest<HTMLElement>("[data-i]");
+    if ((e.target as HTMLElement).closest("[data-close], .brand")) { close(); if ((e.target as HTMLElement).closest(".brand")) location.hash = "#/"; e.preventDefault(); return; }
+    if (b) { close(); all[Number(b.dataset.i)].go(); }
+  });
+  document.body.append(sheet);
+  sheet.querySelector<HTMLElement>(".route.on")?.scrollIntoView({ block: "center" });
+}
 function moreMenu(el: HTMLElement) {
+  if (S.mobile) return routeSheet(el);
   const r = el.getBoundingClientRect();
   const go = (hash: string) => () => { location.hash = hash; };
   const items: MenuItem[] = [];
@@ -801,7 +839,8 @@ function moreMenu(el: HTMLElement) {
   if (S.notebook || S.market || S.admin || S.community) items.push({ label: "Your notebooks", icon: "list", action: go("#/") });
   if (!S.community) items.push({ label: "Community chat", icon: "person", action: go("#/community") });
   if (!S.market) items.push({ label: "Notebook market", icon: "tag", action: go("#/market") });
-  if (S.isAdmin && !S.admin) items.push({ label: "Admin · bug reports", icon: "bug", action: go("#/admin") });
+  if (!S.board) items.push({ label: "Board", icon: "list", action: go("#/board") });
+  if (S.isAdmin && !S.admin) items.push({ label: "Admin · reports and ideas", icon: "bug", action: go("#/admin") });
   items.push("-", { label: "Help and support", icon: "help", action: () => void onAction("help", el, new MouseEvent("click")) }, { label: "Appearance", icon: "palette", action: () => void onAction("theme-menu", el, new MouseEvent("click")) }, "-", { label: "Sign out", icon: "out", action: () => void onAction("sign-out", el, new MouseEvent("click")) });
   contextMenu(Math.max(8, r.right - 220), r.bottom + 4, "", items);
 }
@@ -983,7 +1022,7 @@ function side(): string {
     body = S.notes.length || S.folders.length ? folderHtml(tree(paths(), S.folders), 0) : `<div class="empty-side">Empty notebook. Create a note, or right-click here for a folder.</div>`;
   }
   const tags = [...S.idx.tags.entries()].sort((a, b) => b[1].size - a[1].size || a[0].localeCompare(b[0]));
-  return `<div class="pane-head"><button type="button" class="btn btn-ghost icon-btn" data-action="today" title="Today's note (${MOD}⇧D)" aria-label="Today's note">${icon("calendar")}</button><button type="button" class="btn btn-ghost icon-btn" data-action="root-menu" title="Notebook actions" aria-label="Notebook actions">${icon("more")}</button><button type="button" class="btn btn-primary icon-btn" data-action="new" title="New note (${MOD}N)" aria-label="New note">${icon("plus")}</button></div>
+  return `<div class="pane-head"><button type="button" class="btn btn-ghost icon-btn" data-action="today" title="Today's note (${MOD}⇧D)" aria-label="Today's note">${icon("calendar")}</button><button type="button" class="btn btn-ghost icon-btn" data-action="root-menu" title="Notebook actions" aria-label="Notebook actions">${icon("more")}</button></div>
     ${bookmarks}<div class="tree" data-tree>${body}</div>
     ${tags.length ? `<div class="pane-title">Tags</div><div class="tags">${tags.map(([t, ps]) => `<button type="button" class="tag-chip ${S.tag === t ? "active" : ""}" data-action="tag" data-tag="${esc(t)}">#${esc(t)}<span class="cnt">${ps.size}</span></button>`).join("")}</div>` : ""}
     <div class="side-foot"><button type="button" class="nb-switch" data-action="nb-menu" title="Switch notebook"><span class="updown">${icon("updown")}</span><b>${esc(S.notebook!.name)}</b>${shareBadge("")}</button><span class="right-actions"><button type="button" class="btn btn-ghost icon-btn" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="btn btn-ghost icon-btn" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button></span></div>`;
@@ -1057,7 +1096,7 @@ function tabbar(p: Pane): string {
     const d = draftOf(t);
     return `<div class="tabitem ${t === p.active ? "active" : ""}" role="tab" aria-selected="${t === p.active}" draggable="true" data-action="tab-open" data-pane="${p.id}" data-tab="${esc(t)}" title="${esc(t)}">${icon("file")}<span class="tname">${esc(title(t))}</span>${d.dirty ? `<span class="dot-dirty"></span>` : ""}<button type="button" class="tclose" data-action="tab-close" data-pane="${p.id}" data-tab="${esc(t)}" aria-label="Close ${esc(title(t))}">${icon("x")}</button></div>`;
   }).join("");
-  return `<div class="tabbar" role="tablist" data-pane="${p.id}" data-tabbar>${tabs}<button type="button" class="btn btn-ghost icon-btn tnew" data-action="tab-new" data-pane="${p.id}" title="New note in a new tab" aria-label="New tab">${icon("plus")}</button><span class="grow"></span><button type="button" class="btn btn-ghost icon-btn" data-action="pane-menu" data-pane="${p.id}" title="Pane options" aria-label="Pane options">${icon("down")}</button></div>`;
+  return `<div class="tabbar" role="tablist" data-pane="${p.id}" data-tabbar>${tabs}<span class="grow"></span><button type="button" class="btn btn-ghost icon-btn" data-action="pane-menu" data-pane="${p.id}" title="Pane options" aria-label="Pane options">${icon("down")}</button></div>`;
 }
 
 function editorBody(p: Pane): string {
@@ -2480,6 +2519,7 @@ async function askNotes() {
 // --- workspace: graph tab
 
 function graphTab(): string {
+  if (S.mobile) for (const t of [400, 1500, 3000]) setTimeout(() => graph?.fit(), t); // centre once the layout settles
   const n = S.notes?.length ?? 0;
   return `<section class="main"><div class="graph-wrap">
       <canvas id="graph" aria-label="Knowledge graph of this notebook"></canvas>

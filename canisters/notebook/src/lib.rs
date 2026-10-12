@@ -320,6 +320,9 @@ fn init(a: Init) {
     CONFIG.with_borrow_mut(|c| c.set(C(Config { name: a.name.clone(), owner: a.owner, registry: a.registry, created_at: now })));
     FOLDERS.with_borrow_mut(|f| f.insert(AGENT_ROOT.into(), ()));
     FILES.with_borrow_mut(|f| f.insert("index.md".into(), C(Stored { content: index_page(&a.name), created: now, modified: now, agent: None })));
+    // a Projects folder with one project note, so the Work tab has something to show from day one
+    FOLDERS.with_borrow_mut(|f| f.insert("Projects".into(), ()));
+    FILES.with_borrow_mut(|f| f.insert("Projects/First project.md".into(), C(Stored { content: "---\ntype: project\nstatus: active\ngoal: Get this notebook working for you\n---\n# First project\n\nProjects are notes with `type: project` in the front matter; the Work tab lists them with their open tasks and milestones.\n\n## Milestones\n\n- [ ] Write the index page in your own words\n- [ ] Make a daily note (⌘⇧D)\n- [ ] Link two notes with [[double brackets]]\n\n## Notes\n\n".into(), created: now, modified: now, agent: None })));
     start_timers();
 }
 #[post_upgrade]

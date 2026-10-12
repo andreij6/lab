@@ -157,6 +157,8 @@ A reddit-style board beside the chat (ribbon and top bar). Topics are the commun
 - **Rain.** The ☔ button sends ICP to 1 to 10 people picked at random from everyone who posted in the last 30 minutes: you choose how many and the total, approve it in OISY, and the registry splits it and transfers each share straight to their in-app wallet. The channel gets an announcement naming them, and each recipient sees a rain animation with a card saying who sent how much, wherever they are in the app, within half a minute. Messages sit at the bottom of the chat like a messenger.
 - **Presence.** Readers ping every 30 seconds while the page is open; the online list shows handles grouped by the channel they are reading.
 
+- **A fresh notebook** starts with an `index.md` front page and a `Projects/` folder holding a first project note, so the Work tab has something to show.
+
 ## Agents
 
 - **Agent keys and the locked folder.** Issue a key per agent in Manage; agents read every note over a JSON API and write only under `Agents/`, where people can read, link and delete but not edit. Agent notes carry the agent's name and draw as green diamonds in the graph.
@@ -164,5 +166,6 @@ A reddit-style board beside the chat (ribbon and top bar). Topics are the commun
 
 ## Help
 
+- **On a phone.** The ⋯ button in the top bar opens a full-screen list of every route: your notebooks, the open notebook and its Chat, Graph, Study, Work and Manage views, Community, Board, Market and Admin, with the current one marked; search, help, appearance and sign-out sit below. The status bar stays pinned above the bottom tabs, and the graph fills the screen and centres itself.
 - **Help and support.** The ? button opens a form with a switch between "Report a problem" and "Suggest an idea"; both take a title and detail, and where you were is attached. Reports and ideas share one queue: yours show their kind, status and the admin's answer, and the Admin page filters by bugs or ideas.
 - **Admin queue.** Admins (registry controllers plus added principals) see every report, filter by status, read the detail and context, leave a note and set Open, In progress, Done or Won't fix.

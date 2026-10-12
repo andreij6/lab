@@ -34,7 +34,7 @@ V=$(echo "$OUT" | grep -o 'canister = principal "[^"]*"' | sed 's/.*"\(.*\)"/\1/
 notebook() { icp canister call "$V" "$@" --identity "$OWNER"; }
 expect "my_notebooks lists it" "$V" reg my_notebooks '()' --query
 expect "a new notebook starts with index.md" '# Notes' notebook read '("index.md")' --query
-expect "and nothing else but Agents/" 'files = 1' notebook info '()' --query
+expect "and nothing else but Agents/" 'files = 2' notebook info '()' --query
 expect "a stranger's my_notebooks is empty" "(vec {})" icp canister call registry my_notebooks '()' --query --identity "$OTHER"
 expect "empty name refused" "1-64" reg create_notebook '("")'
 expect "anonymous cannot create" "sign in" icp canister call registry create_notebook '("Anon")' --identity anonymous
@@ -49,9 +49,9 @@ expect "wrote daily note" "Ok" notebook write '("Daily/2026-10-10.md", "Today I 
 expect "wrote Ideas" "Ok" notebook write '("Ideas.md", "# Ideas\nSee [[Daily/2026-10-10|today]] and [[Ideas#Heading]]")'
 expect "read back" "# Ideas" notebook read '("Ideas.md")' --query
 expect "read_all returns content" "journal" notebook read_all '()' --query
-[ "$(notebook list '()' --query | grep -c 'path = ')" = 3 ] && echo "  ok: three files listed (index.md included)" || { echo "FAIL: list"; exit 1; }
+[ "$(notebook list '()' --query | grep -c 'path = ')" = 4 ] && echo "  ok: four files listed (index.md and the seeded project included)" || { echo "FAIL: list"; exit 1; }
 expect "overwrite keeps one file" "size = 7" notebook write '("Ideas.md", "# Ideas")'
-expect "still three files" "files = 3" notebook info '()' --query
+expect "still four files" "files = 4" notebook info '()' --query
 
 echo "== import: write_many, paging, attachments"
 expect "write_many imports good files and reports bad ones" 'written = 3' notebook write_many '(vec { record { "Import/A.md"; "a [[B]]" }; record { "Import/B.md"; "b" }; record { "Import/img.png"; "data:image/png;base64,iVBORw0KGgo=" }; record { "Import/bad#name.md"; "x" } }, false)'
@@ -168,7 +168,7 @@ expect "after unsharing anonymous is refused" "Unauthorized" icp canister call "
 echo "== delete"
 expect "deleted" "Ok" notebook delete '("Projects/Big Ideas.md")'
 expect "second delete is NotFound" "NotFound" notebook delete '("Projects/Big Ideas.md")'
-expect "info counts 6 files (index.md, the daily note, the Lean note, the paper and two clips)" "files = 6" notebook info '()' --query
+expect "info counts 7 files (index.md, the seeded project, the daily note, the Lean note, the paper and two clips)" "files = 7" notebook info '()' --query
 
 echo "== keep it running: ICP sent to the notebook account becomes cycles"
 C0=$(notebook info '()' --query | grep -o 'cycles = [0-9_]*' | head -1 | tr -d 'cycles =_')
