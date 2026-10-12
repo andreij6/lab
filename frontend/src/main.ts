@@ -163,13 +163,9 @@ type ChatMsg = { role: "you" | "notes"; text: string; picks?: Pick[]; model?: st
 /** The ICP LLM canister; locally the stand-in in canisters/llm-dev that answers with Ollama. */
 const LLM_CANISTER = env["PUBLIC_CANISTER_ID:llm"] ?? "w36hm-eqaaa-aaaal-qr76a-cai";
 const LLM_LOCAL = !!env["PUBLIC_CANISTER_ID:llm"];
-const LLM_MODELS: { id: string; label: string; paid?: boolean }[] = [
-  { id: "z-ai:glm-5.2", label: "GLM 5.2 · best (paid from this notebook's cycles)", paid: true },
-  { id: "qwen3:32b", label: "Qwen3 32B · best free" },
-  { id: "llama4-scout", label: "Llama 4 Scout · free" },
-  { id: "gemma3:27b", label: "Gemma 3 27B · paid", paid: true },
-  { id: "llama3.1:8b", label: "Llama 3.1 8B · free, fastest" },
-];
+/** The chat model: the strongest free model on the LLM canister, so questions never spend the notebook's cycles. */
+const LLM_MODEL = "qwen3:32b";
+const LLM_MODEL_NAME = "Qwen3 32B";
 let paneSeq = 1;
 const newPane = (view?: View): Pane => ({ id: paneSeq++, tabs: [], view: view ?? ((store("nb-view") as View | null) ?? "split") });
 
@@ -213,7 +209,7 @@ const S = {
   tag: "",
   collapsed: new Set<string>(JSON.parse(store("nb-collapsed") ?? "[]") as string[]),
   tab: "notes" as Tab,
-  chat: { input: "", busy: false, messages: [] as ChatMsg[], excluded: new Set<string>(), model: store("nb-chat-model") || "z-ai:glm-5.2", stage: "" },
+  chat: { input: "", busy: false, messages: [] as ChatMsg[], excluded: new Set<string>(), stage: "" },
   mobile: mobileQuery.matches,
   mobilePane: "files" as MobilePane,
   graphGhosts: store("nb-graph-ghosts") === "1",
@@ -2530,7 +2526,7 @@ function chatFolders(): Set<string> {
 }
 function chatHtml(): string {
   const msgs = S.chat.messages.length
-    ? S.chat.messages.map((m, mi) => `<div class="msg ${m.role}">${m.role === "you" ? `<div class="bubble">${esc(m.text)}</div>` : `<div class="bubble md">${beyond(citeLinks(renderMd(m.text), m.picks ?? []))}${m.model ? `<div class="answer-tools"><button type="button" class="btn btn-ghost" data-action="chat-save" data-i="${mi}" title="Save this answer as a note, citations as links">${icon("plus")}Save as note</button></div>` : ""}${m.model ? `<div class="answered-by small faint">${icon("bot")}${esc(LLM_LOCAL ? "Local Ollama (stand-in)" : LLM_MODELS.find((x) => x.id === m.model)?.label.split(" · ")[0] ?? m.model)}${m.fallback ? ` · ${esc(m.fallback)}` : ""}</div>` : m.fallback ? `<div class="answered-by small faint">${esc(m.fallback)}</div>` : ""}</div>${m.picks?.length ? `<div class="sources">${m.picks.map((p) => `<button type="button" class="src" data-action="open" data-path="${esc(p.path)}" title="${esc(p.why.join("; "))}">${icon("file")}${esc(title(p.path))}</button>`).join("")}</div>` : ""}`}</div>`).join("")
+    ? S.chat.messages.map((m, mi) => `<div class="msg ${m.role}">${m.role === "you" ? `<div class="bubble">${esc(m.text)}</div>` : `<div class="bubble md">${beyond(citeLinks(renderMd(m.text), m.picks ?? []))}${m.model ? `<div class="answer-tools"><button type="button" class="btn btn-ghost" data-action="chat-save" data-i="${mi}" title="Save this answer as a note, citations as links">${icon("plus")}Save as note</button></div>` : ""}${m.model ? `<div class="answered-by small faint">${icon("bot")}${esc(LLM_LOCAL ? "Local Ollama (stand-in)" : m.model === LLM_MODEL ? LLM_MODEL_NAME : m.model ?? "")}${m.fallback ? ` · ${esc(m.fallback)}` : ""}</div>` : m.fallback ? `<div class="answered-by small faint">${esc(m.fallback)}</div>` : ""}</div>${m.picks?.length ? `<div class="sources">${m.picks.map((p) => `<button type="button" class="src" data-action="open" data-path="${esc(p.path)}" title="${esc(p.why.join("; "))}">${icon("file")}${esc(title(p.path))}</button>`).join("")}</div>` : ""}`}</div>`).join("")
     : `<div class="chat-empty">${icon("chat")}<h3>Ask your notes</h3><p class="muted small">Type a question in plain language. The notebook picks the notes that look relevant from the folders ticked on the right and answers from them.</p></div>`;
   return `<section class="main chat" data-chat>
     <div class="chat-log">${msgs}${S.chat.busy ? `<div class="msg notes"><div class="bubble muted thinking"><span class="spin"></span>${esc(S.chat.stage || "Reading your notes…")}</div></div>` : ""}</div>
@@ -2546,8 +2542,8 @@ function chatAside(): string {
     <div class="row tight" style="padding:0 8px"><button type="button" class="btn btn-ghost" data-action="chat-folders" data-all="1">Select all</button><button type="button" class="btn btn-ghost" data-action="chat-folders" data-all="0">None</button></div>
     <div class="chat-folders">${rows}</div>
     ${last ? `<div class="pane-title">Notes used last</div>${last.picks!.map((p) => `<div class="bl" data-action="open" data-path="${esc(p.path)}"><div class="t">${icon("file")}${esc(stem(p.path))}</div><div class="ctx">${esc(p.why.join(" · "))}</div></div>`).join("")}` : ""}
-    <div class="pane-title">Model</div><div style="padding:0 8px"><select class="input" name="chatmodel" aria-label="Language model">${LLM_MODELS.map((x) => `<option value="${x.id}" ${S.chat.model === x.id ? "selected" : ""}>${esc(x.label)}</option>`).join("")}</select>${LLM_LOCAL ? `<p class="small muted nudge">Local development: every model name is answered by your Ollama through the stand-in canister.</p>` : ""}</div>
-    <div class="pane-title">How it works</div><div class="empty-side">1. A quick System 1 pass in your browser scores every note in the ticked folders on title, tags and word overlap and keeps the best few. 2. Their excerpts go to the Internet Computer's LLM canister, which answers from them first and cites each claim with a number you can click; whatever the notes do not cover it answers from its own knowledge, labelled "Beyond your notes". Save any answer as a note in the folder you pick. Paid models are charged to this notebook's cycles; if one cannot answer, the best free model does. Excerpts leave your notebook for the LLM workers, so keep secrets out of the ticked folders.</div>
+    <div class="pane-title">Model</div><div class="empty-side">${LLM_LOCAL ? "Local development: your Ollama answers through the stand-in canister." : `${LLM_MODEL_NAME}, the strongest free model on the Internet Computer's LLM canister. Questions cost no cycles.`}</div>
+    <div class="pane-title">How it works</div><div class="empty-side">1. A quick System 1 pass in your browser scores every note in the ticked folders on title, tags and word overlap and keeps the best few. 2. Their excerpts go to the Internet Computer's LLM canister, which answers from them first and cites each claim with a number you can click; whatever the notes do not cover it answers from its own knowledge, labelled "Beyond your notes". Save any answer as a note in the folder you pick. Excerpts leave your notebook for the LLM workers, so keep secrets out of the ticked folders.</div>
     ${S.chat.messages.length ? `<div style="padding:8px"><button type="button" class="btn btn-ghost" data-action="chat-clear">${icon("trash")}Clear chat</button></div>` : ""}`;
 }
 /** The part the model answered from its own knowledge gets a visible label. */
@@ -2594,14 +2590,14 @@ async function askNotes() {
   {
     const per = picks.length ? Math.min(2000, Math.floor(7600 / picks.length)) : 0;
     const sources = picks.map((p) => ({ path: p.path, excerpt: excerpt(notes.find((n) => n.path === p.path)?.content ?? "", q, per) }));
-    const model = S.chat.model;
-    S.chat.stage = `Asking ${LLM_LOCAL ? "your local Ollama" : LLM_MODELS.find((x) => x.id === model)?.label.split(" · ")[0] ?? model} ${picks.length ? `with ${picks.length} note${picks.length === 1 ? "" : "s"}` : "(no notes matched, so from its own knowledge)"}…`;
+    const model = LLM_MODEL;
+    S.chat.stage = `Asking ${LLM_LOCAL ? "your local Ollama" : LLM_MODEL_NAME} ${picks.length ? `with ${picks.length} note${picks.length === 1 ? "" : "s"}` : "(no notes matched, so from its own knowledge)"}…`;
     render();
     try {
       const r = unwrap(await nb().ask(Principal.fromText(LLM_CANISTER), model, q, sources));
       const used = cited(r.text, picks.length);
       // cited notes first, in the order the model used them, so [n] still points at the right note
-      S.chat.messages.push({ role: "notes", text: r.text, picks, model: r.model, fallback: r.model !== model ? `${LLM_MODELS.find((x) => x.id === model)?.label.split(" · ")[0] ?? model} was unavailable` : used.length || !picks.length || /beyond your notes/i.test(r.text) ? "" : "no citations given" });
+      S.chat.messages.push({ role: "notes", text: r.text, picks, model: r.model, fallback: used.length || !picks.length || /beyond your notes/i.test(r.text) ? "" : "no citations given" });
     } catch (e) {
       S.chat.messages.push({ role: "notes", text: answer(q, picks), picks, fallback: errMsg(e) });
     }
@@ -2984,7 +2980,7 @@ async function openNotebook(id: string, path?: string) {
   S.notes = undefined;
   S.drafts.clear();
   S.tab = "notes";
-  S.chat = { input: "", busy: false, messages: [], excluded: new Set(JSON.parse(store(`nb-chat-off-${id}`) ?? "[]") as string[]), model: S.chat.model, stage: "" };
+  S.chat = { input: "", busy: false, messages: [], excluded: new Set(JSON.parse(store(`nb-chat-off-${id}`) ?? "[]") as string[]), stage: "" };
   S.query = S.tag = "";
   S.error = "";
   S.info = undefined;
@@ -5302,7 +5298,6 @@ document.addEventListener("input", (ev) => {
       void registry().set_flag(inp.dataset.flag!, inp.checked).then((r) => { if (r.__kind__ === "Err") { toast(r.Err, "error"); inp.checked = !inp.checked; return; } const i = S.flags.findIndex((f) => f.name === r.Ok.name); if (i >= 0) S.flags[i] = r.Ok; else S.flags.push(r.Ok); toast(`${r.Ok.name} is now ${r.Ok.on ? "on" : "off"}.`, "ok"); render(); });
       break;
     }
-    case "chatmodel": { S.chat.model = (el as unknown as HTMLSelectElement).value; store("nb-chat-model", S.chat.model); break; }
     case "notify": { store("nb-notify", (el as HTMLInputElement).checked ? "1" : "0"); if ((el as HTMLInputElement).checked) { store("nb-mention-seen", store("nb-mention-seen") ?? "0"); void checkMentions(); } renderOnline(); break; }
     case "csv": { const inp = el as HTMLInputElement; if (inp.files?.[0]) void importCsv(inp.dataset.path!, inp.files[0]); inp.value = ""; break; }
     case "kbdone":
