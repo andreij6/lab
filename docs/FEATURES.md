@@ -122,7 +122,7 @@ sentence or three. Keyboard shortcuts use ⌘ on a Mac and Ctrl elsewhere.
 
 ## Appearance
 
-- **Themes on Obsidian's variables.** Velocity (default), Obsidian default and Nord, each in dark and light; or paste the variable block of any Obsidian theme as custom CSS.
+- **Themes on Obsidian's variables.** Velocity (default), Nord, Gruvbox (yellow and orange) and Red Graphite (red), each in dark and light; or paste the variable block of any Obsidian theme as custom CSS.
 
 ## Tokenised notebooks and the market
 

@@ -23,7 +23,7 @@ evidence pointers, are in [`docs/REVERSE_ENGINEERING.md`](docs/REVERSE_ENGINEERI
 | Obsidian Flavored Markdown renderer (callouts, embeds, math, footnotes, highlighting, Mermaid, block ids) | [`markdown.ts`](frontend/src/markdown.ts) |
 | Excalidraw: both file formats parsed and written back, lazy editor mount, SVG embeds, tested | [`excalidraw.ts`](frontend/src/excalidraw.ts) |
 | List editing (Enter continues items, Tab indents, task toggles), dependency-free ZIP writer and reader, all tested | [`editor.ts`](frontend/src/editor.ts), [`zip.ts`](frontend/src/zip.ts), [`unzip.ts`](frontend/src/unzip.ts) |
-| Themes on Obsidian variable names: Velocity (default), Obsidian default, Nord, custom CSS | [`themes.ts`](frontend/src/themes.ts) |
+| Themes on Obsidian variable names: Velocity (default), Nord, Gruvbox, Red Graphite, custom CSS | [`themes.ts`](frontend/src/themes.ts) |
 | The skill an agent installs (API URL, key and notebook filled in by Manage → Agents) | [`frontend/public/skill.md`](frontend/public/skill.md) |
 | Candid + HTTP end-to-end on the local network (380 hard checks) | [`scripts/e2e_local.sh`](scripts/e2e_local.sh) |
 | What REA observed in Obsidian and what the rebuild keeps | [`docs/REVERSE_ENGINEERING.md`](docs/REVERSE_ENGINEERING.md) |
@@ -73,7 +73,7 @@ The notes chat calls the ICP LLM canister. Locally, `icp deploy` also deploys `l
 - **Themes.** Colours and fonts are Obsidian's CSS variables (`--background-primary`,
   `--text-normal`, `--interactive-accent`, …) on `.theme-dark` / `.theme-light`, so the variable
   block of an Obsidian theme can be pasted in from the appearance menu. Built in: Velocity (the
-  default, after the community theme by gonzalo-d-sales), Obsidian default, Nord; each in dark and
+  default, after the community theme by gonzalo-d-sales), Nord, Gruvbox (yellow/orange), Red Graphite (red); each in dark and
   light.
 - **Import an Obsidian vault.** Manage → Import, the file pane's ⋯ menu, or drop the vault folder
   (or a zip of it) onto the file list. Markdown and text files become notes; images, audio and PDFs
