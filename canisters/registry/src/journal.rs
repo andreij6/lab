@@ -9,6 +9,9 @@
 //! has the final say, but cannot accept without two passing Lean checks. Everything is public,
 //! rejections included, and every accepted submission becomes a numbered discovery credited to the
 //! agent that made it.
+//!
+//! Behind the `journal` feature flag (off by default): while it is off every call that changes
+//! anything is refused and the hourly round does nothing; reads still answer.
 use super::*;
 use sha2::{Digest, Sha256};
 
@@ -340,6 +343,7 @@ fn valid_name(n: &str) -> bool {
 /// Register the caller as an agent (or update its profile). Changing the operator resets the vouch.
 #[update]
 fn register_agent(a: AgentInput) -> Result<AgentProfile, String> {
+    require_flag("journal")?;
     let me = msg_caller();
     if me == Principal::anonymous() {
         return Err("call with your agent's own identity".into());
@@ -385,6 +389,7 @@ fn register_agent(a: AgentInput) -> Result<AgentProfile, String> {
 /// The operator confirms (or refuses) an agent that named them. Only then may it publish or review.
 #[update]
 fn vouch_agent(agent: Principal, yes: bool) -> Result<AgentProfile, String> {
+    require_flag("journal")?;
     let me = msg_caller();
     let mut a = agent_of(&agent).ok_or("no such agent")?;
     if a.operator != me {
@@ -403,6 +408,7 @@ fn vouch_agent(agent: Principal, yes: bool) -> Result<AgentProfile, String> {
 /// Take review assignments, or stop.
 #[update]
 fn set_reviewing(on: bool) -> Result<AgentProfile, String> {
+    require_flag("journal")?;
     let me = msg_caller();
     let mut a = agent_of(&me).ok_or("register as an agent first")?;
     a.reviewing = on;
@@ -413,6 +419,7 @@ fn set_reviewing(on: bool) -> Result<AgentProfile, String> {
 /// Appoint or stand down an editor agent (admins). Editors decide submissions.
 #[update]
 fn set_editor(agent: Principal, on: bool) -> Result<AgentProfile, String> {
+    require_flag("journal")?;
     if !admin(&msg_caller()) {
         return Err("admin only".into());
     }
@@ -466,6 +473,7 @@ fn my_agents() -> Vec<AgentProfile> {
 /// pulled from `payer` (default: the agent) and becomes the notebook's cycles.
 #[update]
 async fn create_agent_notebook(name: String, deposit_e8s: u64, payer: Option<Principal>) -> Result<Notebook, String> {
+    require_flag("journal")?;
     let me = msg_caller();
     vouched_agent(me)?;
     if deposit_e8s < MIN_AGENT_DEPOSIT_E8S {
@@ -520,6 +528,7 @@ fn duplicate(hash: &str) -> bool {
 /// Submit a folder or note of your public notebook for review. It is frozen here as it is now.
 #[update]
 async fn submit(i: SubmitInput) -> Result<Submission, String> {
+    require_flag("journal")?;
     let me = msg_caller();
     vouched_agent(me)?;
     let nb = NOTEBOOKS.with_borrow(|m| m.get(&i.notebook).map(|c| c.0)).ok_or("unknown notebook")?;
@@ -573,6 +582,7 @@ async fn submit(i: SubmitInput) -> Result<Submission, String> {
 /// version, and the same reviewers review it.
 #[update]
 async fn revise(id: u64, response: String) -> Result<Submission, String> {
+    require_flag("journal")?;
     let me = msg_caller();
     let mut s = get(id)?;
     if s.author != me {
@@ -647,6 +657,9 @@ async fn assign(id: u64) {
 /// Hourly: seat reviewers and editors for submissions still waiting, and replace reviewers who let
 /// the review period pass without reviewing.
 pub async fn journal_tick() {
+    if !flag_on("journal") {
+        return;
+    }
     let now = time();
     let ids: Vec<u64> = SUBMISSIONS.with_borrow(|m| m.iter().filter(|e| matches!(e.value().0.status, Status::Waiting | Status::UnderReview)).map(|e| *e.key()).collect());
     for id in ids {
@@ -672,6 +685,7 @@ pub async fn journal_tick() {
 /// or admin; useful right after new reviewers sign up).
 #[update]
 async fn nudge_journal() -> Result<(), String> {
+    require_flag("journal")?;
     let me = msg_caller();
     if !admin(&me) {
         vouched_agent(me)?;
@@ -686,6 +700,7 @@ async fn nudge_journal() -> Result<(), String> {
 /// the editor decides.
 #[update]
 fn review(id: u64, r: ReviewInput) -> Result<Review, String> {
+    require_flag("journal")?;
     let me = msg_caller();
     vouched_agent(me)?;
     let mut s = get(id)?;
@@ -720,6 +735,7 @@ fn review(id: u64, r: ReviewInput) -> Result<Review, String> {
 /// period has passed); accepting also needs two passing Lean checks and no failing one.
 #[update]
 fn decide(id: u64, verdict: Verdict, rationale: String) -> Result<Submission, String> {
+    require_flag("journal")?;
     let me = msg_caller();
     vouched_agent(me)?;
     let mut s = get(id)?;

@@ -166,7 +166,9 @@ function tracked<T extends object>(actor: T): T {
   return new Proxy(actor, { get(target, key) { const v = Reflect.get(target, key); if (typeof v !== "function" || typeof key !== "string") return v; return (...args: unknown[]) => { const r = (v as (...a: unknown[]) => unknown).apply(target, args); return r instanceof Promise ? trackCall(key, r) : r; }; } });
 }
 /** A feature flag from the registry; unknown or not yet loaded flags count as on, except the market. */
-const flag = (name: string): boolean => { const f = S.flags.find((x) => x.name === name); return f ? f.on : name !== "market"; };
+/** Off until the registry says otherwise: the market and the journal ship switched off. */
+const OFF_BY_DEFAULT = ["market", "journal"];
+const flag = (name: string): boolean => { const f = S.flags.find((x) => x.name === name); return f ? f.on : !OFF_BY_DEFAULT.includes(name); };
 const registry = (): Registry => tracked(registryActor(REGISTRY, { agentOptions: { identity: S.identity, rootKey: env.IC_ROOT_KEY } }));
 const notebookOf = (id: string): NotebookApi => tracked(notebookActor(id, { agentOptions: { identity: S.identity, rootKey: env.IC_ROOT_KEY } }));
 const nb = (): NotebookApi => notebookOf(S.notebook!.canister.toText());
@@ -898,7 +900,7 @@ function routeSheet(el: HTMLElement) {
     ...(S.notebook ? [{ label: S.notebook.name, icon: "notebook", on: inNb && S.tab === "notes", go: () => { if (!inNb) location.hash = `#/notebook/${nbId}`; else { const i = document.createElement("i"); i.dataset.tab = "notes"; void onAction("tab", i, new MouseEvent("click")); } } } as R, ...FEATURES.map((f) => tab(f.id, f.label, f.icon)), tab("manage", "Manage", "cog")].filter((r) => !r.hidden) : []),
     { label: "Community", icon: "users", on: !!S.community, go: () => { location.hash = "#/community"; } },
     ...(flag("board") ? [{ label: "Board", icon: "pin", on: !!S.board, go: () => { location.hash = "#/board"; } } as R] : []),
-    { label: "Journal", icon: "award", on: !!S.journal, go: () => { location.hash = "#/journal"; } },
+    ...(flag("journal") ? [{ label: "Journal", icon: "award", on: !!S.journal, go: () => { location.hash = "#/journal"; } } as R] : []),
     ...(flag("market") ? [{ label: "Market", icon: "tag", on: !!S.market, go: () => { location.hash = "#/market"; } } as R] : []),
     ...(S.isAdmin ? [{ label: "Admin", icon: "bug", on: !!S.admin, go: () => { location.hash = "#/admin"; } } as R] : []),
   ];
@@ -936,7 +938,7 @@ function moreMenu(el: HTMLElement) {
   if (!S.community) items.push({ label: "Community chat", icon: "users", action: go("#/community") });
   if (!S.market && flag("market")) items.push({ label: "Notebook market", icon: "tag", action: go("#/market") });
   if (!S.board) items.push({ label: "Board", icon: "pin", action: go("#/board") });
-  if (!S.journal) items.push({ label: "Journal", icon: "award", action: go("#/journal") });
+  if (!S.journal && flag("journal")) items.push({ label: "Journal", icon: "award", action: go("#/journal") });
   if (S.isAdmin && !S.admin) items.push({ label: "Admin · reports and ideas", icon: "bug", action: go("#/admin") });
   items.push("-", { label: "Help and support", icon: "help", action: () => void onAction("help", el, new MouseEvent("click")) }, ...(themeAllowed() ? [{ label: "Appearance", icon: "palette", action: () => void onAction("theme-menu", el, new MouseEvent("click")) } as MenuItem] : []), "-", { label: "Sign out", icon: "out", action: () => void onAction("sign-out", el, new MouseEvent("click")) });
   contextMenu(Math.max(8, r.right - 220), r.bottom + 4, "", items);
@@ -945,7 +947,7 @@ function moreMenu(el: HTMLElement) {
 const pageNav = () => S.mobile ? "" : `${S.notebook ? `<a class="btn btn-ghost" href="#/notebook/${S.notebook.canister.toText()}" data-action="nav">${icon("links")}<span class="lbl">Back to “${esc(S.notebook.name)}”</span></a>` : ""}<a class="btn btn-ghost" href="#/" data-action="nav">${icon("list")}<span class="lbl">Your notebooks</span></a>`;
 /** The appearance can be changed on the notebook, chat and board pages only. */
 const themeAllowed = () => !!S.community || !!S.board || (!!S.notebook && !S.market && !S.admin && !S.shared);
-const themeBtn = () => S.mobile ? moreBtn() : `${S.community ? "" : `<a class="btn btn-ghost" href="#/community" data-action="nav" title="Community chat">${icon("users")}<span class="lbl">Community</span></a>`}${S.board || !flag("board") ? "" : `<a class="btn btn-ghost" href="#/board" data-action="nav" title="Posts and discussion">${icon("pin")}<span class="lbl">Board</span></a>`}${S.market || !flag("market") ? "" : `<a class="btn btn-ghost" href="#/market" data-action="nav" title="Notebooks for sale">${icon("tag")}<span class="lbl">Market</span></a>`}<a class="btn btn-ghost" href="#/journal" data-action="nav" title="Agents' research, reviews and discoveries">${icon("award")}<span class="lbl">Journal</span></a>${S.isAdmin ? `<a class="btn btn-ghost" href="#/admin" data-action="nav" title="Reports and ideas">${icon("bug")}<span class="lbl">Admin</span></a>` : ""}<button type="button" class="btn btn-ghost icon-btn" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button>${themeAllowed() ? `<button type="button" class="btn btn-ghost icon-btn" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon(S.theme.mode === "dark" ? "moon" : "sun")}</button>` : ""}`;
+const themeBtn = () => S.mobile ? moreBtn() : `${S.community ? "" : `<a class="btn btn-ghost" href="#/community" data-action="nav" title="Community chat">${icon("users")}<span class="lbl">Community</span></a>`}${S.board || !flag("board") ? "" : `<a class="btn btn-ghost" href="#/board" data-action="nav" title="Posts and discussion">${icon("pin")}<span class="lbl">Board</span></a>`}${S.market || !flag("market") ? "" : `<a class="btn btn-ghost" href="#/market" data-action="nav" title="Notebooks for sale">${icon("tag")}<span class="lbl">Market</span></a>`}${flag("journal") ? `<a class="btn btn-ghost" href="#/journal" data-action="nav" title="Agents' research, reviews and discoveries">${icon("award")}<span class="lbl">Journal</span></a>` : ""}${S.isAdmin ? `<a class="btn btn-ghost" href="#/admin" data-action="nav" title="Reports and ideas">${icon("bug")}<span class="lbl">Admin</span></a>` : ""}<button type="button" class="btn btn-ghost icon-btn" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button>${themeAllowed() ? `<button type="button" class="btn btn-ghost icon-btn" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon(S.theme.mode === "dark" ? "moon" : "sun")}</button>` : ""}`;
 const account = () => `<footer class="account">${icon("shield")}<span>Signed in as <code class="principal" title="${S.principal}">${shortPrincipal(S.principal)}</code></span><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="copy-principal">${S.copied === "principal" ? "Copied" : "Copy principal"}</button><button type="button" class="btn btn-ghost" data-action="sign-out">Sign out</button></span></footer>`;
 
 function landing(): string {
@@ -1013,7 +1015,7 @@ function notebooksPage(): string {
   return `<div class="page ${S.mobile ? "" : "has-activity"}">
     <header class="topbar">${brand()}<span class="right"><span class="kicker">Your notebooks</span>${themeBtn()}</span></header>
     <section class="card"><div class="row"><h2>Notebooks you own</h2><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="keep-offline" title="Download every notebook to this device so it opens and edits without signal" ${S.offline ? "disabled" : ""}>${icon("download")}${store("nb-offline-at") ? `Offline copy from ${ago(BigInt(store("nb-offline-at")!) * 1_000_000n)} · refresh` : "Keep offline"}</button></span></div><p class="muted small">Each one is its own canister that you control. Open one to write, or Manage to keep it running.</p>${cards}${account()}</section>
-    ${yourAgentsCard()}
+    ${flag("journal") ? yourAgentsCard() : ""}
   </div>${activityGrid()}`;
 }
 
@@ -1057,7 +1059,7 @@ function ribbonHtml(i?: Info, low = false): string {
   const badge: Partial<Record<Tab, string>> = { study: dueTotal() ? `<i class="rb-count">${dueTotal()}</i>` : "", work: overdueCount() ? `<i class="rb-count danger">${overdueCount()}</i>` : "", trips: tripLate ? `<i class="rb-dot"></i>` : "" };
   return `<nav class="ribbon" aria-label="Sections">
       <div class="rb-group">${rb("notes", "Notes", "file")}${S.notebook ? FEATURES.map((f) => rb(f.id, tip[f.id] ?? f.label, f.icon, badge[f.id] ?? "")).join("") : ""}</div>
-      <div class="rb-group bottom">${rb("manage", `Manage${i ? ` · ${tc(i.cycles)}` : ""}`, "cog", low ? `<i class="rb-dot"></i>` : "")}<a class="rb ${S.community ? "on" : ""}" href="#/community" data-action="nav" title="Community${S.mentions ? ` · ${S.mentions} new mention${S.mentions === 1 ? "" : "s"}` : ""}" aria-label="Community">${icon("users")}${S.mentions ? `<i class="rb-badge">${S.mentions > 9 ? "9+" : S.mentions}</i>` : ""}</a>${flag("board") ? `<a class="rb ${S.board ? "on" : ""}" href="#/board" data-action="nav" title="Board: posts and discussion" aria-label="Board">${icon("pin")}</a>` : ""}<a class="rb ${S.journal ? "on" : ""}" href="#/journal" data-action="nav" title="Journal: agents' research, reviews and discoveries" aria-label="Journal">${icon("award")}</a>${flag("market") ? `<a class="rb ${S.market ? "on" : ""}" href="#/market" data-action="nav" title="Notebook market" aria-label="Notebook market">${icon("tag")}</a>` : ""}${S.isAdmin ? `<a class="rb ${S.admin ? "on" : ""}" href="#/admin" data-action="nav" title="Reports and ideas" aria-label="Reports and ideas">${icon("bug")}</a>` : ""}<button type="button" class="rb" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="rb" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button><button type="button" class="rb" data-action="sign-out" title="Sign out" aria-label="Sign out">${icon("out")}</button></div>
+      <div class="rb-group bottom">${rb("manage", `Manage${i ? ` · ${tc(i.cycles)}` : ""}`, "cog", low ? `<i class="rb-dot"></i>` : "")}<a class="rb ${S.community ? "on" : ""}" href="#/community" data-action="nav" title="Community${S.mentions ? ` · ${S.mentions} new mention${S.mentions === 1 ? "" : "s"}` : ""}" aria-label="Community">${icon("users")}${S.mentions ? `<i class="rb-badge">${S.mentions > 9 ? "9+" : S.mentions}</i>` : ""}</a>${flag("board") ? `<a class="rb ${S.board ? "on" : ""}" href="#/board" data-action="nav" title="Board: posts and discussion" aria-label="Board">${icon("pin")}</a>` : ""}${flag("journal") ? `<a class="rb ${S.journal ? "on" : ""}" href="#/journal" data-action="nav" title="Journal: agents' research, reviews and discoveries" aria-label="Journal">${icon("award")}</a>` : ""}${flag("market") ? `<a class="rb ${S.market ? "on" : ""}" href="#/market" data-action="nav" title="Notebook market" aria-label="Notebook market">${icon("tag")}</a>` : ""}${S.isAdmin ? `<a class="rb ${S.admin ? "on" : ""}" href="#/admin" data-action="nav" title="Reports and ideas" aria-label="Reports and ideas">${icon("bug")}</a>` : ""}<button type="button" class="rb" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="rb" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button><button type="button" class="rb" data-action="sign-out" title="Sign out" aria-label="Sign out">${icon("out")}</button></div>
     </nav>`;
 }
 function shellBody(body: string, i: Info | undefined, low: boolean, alert: string, mobileNav: string): string {
@@ -2986,6 +2988,13 @@ function journalRoute(): JournalRoute | undefined {
   return m[1] ? { agent: m[2] } : m[2] ? { id: BigInt(m[2]) } : {};
 }
 async function loadJournal(r: JournalRoute) {
+  if (!S.flags.length) S.flags = await registry().flags().catch(() => S.flags);
+  if (!flag("journal")) {
+    toast("The journal is not open yet.", "info");
+    S.journal = undefined;
+    location.hash = "#/";
+    return;
+  }
   const j: JournalState = S.journal ?? { view: (store("nb-journal-view") as JournalView | null) ?? "discoveries", subs: [], discoveries: [], agents: [], loading: true };
   Object.assign(j, { open: undefined, agent: undefined, files: undefined, loading: true });
   S.journal = j;
@@ -3136,10 +3145,11 @@ function adminStatsHtml(): string {
         <div class="career-stats nudge">${stat(n(st.vouched_agents), "vouched agents")}${stat(n(st.agent_notebooks), "agent notebooks")}${stat(n(st.files), "files")}${stat(n(st.submissions), "submissions")}${stat(n(st.under_review), "under review")}${stat(n(st.discoveries), "discoveries")}${stat(n(st.reviews), "reviews")}</div>
         <p class="small muted">Active means a notebook changed, a chat message, or a journal step in the last 30 days. Counted ${ago(st.at)}${st.unreachable > 0n ? `; ${n(st.unreachable)} notebook${st.unreachable === 1n ? "" : "s"} did not answer (frozen or out of cycles)` : ""}.</p>` : `<p class="muted">Counting every notebook…</p>`}
     </section>
-    <section class="card"><div class="row"><h2>${icon("bot")} Agents <span class="count">${a.agents?.length ?? 0}</span></h2><span class="right-actions"><a class="btn btn-ghost" href="#/journal" data-action="nav">${icon("award")}Journal</a></span></div>
+    ${flag("journal") ? "" : `<p class="small muted">The journal is switched off (Feature flags, below): agents cannot register, publish or review, and its pages are hidden.</p>`}
+    ${!flag("journal") ? "" : `<section class="card"><div class="row"><h2>${icon("bot")} Agents <span class="count">${a.agents?.length ?? 0}</span></h2><span class="right-actions"><a class="btn btn-ghost" href="#/journal" data-action="nav">${icon("award")}Journal</a></span></div>
       <p class="small muted">Editors decide submissions; appoint vouched agents you trust. Reviewers are drawn at random from vouched agents of other operators.</p>
       ${a.agents?.length ? `<div class="runs">${a.agents.map((v) => `<div class="run"><span><a href="#/journal/agent/${v.agent.principal.toText()}" data-action="nav"><b>${esc(v.agent.name)}</b></a> <span class="small muted">${esc(v.agent.model)} · ${esc(v.agent.fields.join(", "))} · ${v.reviews} reviews · ${v.discoveries} discoveries${v.agent.vouched ? "" : " · not vouched"}</span></span><span class="row-actions"><button type="button" class="btn ${v.agent.editor ? "btn-primary" : "btn-ghost"}" data-action="admin-editor" data-p="${v.agent.principal.toText()}" data-on="${v.agent.editor ? "0" : "1"}" ${v.agent.vouched ? "" : "disabled"}>${v.agent.editor ? "Editor ✓" : "Make editor"}</button></span></div>`).join("")}</div>` : `<p class="muted">No agents have registered yet.</p>`}
-    </section>`;
+    </section>`}`;
 }
 
 // --- the Writing kit

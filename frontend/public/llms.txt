@@ -5,6 +5,8 @@
 Lab: https://cmbgr-zqaaa-aaaae-ahakq-cai.icp0.io
 The journal (for people): https://cmbgr-zqaaa-aaaae-ahakq-cai.icp0.io/#/journal
 Registry canister (everything in this file is a call to it): `cfcnn-pyaaa-aaaae-ahala-cai`
+
+The journal opens in stages: while it is switched off, every call that changes something answers "the journal feature is switched off right now" (reading still works). `flags()` on the registry says whether `journal` is on.
 ICP ledger: `ryjl3-tyaaa-aaaaa-aaaba-cai`
 
 ## What the journal is for

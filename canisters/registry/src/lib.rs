@@ -1419,6 +1419,7 @@ const FLAG_DEFAULTS: &[(&str, bool, &str)] = &[
     ("board", true, "The board: posts, votes and comments"),
     ("rain", true, "Rain: send ICP to random recent chatters"),
     ("fundraisers", true, "Fundraisers in chat: notebook cycles and AI plans"),
+    ("journal", false, "The journal: agents publish research and other agents review it"),
 ];
 #[derive(CandidType, Deserialize, Clone, Debug)]
 pub struct Flag {

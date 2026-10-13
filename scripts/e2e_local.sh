@@ -605,6 +605,10 @@ pr() { icp identity principal --identity "$1"; }
 AGP=$(pr $AG); R1P=$(pr $R1); R2P=$(pr $R2); R3P=$(pr $R3); EDP=$(pr $ED); DECOYP=$(pr $DECOY); O2P=$(icp identity principal --identity "$OWNER2")
 as() { local who=$1; shift; icp canister call registry "$@" --identity "$who"; }
 agent_in() { echo "(record { name = \"$1\"; model = \"$2\"; operator = principal \"$3\"; fields = vec { \"mathematics\"; \"logic\" }; bio = \"e2e\" })"; }
+icp canister call registry set_flag '("journal", false)' >/dev/null
+expect "the journal ships switched off" 'on = false; name = "journal"' bash -c "icp canister call registry flags '()' --query | tr -s ' \n' ' '"
+expect "and refuses agents while it is" 'switched off' as $AG register_agent "$(agent_in ag-$T claude-opus-5-5 $ME)"
+expect "an admin switches it on" 'on = true' icp canister call registry set_flag '("journal", true)'
 expect "an agent registers, naming its operator" 'vouched = false' as $AG register_agent "$(agent_in ag-$T claude-opus-5-5 $ME)"
 expect "names are unique" 'that name is taken' as $R1 register_agent "$(agent_in ag-$T gpt-5 $OTHERP)"
 expect "an agent cannot be its own operator" 'operator:' as $R1 register_agent "$(agent_in r1-$T gpt-5 $R1P)"
@@ -646,7 +650,8 @@ expect "the same files cannot be submitted twice" 'submitted before' as $AG subm
 FULL=$(icp canister call registry submission "($SID : nat64)" --query --identity anonymous)
 if echo "$FULL" | grep -qF "$DECOYP"; then echo "FAIL: an agent of the author's operator was seated"; exit 1; else echo "  ok: no reviewer or editor shares the author's operator"; PASS=$((PASS+1)); fi
 # whoever was seated (agents from earlier runs are eligible too): their identities, from icp identity list
-who() { icp identity list 2>/dev/null | awk -v p="$1" '$2==p {print $1; exit}'; }
+# awk reads to the end: exiting early would cut the pipe, and pipefail would end the run
+who() { icp identity list 2>/dev/null | awk -v p="$1" '$2==p && !f {print $1; f=1}'; }
 SEATS=$(printf '%s' "$FULL" | python3 -c 'import re,sys; b=re.search(r"reviewers = vec \{(.*?)\n      \};", sys.stdin.read(), re.S); print(" ".join(dict.fromkeys(re.findall(r"principal \"([^\"]+)\"", b.group(1) if b else ""))))')
 set -- $SEATS
 [ $# = 3 ] && { echo "  ok: three independent reviewers were seated"; PASS=$((PASS+1)); } || { echo "FAIL: reviewers: $SEATS"; exit 1; }
@@ -677,6 +682,7 @@ expect "and reviewers' agreement with decisions is kept" 'agreement = opt' icp c
 expect "every review stays on the public record, rejections included" 'variant { Fail }' icp canister call registry submission "($SID : nat64)" --query --identity anonymous
 expect "admins see the numbers" 'vouched_agents' icp canister call registry app_stats '(true)'
 expect "nobody else does" 'admin only' icp canister call registry app_stats '(false)' --identity "$OTHER"
+icp canister call registry set_flag '("journal", false)' >/dev/null  # leave it off, as shipped
 echo "== upgrade all notebooks from the registry (controller only)"
 expect "a stranger cannot upgrade" "controller only" reg upgrade_notebooks '()'
 N=$(icp canister call registry stats '()' --query | grep -o 'notebooks = [0-9_]*' | tr -d 'notebooks =_')
