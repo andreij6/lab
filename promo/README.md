@@ -13,6 +13,8 @@ Scenes share `shared/base.css` and `shared/base.js` (palette, title and end card
 | `learn-what-you-wrote` | highlights becoming flashcards, Again/Hard/Good/Easy reviews, the streak |
 | `fits-how-you-work` | onboarding presets, the ribbon reshaping, Research, Trips and Study |
 | `bring-your-obsidian-notes` | an Obsidian folder dropped on an empty notebook, the import skipping `.obsidian/`, the tree filling, a note with its links, tags, callout, tasks and backlinks |
+| `who-its-for` | nine kinds of people, each with their kit's tab: Study, Research, Writing, Career, Crypto, Money, Creator, Fitness, Home (19 s) |
+| `talk-in-public` | #crypto in the community chat (a reply, reactions, a note snapshot), then the board: a vote lifts a post, a thread opens (18 s) |
 
 `promo/build.sh` renders and encodes every scene, or just the ones you name.
 

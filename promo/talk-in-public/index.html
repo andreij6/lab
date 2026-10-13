@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Lab: Talk it out in public</title>
+<link rel="stylesheet" href="../shared/base.css">
+<style>
+  .view { position: absolute; inset: 46px 0 0 0; display: grid; grid-template-columns: 230px 1fr; }
+  .chans { background: var(--bg-2); border-right: 1px solid var(--line); padding: 16px 12px; }
+  .sec { font-size: 12px; font-weight: 800; color: var(--fg-3); letter-spacing: .08em; text-transform: uppercase; padding: 12px 8px 6px; }
+  .sec:first-child { padding-top: 0; }
+  .ch { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 10px; border-radius: 8px; font-size: 17px; color: var(--fg-2); }
+  .ch b { color: var(--fg-3); font-weight: 700; } .ch.on { background: var(--bg-3); color: var(--fg); } .ch .un { margin-left: auto; min-width: 22px; height: 22px; border-radius: 99px; background: var(--danger); color: #fff; font-size: 13px; font-weight: 800; display: grid; place-items: center; padding: 0 6px; }
+  .main { position: relative; display: flex; flex-direction: column; min-width: 0; }
+  .head { height: 54px; display: flex; align-items: center; gap: 10px; padding: 0 22px; border-bottom: 1px solid var(--line); font-size: 19px; }
+  .head b { color: var(--fg-3); } .head span { color: var(--fg-3); font-size: 16px; }
+  .feed { flex: 1; padding: 18px 22px; display: flex; flex-direction: column; justify-content: flex-end; gap: 14px; overflow: hidden; }
+  .msg { display: flex; gap: 12px; }
+  .av { width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; font-size: 15px; color: #fff; flex: none; }
+  .who { font-size: 17px; font-weight: 700; } .who small { color: var(--fg-3); font-weight: 500; margin-left: 8px; font-size: 14px; }
+  .tx { font-size: 18px; color: var(--fg); line-height: 1.45; margin-top: 2px; max-width: 600px; } .men { color: var(--accent-2); background: var(--accent-dim); border-radius: 5px; padding: 0 4px; }
+  .quote { font-size: 14px; color: var(--fg-3); border-left: 3px solid var(--line); padding-left: 8px; margin-bottom: 4px; }
+  .gist { margin-top: 8px; width: 500px; border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 12px; background: var(--bg-2); padding: 12px 14px; font-size: 16px; } .gist small { color: var(--fg-3); display: block; margin-top: 4px; font-size: 14px; }
+  .reacts { display: flex; gap: 8px; margin-top: 8px; } .re { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--line); font-size: 15px; color: var(--fg-2); } .re.mine { border-color: hsl(212 86% 60% / .6); background: var(--accent-dim); color: var(--accent-2); }
+  .comp { margin: 0 22px 18px; height: 54px; border-radius: 14px; background: var(--bg-2); border: 1px solid var(--line); display: flex; align-items: center; padding: 0 18px; font-size: 18px; color: var(--fg-3); }
+  .comp.typing { color: var(--fg); }
+  .bhead { display: flex; align-items: center; gap: 10px; padding: 14px 22px; border-bottom: 1px solid var(--line); font-size: 19px; }
+  .seg { margin-left: auto; display: flex; gap: 4px; background: var(--bg-2); border-radius: 10px; padding: 3px; } .seg span { padding: 4px 12px; border-radius: 8px; font-size: 15px; color: var(--fg-3); font-weight: 600; } .seg span.on { background: var(--bg-3); color: var(--fg); }
+  .clean { margin: 12px 22px 0; font-size: 14px; color: var(--fg-3); display: flex; align-items: center; gap: 8px; } .clean svg { width: 16px; height: 16px; color: var(--ok); }
+  .posts { position: relative; margin: 12px 22px; height: 400px; }
+  .prow { position: absolute; left: 0; right: 0; height: 112px; display: flex; gap: 16px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }
+  .votes { display: flex; flex-direction: column; align-items: center; width: 44px; font-size: 20px; font-weight: 800; } .votes i { font-style: normal; color: var(--fg-3); font-size: 16px; } .votes i.up { color: var(--accent-2); }
+  .ptitle { font-size: 20px; font-weight: 700; } .pmeta { font-size: 15px; color: var(--fg-3); margin-top: 6px; } .pchip { display: inline-flex; margin-top: 8px; padding: 3px 10px; border-radius: 8px; font-size: 14px; background: var(--accent-dim); color: var(--accent-2); font-weight: 700; }
+  #thread { position: absolute; inset: 46px 0 0 230px; background: var(--bg-1); padding: 22px 26px; }
+  #thread h3 { font-size: 24px; margin-bottom: 6px; } #thread .pmeta { margin-bottom: 14px; }
+  .com { border-left: 2px solid var(--line); padding: 8px 0 8px 14px; margin: 8px 0; } .com.reply { margin-left: 34px; } .com .who { font-size: 16px; } .com .tx { font-size: 17px; }
+  #tag { left: 0; right: 0; bottom: 40px; text-align: center; font-size: 30px; font-weight: 700; letter-spacing: -.01em; } #tag em { font-style: normal; color: var(--accent-2); }
+</style></head>
+<body><div id="stage">
+  <div class="win abs">
+    <div class="bar"><i></i><i></i><i></i><b id="crumb">Community <em>/ #general</em></b></div>
+    <div class="view" id="chat">
+      <div class="chans">
+        <div class="sec">Lab</div><div class="ch" id="c-general"><b>#</b>general</div><div class="ch"><b>#</b>help</div><div class="ch"><b>#</b>careers</div><div class="ch" id="c-crypto"><b>#</b>crypto<span class="un" id="unread">3</span></div><div class="ch"><b>#</b>creators</div>
+        <div class="sec">Notebooks</div><div class="ch"><b>#</b>notebooks</div><div class="ch"><b>#</b>study</div><div class="ch"><b>#</b>agents</div>
+        <div class="sec">Build</div><div class="ch"><b>#</b>developers</div>
+      </div>
+      <div class="main">
+        <div class="head" id="chead"></div>
+        <div class="feed" id="feed"></div>
+        <div class="comp" id="comp"></div>
+      </div>
+    </div>
+    <div class="view" id="board">
+      <div class="chans">
+        <div class="sec">Topics</div><div class="ch on"><b>#</b>all topics</div><div class="ch"><b>#</b>crypto</div><div class="ch"><b>#</b>careers</div><div class="ch"><b>#</b>study</div><div class="ch"><b>#</b>notebooks</div>
+      </div>
+      <div class="main">
+        <div class="bhead"><b>Board</b><span class="small" style="color:var(--fg-3);font-size:16px">posts and discussion</span><div class="seg"><span class="on">Hot</span><span>New</span><span>Top</span></div></div>
+        <div class="clean"><svg class="i"><use href="#i-shield"/></svg>Kept readable: no links, no images, no foul language</div>
+        <div class="posts" id="posts"></div>
+      </div>
+    </div>
+    <div id="thread" class="abs"></div>
+  </div>
+  <div id="tag" class="abs">Your notebook stays yours. <em>The conversation is public.</em></div>
+</div>
+<script src="../shared/base.js"></script>
+<script>
+const { $, seg, ease, inout, pop, show, typed, cursor, at, run, cards } = Promo;
+cards({ title: "Talk it out in public.", subtitle: "A community chat and a board, next to your notes.", heading: "Chat and the board" });
+const av = (n, h) => `<span class="av" style="background:hsl(${h} 55% 40%)">${n.slice(0, 2).toUpperCase()}</span>`;
+const MSGS = [
+  { at: 3.9, html: `<div class="msg">${av("sam", 200)}<div><div class="who">sam<small>just now</small></div><div class="tx">Thesis check: does the fixed-supply argument still hold if ETF inflows slow down?</div></div></div>` },
+  { at: 4.9, html: (t) => `<div class="msg">${av("ada", 330)}<div><div class="who">ada<small>just now</small></div><div class="quote">sam: Thesis check…</div><div class="tx"><span class="men">@sam</span> The inflows are the weaker leg. Worth a board post?</div><div class="reacts"><span class="re mine" style="transform:scale(${t >= 6.0 ? Math.max(1, pop(seg(t, 6.0, 6.35))) : 1})">👍 ${t >= 6.0 ? 3 : 2}</span><span class="re">💡 1</span></div></div></div>` },
+  { at: 6.6, html: `<div class="msg">${av("lee", 140)}<div><div class="who">lee<small>just now</small></div><div class="tx">Here is mine, for comparison:</div><div class="gist">📄 <b>BTC holds up better than the rest</b><small>A snapshot of the note · your notebook isn’t shared</small></div></div></div>` },
+];
+const POSTS = [
+  { id: "p1", title: "Is a fixed supply enough? (thesis attached)", meta: "sam · #crypto · 4 comments", chip: "📄 BTC thesis", score: (t) => 12 },
+  { id: "p2", title: "Coast FIRE at 35: show your numbers", meta: "mia · #careers · 7 comments", score: (t) => 9 },
+  { id: "p3", title: "How do you lay out a Lean proof note?", meta: "kai · #study · 3 comments", score: (t) => (t >= 10.2 ? 10 : 8) },
+];
+function scene(t) {
+  // community: open #crypto, messages arrive, a reply, reactions, a note snapshot
+  const inChat = t < 8.8;
+  const sw = ease(seg(t, 8.6, 9.0));
+  show($("chat"), 1 - sw); show($("board"), sw);
+  const crypto = t >= 3.3;
+  $("c-general").className = `ch${crypto ? "" : " on"}`; $("c-crypto").className = `ch${crypto ? " on" : ""}`;
+  show($("unread"), crypto ? 0 : 1);
+  $("chead").innerHTML = crypto ? `<b>#</b>crypto<span>Theses, trade reviews and what you are watching</span>` : `<b>#</b>general<span>Anything goes</span>`;
+  $("feed").innerHTML = crypto ? MSGS.filter((m) => t >= m.at).map((m) => { const p = ease(seg(t, m.at, m.at + .3)); const h = typeof m.html === "function" ? m.html(t) : m.html; return `<div style="opacity:${p};transform:translateY(${(1 - p) * 16}px)">${h}</div>`; }).join("") : "";
+  const typing = t >= 7.3 && t < 8.6;
+  $("comp").className = `comp${typing ? " typing" : ""}`;
+  $("comp").innerHTML = typing ? typed("Posting it on the board now", t, 7.3, 8.3) : `Message #${crypto ? "crypto" : "general"}`;
+  $("crumb").innerHTML = t < 8.8 ? `Community <em>/ #${crypto ? "crypto" : "general"}</em>` : t < 11.8 ? `Board <em>/ Hot</em>` : `Board <em>/ Is a fixed supply enough?</em>`;
+  // the board: a vote lifts a post up the Hot list
+  const order = [...POSTS].sort((a, b) => b.score(t) - a.score(t));
+  const move = inout(seg(t, 10.3, 10.8));
+  $("posts").innerHTML = POSTS.map((p) => {
+    const before = [...POSTS].sort((a, b) => b.score(9) - a.score(9)).indexOf(p), after = order.indexOf(p);
+    const y = (before + (after - before) * move) * 126;
+    const up = p.id === "p3" && t >= 10.2;
+    return `<div class="prow" id="${p.id}" style="top:${y}px"><div class="votes"><i class="${up ? "up" : ""}" id="${p.id}-up">▲</i><span style="${up ? `transform:scale(${Math.max(1, pop(seg(t, 10.2, 10.5)))});display:inline-block` : ""}">${p.score(t)}</span><i>▼</i></div><div><div class="ptitle">${p.title}</div><div class="pmeta">${p.meta}</div>${p.chip ? `<span class="pchip">${p.chip}</span>` : ""}</div></div>`;
+  }).join("");
+  // open the top post: comments, with replies
+  const th = ease(seg(t, 11.8, 12.2));
+  show($("thread"), th, (1 - th) * 20);
+  const com = (who, h, text, at2, reply = false) => { const p = ease(seg(t, at2, at2 + .3)); return `<div class="com${reply ? " reply" : ""}" style="opacity:${p};transform:translateY(${(1 - p) * 12}px)"><div class="who">${who}<small>▲ ${reply ? 4 : 7}</small></div><div class="tx">${text}</div></div>`; };
+  $("thread").innerHTML = `<h3>Is a fixed supply enough? (thesis attached)</h3><div class="pmeta">sam · #crypto · <span class="pchip">📄 BTC thesis</span></div>
+    ${com("ada", 330, "Supply is fixed, demand isn't. What would make you wrong, in numbers?", 12.4)}
+    ${com("sam", 200, "If BTC falls further than ETH in the next drawdown. It's in the note's “I am wrong if”.", 13.0, true)}
+    ${com("lee", 140, "Then review it in 30 days and post the result here. I'll do the same with mine.", 13.6)}`;
+  // the cursor: #crypto, the reaction, the upvote, the top post
+  const keys = [[2.9, 620, 600], [3.3, ...at("#c-crypto")], [5.6, 560, 640], [6.0, 520, 700]];
+  if (!inChat) keys.length = 0;
+  if (t >= 9.2) keys.push([9.4, 700, 560], [10.2, ...at("#p3-up")], [11.4, ...at("#p1", -80, -10)], [11.8, ...at("#p1", -80, -10)]);
+  cursor(t, keys, [3.3, 6.0, 10.2, 11.8]);
+  const tg = ease(seg(t, 14.4, 14.8));
+  show($("tag"), tg * (1 - ease(seg(t, 15.9, 16.2))), (1 - tg) * 12);
+}
+run(18, scene);
+</script></body></html>
