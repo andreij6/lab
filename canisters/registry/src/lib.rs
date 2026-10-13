@@ -16,6 +16,9 @@ use ic_stable_structures::{storable::Bound, DefaultMemoryImpl, StableBTreeMap, S
 use std::borrow::Cow;
 use std::cell::RefCell;
 
+mod journal;
+use journal::{is_agent, AgentProfile, AgentInput, AgentView, AppStats, Assignments, Review, ReviewInput, Status, Submission, SubmissionFull, SubmitInput, Verdict};
+
 const NOTEBOOK_WASM: &[u8] = include_bytes!("../../../target/notebook.wasm.gz");
 /// Cycles a new notebook starts with. The owner is a controller and tops it up from there.
 // ponytail: the registry pays; charge the creator ICP (cycles-dca's deposit flow) before mainnet
@@ -161,6 +164,9 @@ pub struct Notebook {
     pub emoji: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
+    /// an agent's notebook: readable by anyone, for good
+    #[serde(default)]
+    pub public: Option<bool>,
 }
 
 #[derive(CandidType, Deserialize)]
@@ -168,6 +174,7 @@ struct NotebookInit {
     name: String,
     owner: Principal,
     registry: Principal,
+    public: Option<bool>,
 }
 
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq)]
@@ -279,6 +286,7 @@ fn start_timers() {
         retry_pending().await;
         expire_posts();
         expire_messages();
+        journal::journal_tick().await;
     });
 }
 
@@ -518,27 +526,38 @@ async fn spawn(name: String, payer: Option<Principal>) -> Result<Notebook, Strin
     if owner == Principal::anonymous() {
         return Err("sign in first".into());
     }
+    if is_agent(&owner) {
+        return Err("agents create notebooks with create_agent_notebook, which takes a deposit and makes it public".into());
+    }
+    if name.trim().is_empty() || name.trim().len() > 64 {
+        return Err("name must be 1-64 chars".into());
+    }
+    let price = PRICE.with_borrow(|p| *p.get());
+    if price > 0 {
+        charge(payer.unwrap_or(owner), price).await?;
+    }
+    spawn_as(owner, name, false).await
+}
+
+/// Create and install a notebook canister owned by `owner` (a controller next to this registry).
+async fn spawn_as(owner: Principal, name: String, public: bool) -> Result<Notebook, String> {
     let name = name.trim().to_string();
     if name.is_empty() || name.len() > 64 {
         return Err("name must be 1-64 chars".into());
     }
     let me = ic_cdk::api::canister_self();
-    let price = PRICE.with_borrow(|p| *p.get());
-    if price > 0 {
-        charge(payer.unwrap_or(owner), price).await?;
-    }
     let created = mgmt::create_canister_with_extra_cycles(
         &mgmt::CreateCanisterArgs { settings: Some(mgmt::CanisterSettings { controllers: Some(vec![me, owner]), freezing_threshold: Some(Nat::from(FREEZE_SECS)), ..Default::default() }) },
         CYCLES_PER_NOTEBOOK,
     )
     .await
     .map_err(|e| format!("create_canister: {e:?}"))?;
-    let arg = candid::encode_one(NotebookInit { name: name.clone(), owner, registry: me }).map_err(|e| e.to_string())?;
+    let arg = candid::encode_one(NotebookInit { name: name.clone(), owner, registry: me, public: public.then_some(true) }).map_err(|e| e.to_string())?;
     // ponytail: a canister whose install fails is left orphaned; add a reinstall sweep if it shows up
     mgmt::install_code(&mgmt::InstallCodeArgs { mode: mgmt::CanisterInstallMode::Install, canister_id: created.canister_id, wasm_module: NOTEBOOK_WASM.to_vec(), arg })
         .await
         .map_err(|e| format!("install_code: {e:?}"))?;
-    let v = Notebook { canister: created.canister_id, name, owner, created_at: time(), emoji: None, description: None };
+    let v = Notebook { canister: created.canister_id, name, owner, created_at: time(), emoji: None, description: None, public: public.then_some(true) };
     NOTEBOOKS.with_borrow_mut(|m| m.insert(v.canister, C(v.clone())));
     mint_id(v.canister);
     Ok(v)
@@ -1027,6 +1046,14 @@ async fn top_up_notebook(canister: Principal, amount_e8s: u64, payer: Option<Pri
         return Err("minimum top-up is 0.01 ICP".into());
     }
     top_up_icp(canister, amount_e8s, payer).await
+}
+
+/// Send `e8s` (less one ledger fee) back to where `charge` took it from.
+async fn refund(payer: Principal, e8s: u64) {
+    let to = if payer == msg_caller() { WALLETS.with_borrow(|w| w.get(&payer)).unwrap_or(payer) } else { payer };
+    let arg = icrc_ledger_types::icrc1::transfer::TransferArg { from_subaccount: None, to: Account { owner: to, subaccount: None }, fee: Some(Nat::from(ICP_FEE)), created_at_time: None, memo: None, amount: Nat::from(e8s.saturating_sub(ICP_FEE)) };
+    // ponytail: a failed refund is only lost from view, not from the registry's account; log it if it ever happens
+    let _ = Call::unbounded_wait(LEDGER, "icrc1_transfer").with_arg(&arg).await;
 }
 
 async fn top_up_icp(canister: Principal, amount_e8s: u64, payer: Principal) -> Result<Nat, String> {

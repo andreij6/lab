@@ -117,6 +117,8 @@ type Info = record {
   owner : principal;
   name : text;
   total_topped_up_e8s : nat64;
+  // an agent's notebook, readable by anyone for good
+  public : opt bool;
   created_at : nat64;
   // ICP ledger account (hex) that converts to cycles for this canister; send from any wallet
   topup_account_id : text;
@@ -126,7 +128,13 @@ type Info = record {
   registry : principal;
   pending_topups : nat64;
 };
-type Init = record { owner : principal; name : text; registry : principal };
+type Init = record {
+  owner : principal;
+  name : text;
+  // an agent's notebook: readable by anyone, for good (set by the registry at spawn)
+  public : opt bool;
+  registry : principal;
+};
 type Note = record {
   created : nat64;
   modified : nat64;
@@ -196,11 +204,15 @@ type Result_24 = variant { Ok : FolderRenamed; Err : NotebookError };
 type Result_25 = variant { Ok : vec Hit; Err : NotebookError };
 type Result_26 = variant { Ok : Share; Err : NotebookError };
 type Result_27 = variant { Ok : vec Share; Err : NotebookError };
-type Result_28 = variant { Ok : Attempt; Err : NotebookError };
-type Result_29 = variant { Ok : TopUp; Err : text };
+type Result_28 = variant {
+  Ok : vec record { text; text };
+  Err : NotebookError;
+};
+type Result_29 = variant { Ok : Attempt; Err : NotebookError };
 type Result_3 = variant { Ok : AskAnswer; Err : NotebookError };
-type Result_30 = variant { Ok : FileMeta; Err : NotebookError };
-type Result_31 = variant { Ok : Imported; Err : NotebookError };
+type Result_30 = variant { Ok : TopUp; Err : text };
+type Result_31 = variant { Ok : FileMeta; Err : NotebookError };
+type Result_32 = variant { Ok : Imported; Err : NotebookError };
 type Result_4 = variant { Ok : NoteAttestation; Err : NotebookError };
 type Result_5 = variant { Ok : Audit; Err : NotebookError };
 type Result_6 = variant { Ok : text; Err : NotebookError };
@@ -266,6 +278,13 @@ type TransformArgs = record {
   context : blob;
   // Raw response from remote service, to be transformed
   response : HttpRequestResult;
+};
+type Usage = record {
+  files : nat64;
+  // markdown notes among the files
+  notes : nat64;
+  // when any file last changed (ns), or none for an empty notebook
+  last_modified : opt nat64;
 };
 service : (Init) -> {
   agent_keys : () -> (Result) query;
@@ -363,17 +382,20 @@ service : (Init) -> {
   // Share a note with everyone (`public`) or with `principals` (readers); replaces an earlier share.
   share_note : (text, bool, vec principal) -> (Result_26);
   shares : () -> (Result_27) query;
+  // The notes under `prefix` (a folder, a single note, or "" for everything) as (path, content),
+  // for a journal submission: the registry freezes this copy. Registry only; refused above `max_bytes`.
+  snapshot_for_registry : (text, nat64) -> (Result_28);
   // A finished quiz or deck session on a shared note; the owner sees who scored what.
-  submit_attempt : (text, nat32, nat32) -> (Result_28);
+  submit_attempt : (text, nat32, nat32) -> (Result_29);
   // Convert everything that arrived since the last run, now instead of at the next 10-minute tick.
   sweep_deposits : () -> (Result_6);
   // Convert whatever ICP sits on the account (minus one fee) into cycles now.
-  sweep_topups : () -> (Result_29);
+  sweep_topups : () -> (Result_30);
   // Pull `amount_e8s` the caller approved on the ICP ledger and turn it into this canister's cycles.
-  top_up : (nat64) -> (Result_29);
+  top_up : (nat64) -> (Result_30);
   // Pull `amount_e8s` that `payer` (an OISY wallet, for instance) approved for this canister on the
   // ICP ledger and convert it; the ledger's allowance is the authorization, the owner just triggers it.
-  top_up_from : (principal, nat64) -> (Result_29);
+  top_up_from : (principal, nat64) -> (Result_30);
   topups : (nat32) -> (vec TopUp) query;
   // Hand the notebook to a new owner. Only the registry calls this, after a sale or an ICRC-7
   // transfer it brokered. Agent keys and the auto top-up payer belonged to the old owner, so they go.
@@ -382,11 +404,13 @@ service : (Init) -> {
   // this notebook reads (dates, cookies and request ids differ from replica to replica).
   transform_fetch : (TransformArgs) -> (HttpRequestResult) query;
   unshare_note : (text) -> (Result_8);
+  // How big and how recently used this notebook is, for the registry's admin numbers. Counts only.
+  usage : () -> (Usage) query;
   who_is_here : (text) -> (Result_17) query;
   // Create or overwrite a file.
-  write : (text, text) -> (Result_30);
+  write : (text, text) -> (Result_31);
   // Import many files at once (a vault upload); bad names are reported, not fatal.
-  write_many : (vec record { text; text }, bool) -> (Result_31);
+  write_many : (vec record { text; text }, bool) -> (Result_32);
   // An editor's write to a shared note (owner-style rules apply; never under Agents/).
-  write_shared : (text, text) -> (Result_30);
+  write_shared : (text, text) -> (Result_31);
 }

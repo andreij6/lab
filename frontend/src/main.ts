@@ -6,7 +6,7 @@ import { Actor, HttpAgent, type Identity } from "@icp-sdk/core/agent";
 import { safeGetCanisterEnv } from "@icp-sdk/core/agent/canister-env";
 import { IDL } from "@icp-sdk/core/candid";
 import { Ed25519KeyIdentity } from "@icp-sdk/core/identity";
-import { createActor as registryActor, type Rain, type Channel, type Member, type Message, type Post, type PostComment, type Flag, type Watch, type Online, type Attestation, type ListingView, type Token, type Health, type Bug, type BugStatus, type Registry, type Notebook as NotebookRec } from "./bindings/registry";
+import { createActor as registryActor, type Rain, type Channel, type Member, type Message, type Post, type PostComment, type Flag, type Watch, type Online, type Attestation, type ListingView, type Token, type Health, type Bug, type BugStatus, type Registry, type Notebook as NotebookRec, type Submission, type SubmissionFull, type AgentView, type AppStats, type Review, type AgentProfile as JournalAgent, Status, Formal } from "./bindings/registry";
 import { createActor as notebookActor, type AttestationView, type Attempt, Role, type DepositState, type AgentKey, type Comment, type Info, type Note, type Revision, type Share, type TopUp, type Notebook as NotebookApi, type NotebookError } from "./bindings/notebook";
 import type { SnapshotInfo } from "./bindings/registry";
 import { Principal } from "@icp-sdk/core/principal";
@@ -251,7 +251,10 @@ const S = {
   shared: undefined as { canister: string; path: string; note?: Note; name?: string; error?: string; loading: boolean; files?: { path: string; size: bigint; modified: bigint }[]; role?: string; comments?: Comment[]; dirty?: boolean; here?: string[]; progress?: [Principal, number][]; myProgress?: number } | undefined,
   isAdmin: false,
   flags: [] as Flag[],
-  admin: undefined as { bugs: Bug[]; filter: string; kind?: string; open?: bigint; loading: boolean; repo?: string } | undefined,
+  admin: undefined as { bugs: Bug[]; filter: string; kind?: string; open?: bigint; loading: boolean; repo?: string; stats?: AppStats; agents?: AgentView[] } | undefined,
+  journal: undefined as JournalState | undefined,
+  /** agents that name the signed-in person as their operator */
+  myAgents: undefined as JournalAgent[] | undefined,
   settings: parseSettings(undefined) as Settings,
   /** per pane: study mode shows one section at a time */
   studyIdx: new Map<number, number>(),
@@ -422,6 +425,7 @@ const ICONS: Record<string, string> = {
   mountain: '<path d="M3 20l6-10 4 6 3-4 5 8z"/><path d="M8.2 11.4l1.8 1.6 1.4-1.2"/>',
   sliders: '<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
   'pin-top': '<path d="M5 4h14M12 20V9M7.5 13.5 12 9l4.5 4.5"/>',
+  award: '<circle cx="12" cy="9" r="6"/><path d="M8.5 13.9 7 22l5-3 5 3-1.5-8.1"/><path d="M12 6.5l.8 1.6 1.7.2-1.2 1.2.3 1.7-1.6-.8-1.6.8.3-1.7-1.2-1.2 1.7-.2z"/>',
   coin: '<circle cx="12" cy="12" r="9"/><path d="M14.8 9.4c-.5-.9-1.5-1.4-2.8-1.4-1.6 0-2.7.8-2.7 2s1.1 1.6 2.7 2 2.7.8 2.7 2-1.1 2-2.7 2c-1.3 0-2.4-.5-2.9-1.4M12 6.5v11"/>',
   wallet: '<path d="M19 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a1 1 0 0 0 1-1v-3"/><path d="M3 5a2 2 0 0 0 2 2h15a1 1 0 0 1 1 1v3h-4a2 2 0 0 0 0 4h4"/>',
   megaphone: '<path d="M3 11l16-6v14L3 13z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>',
@@ -894,6 +898,7 @@ function routeSheet(el: HTMLElement) {
     ...(S.notebook ? [{ label: S.notebook.name, icon: "notebook", on: inNb && S.tab === "notes", go: () => { if (!inNb) location.hash = `#/notebook/${nbId}`; else { const i = document.createElement("i"); i.dataset.tab = "notes"; void onAction("tab", i, new MouseEvent("click")); } } } as R, ...FEATURES.map((f) => tab(f.id, f.label, f.icon)), tab("manage", "Manage", "cog")].filter((r) => !r.hidden) : []),
     { label: "Community", icon: "users", on: !!S.community, go: () => { location.hash = "#/community"; } },
     ...(flag("board") ? [{ label: "Board", icon: "pin", on: !!S.board, go: () => { location.hash = "#/board"; } } as R] : []),
+    { label: "Journal", icon: "award", on: !!S.journal, go: () => { location.hash = "#/journal"; } },
     ...(flag("market") ? [{ label: "Market", icon: "tag", on: !!S.market, go: () => { location.hash = "#/market"; } } as R] : []),
     ...(S.isAdmin ? [{ label: "Admin", icon: "bug", on: !!S.admin, go: () => { location.hash = "#/admin"; } } as R] : []),
   ];
@@ -931,6 +936,7 @@ function moreMenu(el: HTMLElement) {
   if (!S.community) items.push({ label: "Community chat", icon: "users", action: go("#/community") });
   if (!S.market && flag("market")) items.push({ label: "Notebook market", icon: "tag", action: go("#/market") });
   if (!S.board) items.push({ label: "Board", icon: "pin", action: go("#/board") });
+  if (!S.journal) items.push({ label: "Journal", icon: "award", action: go("#/journal") });
   if (S.isAdmin && !S.admin) items.push({ label: "Admin · reports and ideas", icon: "bug", action: go("#/admin") });
   items.push("-", { label: "Help and support", icon: "help", action: () => void onAction("help", el, new MouseEvent("click")) }, ...(themeAllowed() ? [{ label: "Appearance", icon: "palette", action: () => void onAction("theme-menu", el, new MouseEvent("click")) } as MenuItem] : []), "-", { label: "Sign out", icon: "out", action: () => void onAction("sign-out", el, new MouseEvent("click")) });
   contextMenu(Math.max(8, r.right - 220), r.bottom + 4, "", items);
@@ -939,7 +945,7 @@ function moreMenu(el: HTMLElement) {
 const pageNav = () => S.mobile ? "" : `${S.notebook ? `<a class="btn btn-ghost" href="#/notebook/${S.notebook.canister.toText()}" data-action="nav">${icon("links")}<span class="lbl">Back to “${esc(S.notebook.name)}”</span></a>` : ""}<a class="btn btn-ghost" href="#/" data-action="nav">${icon("list")}<span class="lbl">Your notebooks</span></a>`;
 /** The appearance can be changed on the notebook, chat and board pages only. */
 const themeAllowed = () => !!S.community || !!S.board || (!!S.notebook && !S.market && !S.admin && !S.shared);
-const themeBtn = () => S.mobile ? moreBtn() : `${S.community ? "" : `<a class="btn btn-ghost" href="#/community" data-action="nav" title="Community chat">${icon("users")}<span class="lbl">Community</span></a>`}${S.board || !flag("board") ? "" : `<a class="btn btn-ghost" href="#/board" data-action="nav" title="Posts and discussion">${icon("pin")}<span class="lbl">Board</span></a>`}${S.market || !flag("market") ? "" : `<a class="btn btn-ghost" href="#/market" data-action="nav" title="Notebooks for sale">${icon("tag")}<span class="lbl">Market</span></a>`}${S.isAdmin ? `<a class="btn btn-ghost" href="#/admin" data-action="nav" title="Reports and ideas">${icon("bug")}<span class="lbl">Admin</span></a>` : ""}<button type="button" class="btn btn-ghost icon-btn" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button>${themeAllowed() ? `<button type="button" class="btn btn-ghost icon-btn" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon(S.theme.mode === "dark" ? "moon" : "sun")}</button>` : ""}`;
+const themeBtn = () => S.mobile ? moreBtn() : `${S.community ? "" : `<a class="btn btn-ghost" href="#/community" data-action="nav" title="Community chat">${icon("users")}<span class="lbl">Community</span></a>`}${S.board || !flag("board") ? "" : `<a class="btn btn-ghost" href="#/board" data-action="nav" title="Posts and discussion">${icon("pin")}<span class="lbl">Board</span></a>`}${S.market || !flag("market") ? "" : `<a class="btn btn-ghost" href="#/market" data-action="nav" title="Notebooks for sale">${icon("tag")}<span class="lbl">Market</span></a>`}<a class="btn btn-ghost" href="#/journal" data-action="nav" title="Agents' research, reviews and discoveries">${icon("award")}<span class="lbl">Journal</span></a>${S.isAdmin ? `<a class="btn btn-ghost" href="#/admin" data-action="nav" title="Reports and ideas">${icon("bug")}<span class="lbl">Admin</span></a>` : ""}<button type="button" class="btn btn-ghost icon-btn" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button>${themeAllowed() ? `<button type="button" class="btn btn-ghost icon-btn" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon(S.theme.mode === "dark" ? "moon" : "sun")}</button>` : ""}`;
 const account = () => `<footer class="account">${icon("shield")}<span>Signed in as <code class="principal" title="${S.principal}">${shortPrincipal(S.principal)}</code></span><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="copy-principal">${S.copied === "principal" ? "Copied" : "Copy principal"}</button><button type="button" class="btn btn-ghost" data-action="sign-out">Sign out</button></span></footer>`;
 
 function landing(): string {
@@ -1007,6 +1013,7 @@ function notebooksPage(): string {
   return `<div class="page ${S.mobile ? "" : "has-activity"}">
     <header class="topbar">${brand()}<span class="right"><span class="kicker">Your notebooks</span>${themeBtn()}</span></header>
     <section class="card"><div class="row"><h2>Notebooks you own</h2><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="keep-offline" title="Download every notebook to this device so it opens and edits without signal" ${S.offline ? "disabled" : ""}>${icon("download")}${store("nb-offline-at") ? `Offline copy from ${ago(BigInt(store("nb-offline-at")!) * 1_000_000n)} · refresh` : "Keep offline"}</button></span></div><p class="muted small">Each one is its own canister that you control. Open one to write, or Manage to keep it running.</p>${cards}${account()}</section>
+    ${yourAgentsCard()}
   </div>${activityGrid()}`;
 }
 
@@ -1050,7 +1057,7 @@ function ribbonHtml(i?: Info, low = false): string {
   const badge: Partial<Record<Tab, string>> = { study: dueTotal() ? `<i class="rb-count">${dueTotal()}</i>` : "", work: overdueCount() ? `<i class="rb-count danger">${overdueCount()}</i>` : "", trips: tripLate ? `<i class="rb-dot"></i>` : "" };
   return `<nav class="ribbon" aria-label="Sections">
       <div class="rb-group">${rb("notes", "Notes", "file")}${S.notebook ? FEATURES.map((f) => rb(f.id, tip[f.id] ?? f.label, f.icon, badge[f.id] ?? "")).join("") : ""}</div>
-      <div class="rb-group bottom">${rb("manage", `Manage${i ? ` · ${tc(i.cycles)}` : ""}`, "cog", low ? `<i class="rb-dot"></i>` : "")}<a class="rb ${S.community ? "on" : ""}" href="#/community" data-action="nav" title="Community${S.mentions ? ` · ${S.mentions} new mention${S.mentions === 1 ? "" : "s"}` : ""}" aria-label="Community">${icon("users")}${S.mentions ? `<i class="rb-badge">${S.mentions > 9 ? "9+" : S.mentions}</i>` : ""}</a>${flag("board") ? `<a class="rb ${S.board ? "on" : ""}" href="#/board" data-action="nav" title="Board: posts and discussion" aria-label="Board">${icon("pin")}</a>` : ""}${flag("market") ? `<a class="rb ${S.market ? "on" : ""}" href="#/market" data-action="nav" title="Notebook market" aria-label="Notebook market">${icon("tag")}</a>` : ""}${S.isAdmin ? `<a class="rb ${S.admin ? "on" : ""}" href="#/admin" data-action="nav" title="Reports and ideas" aria-label="Reports and ideas">${icon("bug")}</a>` : ""}<button type="button" class="rb" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="rb" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button><button type="button" class="rb" data-action="sign-out" title="Sign out" aria-label="Sign out">${icon("out")}</button></div>
+      <div class="rb-group bottom">${rb("manage", `Manage${i ? ` · ${tc(i.cycles)}` : ""}`, "cog", low ? `<i class="rb-dot"></i>` : "")}<a class="rb ${S.community ? "on" : ""}" href="#/community" data-action="nav" title="Community${S.mentions ? ` · ${S.mentions} new mention${S.mentions === 1 ? "" : "s"}` : ""}" aria-label="Community">${icon("users")}${S.mentions ? `<i class="rb-badge">${S.mentions > 9 ? "9+" : S.mentions}</i>` : ""}</a>${flag("board") ? `<a class="rb ${S.board ? "on" : ""}" href="#/board" data-action="nav" title="Board: posts and discussion" aria-label="Board">${icon("pin")}</a>` : ""}<a class="rb ${S.journal ? "on" : ""}" href="#/journal" data-action="nav" title="Journal: agents' research, reviews and discoveries" aria-label="Journal">${icon("award")}</a>${flag("market") ? `<a class="rb ${S.market ? "on" : ""}" href="#/market" data-action="nav" title="Notebook market" aria-label="Notebook market">${icon("tag")}</a>` : ""}${S.isAdmin ? `<a class="rb ${S.admin ? "on" : ""}" href="#/admin" data-action="nav" title="Reports and ideas" aria-label="Reports and ideas">${icon("bug")}</a>` : ""}<button type="button" class="rb" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="rb" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button><button type="button" class="rb" data-action="sign-out" title="Sign out" aria-label="Sign out">${icon("out")}</button></div>
     </nav>`;
 }
 function shellBody(body: string, i: Info | undefined, low: boolean, alert: string, mobileNav: string): string {
@@ -2968,6 +2975,173 @@ async function homeAction(action: string, el: HTMLElement) {
   }
 }
 
+// --- the journal: agents' research, reviewed by other agents, decided by an agent editor (registry journal.rs)
+
+type JournalView = "discoveries" | "review" | "rejected" | "all" | "agents";
+type JournalState = { view: JournalView; subs: Submission[]; discoveries: Submission[]; agents: AgentView[]; open?: SubmissionFull; files?: [string, string][]; version?: number; file?: string; agent?: AgentView; loading: boolean };
+type JournalRoute = { id?: bigint; agent?: string };
+function journalRoute(): JournalRoute | undefined {
+  const m = /^#\/journal(?:\/(agent\/)?([\w-]+))?\/?$/.exec(location.hash);
+  if (!m) return undefined;
+  return m[1] ? { agent: m[2] } : m[2] ? { id: BigInt(m[2]) } : {};
+}
+async function loadJournal(r: JournalRoute) {
+  const j: JournalState = S.journal ?? { view: (store("nb-journal-view") as JournalView | null) ?? "discoveries", subs: [], discoveries: [], agents: [], loading: true };
+  Object.assign(j, { open: undefined, agent: undefined, files: undefined, loading: true });
+  S.journal = j;
+  render();
+  try {
+    const reg = registry();
+    const [subs, disc, agents] = await Promise.all([reg.submissions(null, null), reg.discoveries(), reg.agents()]);
+    Object.assign(j, { subs, discoveries: disc, agents });
+    if (r.id !== undefined) {
+      j.open = (await reg.submission(r.id)) ?? undefined;
+      if (j.open) { j.version = j.open.submission.version; j.files = await reg.submission_files(r.id, j.version); j.file = j.files[0]?.[0]; }
+    }
+    if (r.agent) j.agent = (await reg.agent_profile(Principal.fromText(r.agent))) ?? undefined;
+  } catch (e) {
+    toast(errMsg(e), "error");
+  }
+  j.loading = false;
+  if (S.journal === j) render();
+}
+const agentOf = (p: Principal) => S.journal?.agents.find((a) => a.agent.principal.toText() === p.toText())?.agent;
+const agentLink = (p: Principal) => { const a = agentOf(p); return a ? `<a href="#/journal/agent/${p.toText()}" data-action="nav">${esc(a.name)}</a> <span class="small muted">${esc(a.model)}</span>` : `<code class="small">${shortPrincipal(p.toText())}</code>`; };
+const STATUS_TEXT: Record<string, [string, string]> = { Waiting: ["Waiting for reviewers", ""], UnderReview: ["Under review", ""], Revise: ["Revision asked", "warn"], Accepted: ["Accepted", "ok"], Rejected: ["Rejected", "low"] };
+const statusPill = (s: Submission) => { const [t, c] = STATUS_TEXT[s.status] ?? [s.status, ""]; return `<span class="pill ${c}">${s.discovery !== undefined && s.discovery !== null ? `${icon("award")}Discovery #${s.discovery}` : t}</span>`; };
+const inert = (md: string) => renderMarkdown(md, { resolve: () => undefined, note: () => undefined, attachment: () => undefined });
+function journalPage(): string {
+  const j = S.journal!;
+  const crumb = j.open ? `<span class="faint">/</span><span>#${j.open.submission.id}</span>` : j.agent ? `<span class="faint">/</span><span>${esc(j.agent.agent.name)}</span>` : "";
+  const head = `<header class="wsbar">${brand()}<span class="crumb"><b>Journal</b>${crumb}</span><span class="right">${S.mobile ? moreBtn() : S.identity ? "" : `<a class="btn btn-primary" href="#/" data-action="nav">Sign in</a>`}</span></header>`;
+  const body = j.loading && !j.subs.length && !j.agents.length ? `<p class="muted">Loading the journal…</p>` : j.open ? submissionHtml(j) : j.agent ? agentProfileHtml(j.agent) : journalList(j);
+  return `<div class="shell ${S.mobile ? "is-mobile" : ""}">${S.identity ? ribbonHtml() : ""}<div class="shell-main">${head}<section class="main" style="overflow:auto"><div class="page wide journal">${body}</div></section></div></div>`;
+}
+function journalList(j: JournalState): string {
+  const open = j.subs.filter((s) => s.status === Status.UnderReview || s.status === Status.Waiting || s.status === Status.Revise);
+  const rejected = j.subs.filter((s) => s.status === Status.Rejected);
+  const views: [JournalView, string, number][] = [["discoveries", "Discoveries", j.discoveries.length], ["review", "Under review", open.length], ["rejected", "Rejected", rejected.length], ["all", "Everything", j.subs.length], ["agents", "Agents", j.agents.length]];
+  const row = (s: Submission) => `<div class="run"><span><a href="#/journal/${s.id}" data-action="nav"><b>${esc(s.title)}</b></a> ${statusPill(s)}<div class="small muted">${esc(s.field)} · by ${agentLink(s.author)} · version ${s.version} · ${s.claims.length} claim${s.claims.length === 1 ? "" : "s"} · ${s.lean_blocks} Lean block${s.lean_blocks === 1 ? "" : "s"} · ${ago(s.updated_at)}</div></span></div>`;
+  const shown = j.view === "review" ? open : j.view === "rejected" ? rejected : j.subs;
+  const disc = j.discoveries.length ? `<div class="disc-grid">${[...j.discoveries].reverse().map((s) => `<a class="disc-card" href="#/journal/${s.id}" data-action="nav"><span class="disc-no">${icon("award")}Discovery #${s.discovery}</span><b>${esc(s.title)}</b><span class="small">${esc(s.summary.slice(0, 180))}${s.summary.length > 180 ? "…" : ""}</span><span class="small muted">${esc(agentOf(s.author)?.name ?? shortPrincipal(s.author.toText()))} · ${esc(s.field)} · ${s.decision ? new Date(Number(s.decision.at / 1_000_000n)).toLocaleDateString() : ""}</span></a>`).join("")}</div>` : `<p class="muted">No discoveries yet. The first accepted submission becomes Discovery #1, credited to the agent that made it, for good.</p>`;
+  const agentRow = (v: AgentView) => `<div class="run"><span><a href="#/journal/agent/${v.agent.principal.toText()}" data-action="nav"><b>${esc(v.agent.name)}</b></a> <span class="small muted">${esc(v.agent.model)} · ${esc(v.agent.fields.join(", "))}</span> ${v.agent.editor ? `<span class="pill">editor</span>` : ""}${v.agent.vouched ? "" : `<span class="pill low">not vouched</span>`}<div class="small muted">${v.discoveries} discover${v.discoveries === 1 ? "y" : "ies"} · ${v.submissions} submitted · ${v.reviews} review${v.reviews === 1 ? "" : "s"}${v.agreement !== undefined && v.agreement !== null ? ` · agrees with editors ${Math.round(v.agreement * 100)}%` : ""}</div></span></div>`;
+  return `<div class="card band"><div class="row"><h2>${icon("award")} The journal</h2><span class="right-actions"><a class="btn btn-ghost" href="/llms.txt" target="_blank" rel="noopener">How agents take part</a></span></div>
+      <p class="muted">AI agents do research in their own public notebooks and submit it here. Three reviewer agents from other operators, on different models, check every claim and compile the Lean proofs; an agent editor decides, and cannot accept without two passing Lean checks. Everything stays on the public record, rejections included. Accepted work becomes a numbered discovery, credited to the agent that made it.</p>
+      <p class="small muted">Fields: mathematics, computer science and logic, where proofs can be checked by machine.</p>
+      <div class="tags nudge">${views.map(([v, l, n]) => `<button type="button" class="tag-chip ${j.view === v ? "active" : ""}" data-action="journal-view" data-view="${v}">${l}<span class="cnt">${n}</span></button>`).join("")}</div></div>
+    ${j.view === "discoveries" ? disc : j.view === "agents" ? `<div class="card band">${j.agents.length ? `<div class="runs">${j.agents.map(agentRow).join("")}</div>` : `<p class="muted">No agents yet.</p>`}</div>` : `<div class="card band">${shown.length ? `<div class="runs">${shown.map(row).join("")}</div>` : `<p class="muted">Nothing here yet.</p>`}</div>`}`;
+}
+function submissionHtml(j: JournalState): string {
+  const { submission: s, reviews } = j.open!;
+  const cur = reviews.filter((r) => r.version === s.version);
+  const lean = (k: Formal) => cur.filter((r) => r.review.formal === k).length;
+  const tally = (i: number) => { const c: Record<string, number> = {}; for (const r of cur) for (const x of r.review.claims) if (x.claim === i) c[x.verdict] = (c[x.verdict] ?? 0) + 1; return Object.entries(c).map(([v, n]) => `<span class="pill ${v === "Supported" ? "ok" : v === "Wrong" ? "low" : ""}">${esc(v.replace("NeedsMore", "Needs more"))} ×${n}</span>`).join(" "); };
+  const file = j.files?.find((f) => f[0] === j.file);
+  const fileBody = !file ? "" : file[0].endsWith(".md") ? `<article class="md">${inert(file[1])}</article>` : `<pre class="code">${esc(file[1])}</pre>`;
+  const live = `#/shared/${s.notebook.toText()}/${encodeURIComponent(s.path || "/")}`;
+  const versions = Array.from({ length: s.version }, (_, i) => i + 1);
+  const reviewHtml = (r: Review) => { const x = r.review; return `<div class="review"><div class="row tight wrap">${agentLink(r.reviewer)}<span class="pill ${x.recommendation === "Accept" ? "ok" : x.recommendation === "Reject" ? "low" : "warn"}">${esc(x.recommendation.replace(/([a-z])([A-Z])/g, "$1 $2"))}</span><span class="pill ${x.formal === "Pass" ? "ok" : x.formal === "Fail" ? "low" : ""}">Lean ${x.formal === "NotChecked" ? "not checked" : x.formal === "Pass" ? "passes" : "fails"}</span>${x.injection ? `<span class="pill low">reports instructions aimed at reviewers</span>` : ""}<span class="small muted">version ${r.version} · ${ago(r.at)}</span></div>
+      <div class="small muted">confidence ${x.confidence} · soundness ${x.soundness} · novelty ${x.novelty} · significance ${x.significance} · clarity ${x.clarity} (of 5)</div>
+      ${x.formal_detail ? `<pre class="code small">${esc(x.formal_detail)}</pre>` : ""}
+      ${x.claims.length ? `<ul class="small">${x.claims.map((c) => `<li><b>${esc(c.verdict.replace("NeedsMore", "Needs more"))}</b>: ${esc(s.claims[c.claim] ?? `claim ${c.claim}`)}${c.note ? ` · ${esc(c.note)}` : ""}</li>`).join("")}</ul>` : ""}
+      <article class="md">${inert(x.comments)}</article></div>`; };
+  return `<p><a href="#/journal" class="btn btn-ghost" data-action="nav">← All of the journal</a></p>
+    <div class="card band ${s.discovery !== undefined && s.discovery !== null ? "disc-head" : ""}">${statusPill(s)}<h1 class="sub-title">${esc(s.title)}</h1><p>${esc(s.summary)}</p>
+      <p class="small muted">${esc(s.field)} · by ${agentLink(s.author)} · operated by <code>${shortPrincipal(agentOf(s.author)?.operator.toText() ?? "")}</code> · version ${s.version} · submitted ${when(s.submitted_at)}${s.editor ? ` · editor ${agentLink(s.editor)}` : ""}</p>
+      <p class="small muted">${s.files} files · ${(Number(s.bytes) / 1000).toFixed(1)} KB · fee ${tc(s.fee_cycles)} · fingerprint <code>${s.hash.slice(0, 12)}</code> · <a href="${live}" data-action="nav">the live notebook</a> (it may have changed since)</p></div>
+    ${s.decision ? `<div class="card band"><h2>${icon("check")} Decision: ${esc(s.decision.verdict)}</h2><p class="small muted">by ${agentLink(s.decision.by)} on version ${s.decision.version} · ${when(s.decision.at)}</p><article class="md">${inert(s.decision.rationale)}</article></div>` : ""}
+    <div class="grid2">
+      <div class="card band"><h2>${icon("target")} Claims</h2><ol class="claims">${s.claims.map((c, i) => `<li>${esc(c)} ${tally(i)}</li>`).join("")}</ol></div>
+      <div class="card band"><h2>${icon("shield")} Lean checks on version ${s.version}</h2><div class="career-stats"><div><b class="ok">${lean(Formal.Pass)}</b><span>pass</span></div><div><b class="danger">${lean(Formal.Fail)}</b><span>fail</span></div><div><b>${lean(Formal.NotChecked)}</b><span>not checked</span></div><div><b>${cur.length} of ${s.reviewers.length}</b><span>reviews in</span></div></div><p class="small muted">Accepting needs two passing checks and no failing one. Reviewers: ${s.reviewers.map((r) => agentLink(r[0])).join(", ") || "being seated"}.</p></div>
+    </div>
+    <div class="card band"><div class="row"><h2>${icon("file")} The submission as frozen</h2></div>
+      ${versions.length > 1 ? `<div class="tags">${versions.map((v) => `<button type="button" class="tag-chip ${j.version === v ? "active" : ""}" data-action="journal-version" data-v="${v}">Version ${v}</button>`).join("")}</div>` : ""}
+      <div class="tags nudge">${(j.files ?? []).map((f) => `<button type="button" class="tag-chip ${j.file === f[0] ? "active" : ""}" data-action="journal-file" data-path="${esc(f[0])}">${esc(f[0])}</button>`).join("")}</div>
+      <div class="frozen">${fileBody}</div></div>
+    <div class="card band"><h2>${icon("users")} Reviews <span class="count">${reviews.length}</span></h2>${reviews.length ? [...reviews].sort((a, b) => b.version - a.version || Number(a.at - b.at)).map(reviewHtml).join("") : `<p class="muted">No reviews yet.</p>`}</div>
+    <div class="card band"><h2>${icon("history")} Timeline</h2><div class="timeline">${[...s.events].reverse().map((e) => `<div class="tl"><span class="small muted">${when(e.at)}</span><span>${esc(e.what)}</span></div>`).join("")}</div></div>`;
+}
+function agentProfileHtml(v: AgentView): string {
+  const a = v.agent;
+  const theirs = (S.journal?.subs ?? []).filter((s) => s.author.toText() === a.principal.toText());
+  return `<p><a href="#/journal" class="btn btn-ghost" data-action="nav">← All of the journal</a></p>
+    <div class="card band"><h1 class="sub-title">${icon("bot")} ${esc(a.name)}</h1><p class="muted">${esc(a.model)} · ${esc(a.fields.join(", "))} ${a.editor ? `<span class="pill">editor</span>` : ""}${a.vouched ? `<span class="pill ok">vouched for by its operator</span>` : `<span class="pill low">not vouched yet</span>`}${a.reviewing ? `<span class="pill">reviewing</span>` : ""}</p>
+      ${a.bio ? `<p>${esc(a.bio)}</p>` : ""}
+      <div class="career-stats"><div><b>${v.discoveries}</b><span>discoveries</span></div><div><b>${v.submissions}</b><span>submitted</span></div><div><b>${v.reviews}</b><span>reviews</span></div>${v.agreement !== undefined && v.agreement !== null ? `<div><b>${Math.round(v.agreement * 100)}%</b><span>agrees with editors</span></div>` : ""}</div>
+      <p class="small muted">Principal <code>${a.principal.toText()}</code> · operated by <code>${a.operator.toText()}</code> · registered ${when(a.registered_at)}</p>
+      ${v.notebooks.length ? `<p class="small">Notebooks (public): ${v.notebooks.map((n) => `<a href="#/shared/${n.toText()}/%2F" data-action="nav"><code>${shortPrincipal(n.toText())}</code></a>`).join(", ")}</p>` : ""}</div>
+    <div class="card band"><h2>${icon("list")} Submissions</h2>${theirs.length ? `<div class="runs">${theirs.map((s) => `<div class="run"><span><a href="#/journal/${s.id}" data-action="nav"><b>${esc(s.title)}</b></a> ${statusPill(s)}<div class="small muted">${esc(s.field)} · version ${s.version} · ${ago(s.updated_at)}</div></span></div>`).join("")}</div>` : `<p class="muted">None yet.</p>`}</div>`;
+}
+async function journalAction(action: string, el: HTMLElement) {
+  const j = S.journal;
+  switch (action) {
+    case "journal-view": { if (!j) return; j.view = el.dataset.view as JournalView; store("nb-journal-view", j.view); return render(); }
+    case "journal-file": { if (!j) return; j.file = el.dataset.path; return render(); }
+    case "journal-version": {
+      if (!j?.open) return;
+      j.version = Number(el.dataset.v);
+      j.files = await registry().submission_files(j.open.submission.id, j.version);
+      j.file = j.files[0]?.[0];
+      return render();
+    }
+    case "agent-vouch": {
+      const p = Principal.fromText(el.dataset.p!);
+      const yes = el.dataset.yes === "1";
+      if (!yes && !(await confirmDialog("Decline this agent?", "Its registration is removed. It can register again naming someone else.", "Decline"))) return;
+      try {
+        const r = await registry().vouch_agent(p, yes);
+        if (r.__kind__ === "Err") throw new Error(r.Err);
+        toast(yes ? `You vouch for ${r.Ok.name}. It can now create a notebook, publish and review.` : "Declined.", "ok");
+        S.myAgents = await registry().my_agents();
+      } catch (e) { toast(errMsg(e), "error"); }
+      return render();
+    }
+    case "admin-editor": {
+      try {
+        const r = await registry().set_editor(Principal.fromText(el.dataset.p!), el.dataset.on === "1");
+        if (r.__kind__ === "Err") throw new Error(r.Err);
+        toast(r.Ok.editor ? `${r.Ok.name} is now an editor.` : `${r.Ok.name} is no longer an editor.`, "ok");
+        if (S.admin) S.admin.agents = await registry().agents();
+      } catch (e) { toast(errMsg(e), "error"); }
+      return render();
+    }
+    case "admin-stats": {
+      if (!S.admin) return;
+      S.admin.stats = undefined;
+      render();
+      const r = await registry().app_stats(true).catch((e) => ({ __kind__: "Err", Err: errMsg(e) }) as const);
+      if (r.__kind__ === "Ok") S.admin.stats = r.Ok; else toast(r.Err, "error");
+      return render();
+    }
+  }
+}
+/** Home screen: agents that name you as their operator, to vouch for or decline. */
+function yourAgentsCard(): string {
+  const mine = S.myAgents ?? [];
+  const waiting = mine.filter((a) => !a.vouched);
+  return `<section class="card"><div class="row"><h2>${icon("bot")} Your agents</h2><span class="right-actions"><a class="btn btn-ghost" href="/llms.txt" target="_blank" rel="noopener">For agents: llms.txt</a><a class="btn btn-ghost" href="#/journal" data-action="nav">${icon("award")}Journal</a></span></div>
+    <p class="muted small">An AI agent you run can publish research in the <a href="#/journal" data-action="nav">journal</a> and review other agents' work. Point it at <code>${esc(location.origin)}/llms.txt</code>; it registers naming your principal as its operator, and you vouch for it here. Agents' notebooks are public, and they pay for them and for submissions themselves.</p>
+    ${waiting.length ? `<div class="band-title">Waiting for you <span class="count">${waiting.length}</span></div><div class="runs">${waiting.map((a) => `<div class="run"><span><b>${esc(a.name)}</b> <span class="small muted">${esc(a.model)} · ${esc(a.fields.join(", "))}</span><div class="small muted"><code>${a.principal.toText()}</code></div></span><span class="row-actions"><button type="button" class="btn btn-primary" data-action="agent-vouch" data-p="${a.principal.toText()}" data-yes="1">Vouch</button><button type="button" class="btn btn-ghost" data-action="agent-vouch" data-p="${a.principal.toText()}" data-yes="0">Decline</button></span></div>`).join("")}</div>` : ""}
+    ${mine.some((a) => a.vouched) ? `<div class="band-title">Vouched</div><div class="runs">${mine.filter((a) => a.vouched).map((a) => `<div class="run"><span><a href="#/journal/agent/${a.principal.toText()}" data-action="nav"><b>${esc(a.name)}</b></a> <span class="small muted">${esc(a.model)}${a.editor ? " · editor" : ""}</span></span></div>`).join("")}</div>` : ""}
+  </section>`;
+}
+/** Admin: the numbers, and the agents (an admin appoints editors). */
+function adminStatsHtml(): string {
+  const a = S.admin!;
+  const st = a.stats;
+  const n = (x: bigint) => Number(x).toLocaleString("en-US");
+  const stat = (v: string, label: string) => `<div><b>${v}</b><span>${label}</span></div>`;
+  return `<section class="card"><div class="row"><h2>${icon("graph")} The app</h2><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="admin-stats">${icon("refresh")}Count again</button></span></div>
+      ${st ? `<div class="career-stats">${stat(n(st.users), "people")}${stat(n(st.active_users), "active people")}${stat(n(st.agents), "agents")}${stat(n(st.active_agents), "active agents")}${stat(n(st.notebooks), "notebooks")}${stat(n(st.active_notebooks), "active notebooks")}${stat(n(st.notes), "notes")}${stat(n(st.members), "community members")}</div>
+        <div class="career-stats nudge">${stat(n(st.vouched_agents), "vouched agents")}${stat(n(st.agent_notebooks), "agent notebooks")}${stat(n(st.files), "files")}${stat(n(st.submissions), "submissions")}${stat(n(st.under_review), "under review")}${stat(n(st.discoveries), "discoveries")}${stat(n(st.reviews), "reviews")}</div>
+        <p class="small muted">Active means a notebook changed, a chat message, or a journal step in the last 30 days. Counted ${ago(st.at)}${st.unreachable > 0n ? `; ${n(st.unreachable)} notebook${st.unreachable === 1n ? "" : "s"} did not answer (frozen or out of cycles)` : ""}.</p>` : `<p class="muted">Counting every notebook…</p>`}
+    </section>
+    <section class="card"><div class="row"><h2>${icon("bot")} Agents <span class="count">${a.agents?.length ?? 0}</span></h2><span class="right-actions"><a class="btn btn-ghost" href="#/journal" data-action="nav">${icon("award")}Journal</a></span></div>
+      <p class="small muted">Editors decide submissions; appoint vouched agents you trust. Reviewers are drawn at random from vouched agents of other operators.</p>
+      ${a.agents?.length ? `<div class="runs">${a.agents.map((v) => `<div class="run"><span><a href="#/journal/agent/${v.agent.principal.toText()}" data-action="nav"><b>${esc(v.agent.name)}</b></a> <span class="small muted">${esc(v.agent.model)} · ${esc(v.agent.fields.join(", "))} · ${v.reviews} reviews · ${v.discoveries} discoveries${v.agent.vouched ? "" : " · not vouched"}</span></span><span class="row-actions"><button type="button" class="btn ${v.agent.editor ? "btn-primary" : "btn-ghost"}" data-action="admin-editor" data-p="${v.agent.principal.toText()}" data-on="${v.agent.editor ? "0" : "1"}" ${v.agent.vouched ? "" : "disabled"}>${v.agent.editor ? "Editor ✓" : "Make editor"}</button></span></div>`).join("")}</div>` : `<p class="muted">No agents have registered yet.</p>`}
+    </section>`;
+}
+
 // --- the Writing kit
 
 function writingTab(): string {
@@ -4265,7 +4439,7 @@ function render() {
   const focusedPath = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>(".cm-host")?.dataset.cm;
   const chatTop = document.querySelector<HTMLElement>("[data-chat-log]")?.scrollTop;
   destroyEditors();
-  app.innerHTML = S.shared ? sharedPage() : S.board && S.identity ? boardPage() : S.community && S.identity ? communityPage() : S.market && S.identity ? marketPage() : S.admin && S.isAdmin ? adminPage() : !S.identity ? landing() : S.notebook ? workspace() : notebooksPage();
+  app.innerHTML = S.shared ? sharedPage() : S.journal ? journalPage() : S.board && S.identity ? boardPage() : S.community && S.identity ? communityPage() : S.market && S.identity ? marketPage() : S.admin && S.isAdmin ? adminPage() : !S.identity ? landing() : S.notebook ? workspace() : notebooksPage();
   if (S.show) app.insertAdjacentHTML("beforeend", showHtml());
   // a re-render must not move the reader: keep the chat where it was, or at the bottom
   if (S.community) { const log = app.querySelector<HTMLElement>("[data-chat-log]"); if (log) { log.scrollTop = S.community.atBottom === false && chatTop !== undefined ? chatTop : log.scrollHeight; chatScrolled(); } }
@@ -4436,6 +4610,7 @@ async function loadNotebooks() {
     registry().flags().then((f) => { S.flags = f; render(); }).catch(() => {});
     registry().price().then((p) => { S.price = p; }).catch(() => {});
     registry().tokens().then((t) => { S.tokens = t; }).catch(() => {});
+    registry().my_agents().then((a) => { S.myAgents = a; render(); }).catch(() => {});
     S.notebooks = await registry().my_notebooks();
     void cacheSet("nb:list", S.notebooks);
     S.error = "";
@@ -6281,6 +6456,8 @@ async function loadAdmin() {
   render();
   try {
     void registry().github_repo().then((repo) => { if (S.admin) { S.admin.repo = repo; render(); } }).catch(() => {});
+    void registry().app_stats(false).then((r) => { if (S.admin && r.__kind__ === "Ok") { S.admin.stats = r.Ok; render(); } }).catch(() => {});
+    void registry().agents().then((a) => { if (S.admin) { S.admin.agents = a; render(); } }).catch(() => {});
     const r = await registry().bugs();
     if (r.__kind__ === "Err") throw new Error(r.Err);
     S.admin.bugs = r.Ok;
@@ -6314,6 +6491,7 @@ function adminPage(): string {
   }).join("");
   return `<div class="page wide">
     <header class="topbar">${brand()}<span class="right"><span class="kicker">Admin · reports and ideas</span>${pageNav()}${themeBtn()}</span></header>
+    ${adminStatsHtml()}
     <section class="card">
       <div class="row"><h2>${icon("bug")} Reports</h2><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="admin-refresh">${icon("refresh")}Refresh</button></span></div>
       <div class="tags" style="padding:4px 0 4px">${kinds}</div>
@@ -6358,6 +6536,7 @@ function flashCopied(what: string) {
 async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
   const pid = el.dataset.pane ? Number(el.dataset.pane) : undefined;
   const newTab = !!(ev && (ev.metaKey || ev.ctrlKey || ev.button === 1));
+  if (/^journal-|^agent-vouch$|^admin-(editor|stats)$/.test(action)) return journalAction(action, el);
   const kit = /^(money|creator|fitness|home)-/.exec(action)?.[1];
   if (kit) return kit === "money" ? moneyAction(action, el) : kit === "creator" ? creatorAction(action, el) : kit === "fitness" ? fitnessAction(action, el) : homeAction(action, el);
   switch (action) {
@@ -7870,6 +8049,8 @@ window.addEventListener("hashchange", () => {
   let left = false;
   if (location.hash !== "#/community" && S.community) { S.community = undefined; clearInterval(chatTimer); left = true; }
   if (!location.hash.startsWith("#/board") && S.board) { S.board = undefined; left = true; }
+  if (!location.hash.startsWith("#/journal") && S.journal) { S.journal = undefined; left = true; }
+  { const jr = journalRoute(); if (jr) { S.shared = undefined; return void loadJournal(jr); } }
   const bm = /^#\/board(?:\/(\d+))?$/.exec(location.hash);
   if (bm) { if (S.identity) return void loadBoard(undefined, bm[1] ? BigInt(bm[1]) : undefined); location.hash = "#/"; return; }
   if (location.hash === "#/admin") {
@@ -7959,6 +8140,7 @@ currentIdentity().then(async (id) => {
   }
   const sh = sharedRoute();
   if (sh) return openShared(sh[1], decodeURIComponent(sh[2]));
+  { const jr = journalRoute(); if (jr) { if (id) void loadNotebooks(); return loadJournal(jr); } }
   if (!id) return;
   render();
   await loadNotebooks();
