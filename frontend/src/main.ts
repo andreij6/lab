@@ -883,6 +883,7 @@ let mini: ForceGraph | undefined;
 
 /** The row under the top bar that holds the two pane toggles, so they sit in the same place on every screen. */
 function panebar(left: { on: boolean; what: string; action: string; off?: boolean }, right: { on: boolean; what: string; action: string; off?: boolean }, middle = ""): string {
+  if (left.off && right.off && !middle) return "";
   const b = (x: typeof left, side: "left" | "right") => `<button type="button" class="btn btn-ghost icon-btn ${x.on || x.off ? "" : "accent"}" data-action="${x.action}" title="${x.off ? `No ${x.what} on this view` : `${x.on ? "Hide" : "Show"} ${x.what} (${MOD}⇧${side === "left" ? "[" : "]"})`}" aria-label="Toggle ${x.what}" aria-pressed="${x.on}" ${x.off ? "disabled" : ""}>${icon(side === "left" ? "panel-left" : "panel-right")}</button>`;
   return S.mobile ? "" : `<div class="panebar">${b(left, "left")}<span class="panebar-mid">${middle}</span>${b(right, "right")}</div>`;
 }
@@ -944,7 +945,6 @@ function moreMenu(el: HTMLElement) {
   contextMenu(Math.max(8, r.right - 220), r.bottom + 4, "", items);
 }
 /** Where a page sits in the app: back to the open notebook and to the list (desktop; phones use the ⋯ menu). */
-const pageNav = () => S.mobile ? "" : `${S.notebook ? `<a class="btn btn-ghost" href="#/notebook/${S.notebook.canister.toText()}" data-action="nav">${icon("links")}<span class="lbl">Back to “${esc(S.notebook.name)}”</span></a>` : ""}<a class="btn btn-ghost" href="#/" data-action="nav">${icon("list")}<span class="lbl">Your notebooks</span></a>`;
 /** The appearance can be changed on the notebook, chat and board pages only. */
 const themeAllowed = () => !!S.community || !!S.board || (!!S.notebook && !S.market && !S.admin && !S.shared);
 const themeBtn = () => S.mobile ? moreBtn() : `${S.community ? "" : `<a class="btn btn-ghost" href="#/community" data-action="nav" title="Community chat">${icon("users")}<span class="lbl">Community</span></a>`}${S.board || !flag("board") ? "" : `<a class="btn btn-ghost" href="#/board" data-action="nav" title="Posts and discussion">${icon("pin")}<span class="lbl">Board</span></a>`}${S.market || !flag("market") ? "" : `<a class="btn btn-ghost" href="#/market" data-action="nav" title="Notebooks for sale">${icon("tag")}<span class="lbl">Market</span></a>`}${flag("journal") ? `<a class="btn btn-ghost" href="#/journal" data-action="nav" title="Agents' research, reviews and discoveries">${icon("award")}<span class="lbl">Journal</span></a>` : ""}${S.isAdmin ? `<a class="btn btn-ghost" href="#/admin" data-action="nav" title="Reports and ideas">${icon("bug")}<span class="lbl">Admin</span></a>` : ""}<button type="button" class="btn btn-ghost icon-btn" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button>${themeAllowed() ? `<button type="button" class="btn btn-ghost icon-btn" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon(S.theme.mode === "dark" ? "moon" : "sun")}</button>` : ""}`;
@@ -3019,12 +3019,17 @@ const agentLink = (p: Principal) => { const a = agentOf(p); return a ? `<a href=
 const STATUS_TEXT: Record<string, [string, string]> = { Waiting: ["Waiting for reviewers", ""], UnderReview: ["Under review", ""], Revise: ["Revision asked", "warn"], Accepted: ["Accepted", "ok"], Rejected: ["Rejected", "low"] };
 const statusPill = (s: Submission) => { const [t, c] = STATUS_TEXT[s.status] ?? [s.status, ""]; return `<span class="pill ${c}">${s.discovery !== undefined && s.discovery !== null ? `${icon("award")}Discovery #${s.discovery}` : t}</span>`; };
 const inert = (md: string) => renderMarkdown(md, { resolve: () => undefined, note: () => undefined, attachment: () => undefined });
+/** Every page but the notebooks list and the landing page: the left icon bar (signed in, on a
+ *  desktop) and the top bar, the same frame as a notebook. */
+function pageShell(crumb: string, body: string): string {
+  const right = S.mobile ? moreBtn() : S.identity ? "" : `<button type="button" class="btn btn-primary" data-action="sign-in">Sign in</button>`;
+  return `<div class="shell ${S.mobile ? "is-mobile" : ""}">${S.identity ? ribbonHtml() : ""}<div class="shell-main"><header class="wsbar">${brand()}<span class="crumb">${crumb}</span><span class="right">${right}</span></header><section class="main" style="overflow:auto"><div class="page wide">${body}</div></section></div></div>`;
+}
 function journalPage(): string {
   const j = S.journal!;
   const crumb = j.open ? `<span class="faint">/</span><span>#${j.open.submission.id}</span>` : j.agent ? `<span class="faint">/</span><span>${esc(j.agent.agent.name)}</span>` : "";
-  const head = `<header class="wsbar">${brand()}<span class="crumb"><b>Journal</b>${crumb}</span><span class="right">${S.mobile ? moreBtn() : S.identity ? "" : `<a class="btn btn-primary" href="#/" data-action="nav">Sign in</a>`}</span></header>`;
   const body = j.loading && !j.subs.length && !j.agents.length ? `<p class="muted">Loading the journal…</p>` : j.open ? submissionHtml(j) : j.agent ? agentProfileHtml(j.agent) : journalList(j);
-  return `<div class="shell ${S.mobile ? "is-mobile" : ""}">${S.identity ? ribbonHtml() : ""}<div class="shell-main">${head}<section class="main" style="overflow:auto"><div class="page wide journal">${body}</div></section></div></div>`;
+  return pageShell(`<b>Journal</b>${crumb}`, `<div class="journal">${body}</div>`);
 }
 function journalList(j: JournalState): string {
   const open = j.subs.filter((s) => s.status === Status.UnderReview || s.status === Status.Waiting || s.status === Status.Revise);
@@ -6078,16 +6083,14 @@ function sharedPage(): string {
       ? `${progressBar}<p class="small muted">${icon("edit")} You can edit this note. ${sh.dirty ? "Unsaved changes." : "Changes save a second after you stop typing."}</p><div class="editor-panes view-edit shared-edit"><div class="cm-host" data-cm="${esc(sh.path)}"></div></div>${comments}`
       : `${progressBar}<article class="md shared-note">${renderMarkdown(sh.note!.content, { self: sh.path, resolve: () => undefined, note: () => undefined, attachment: () => undefined })}</article>${comments}`;
   }
-  return `<div class="page">
-    <header class="topbar">${brand()}<span class="right"><span class="kicker">${sh.name ? `Shared from “${esc(sh.name)}”` : "Shared"}</span>${themeBtn()}</span></header>
+  return pageShell(`<b>${esc(sh.name || "Shared")}</b><span class="faint">/</span><span>${esc(sh.files ? (sh.path || "Everything shared") : title(sh.path))}</span>`, `
     <section class="card">
       ${crumb}
       <h1 class="shared-title">${esc(sh.files ? (sh.path || sh.name || "Shared notes") : title(sh.path))}</h1>
       ${sh.note ? `<p class="small muted">${esc(sh.path)} · updated ${when(sh.note.modified)}${sh.note.agent ? ` · written by agent ${esc(sh.note.agent)}` : ""}</p>` : ""}
       ${body}
       <p class="small muted nudge">${S.identity ? `<a href="#/" data-action="nav">Your notebooks</a>` : "Notebooks: markdown notes in a canister you own. Sign in to make your own."}</p>
-    </section>
-  </div>`;
+    </section>`);
 }
 let sharedSaveTimer = 0;
 async function saveShared() {
@@ -6354,13 +6357,12 @@ function marketPage(): string {
       <span class="row tight">${mine ? `<span class="pill">Yours</span>` : `<button type="button" class="btn btn-primary" data-action="buy" data-id="${l.listing.canister.toText()}" ${S.busy ? "disabled" : ""}>${icon("bolt")}Buy for ${fmtAmt(l.listing.price, t)}</button>`}<button type="button" class="btn btn-ghost" data-action="see-ratings" data-id="${l.listing.canister.toText()}">Ratings</button></span>
     </div>`;
   }).join("");
-  return `<div class="page">
-    <header class="topbar">${brand()}<span class="right">${pageNav()}${themeBtn()}</span></header>
+  return pageShell(`<b>Market</b>`, `
     <section class="card"><h2>${icon("tag")} Notebook market</h2><p class="muted small">Whole notebooks for sale as ICRC-7 tokens. Buying moves the canister to you: its notes, history, attachments and cycles. Each listing carries the judge's verdict and ratings from people who bought it. Pay through OISY in ICP, ckBTC, ckETH, ckUSDC or ckUSDT.</p>
     <div class="row tight"><button type="button" class="tag-chip ${m.decksOnly ? "" : "active"}" data-action="market-filter" data-decks="0">All notebooks</button><button type="button" class="tag-chip ${m.decksOnly ? "active" : ""}" data-action="market-filter" data-decks="1">${icon("check")}Decks and quizzes</button></div>
     ${m.loading && !m.listings.length ? `<p class="muted">Loading…</p>` : shown.length ? `<div class="nb-grid">${cards}</div>` : `<p class="muted">${m.decksOnly ? "No notebooks with decks or quizzes for sale right now." : "Nothing for sale right now. List one of yours from Manage → Sell."}</p>`}
     ${[...m.bought].length ? `<div class="band"><div class="band-title">Notebooks you bought</div><p class="small muted">Rate them 1 to 5 stars; your rating shows on the listing if it is sold on.</p>${[...m.bought].map((c) => `<div class="row tight"><code>${c}</code><button type="button" class="btn" data-action="rate" data-id="${c}">${icon("star")}Rate</button></div>`).join("")}</div>` : ""}
-    </section></div>`;
+    </section>`);
 }
 async function buyListing(id: string) {
   const l = S.market?.listings.find((x) => x.listing.canister.toText() === id);
@@ -6499,8 +6501,7 @@ function adminPage(): string {
       </div>` : ""}
     </div>`;
   }).join("");
-  return `<div class="page wide">
-    <header class="topbar">${brand()}<span class="right"><span class="kicker">Admin · reports and ideas</span>${pageNav()}${themeBtn()}</span></header>
+  return pageShell(`<b>Admin</b><span class="faint">/</span><span>Reports and ideas</span>`, `
     ${adminStatsHtml()}
     <section class="card">
       <div class="row"><h2>${icon("bug")} Reports</h2><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="admin-refresh">${icon("refresh")}Refresh</button></span></div>
@@ -6513,8 +6514,7 @@ function adminPage(): string {
       <form class="field nudge" data-form="admin-repo"><span class="label">GitHub repository for #developers (owner/name)</span><div class="row tight"><input class="input" name="repo" value="${esc(a.repo ?? "")}" placeholder="owner/name" style="max-width:320px"><button type="submit" class="btn">Save</button></div><span class="small muted">Only its contributors can post there; they prove a login by putting their principal in their GitHub bio.</span></form>
       <p class="small muted nudge">Admins are the registry's controllers plus principals added with <code>icp canister call registry add_admin '(principal "…")'</code>. Click a report to work it; the note is shown to the reporter.</p>
       ${account()}
-    </section>
-  </div>`;
+    </section>`);
 }
 
 function paneMenu(paneId: number, x: number, y: number) {
@@ -8055,12 +8055,13 @@ const sharedRoute = () => location.hash.match(/^#\/shared\/([a-z0-9-]+)\/(.*)$/)
 window.addEventListener("hashchange", () => {
   const sh = sharedRoute();
   if (sh) return void openShared(sh[1], decodeURIComponent(sh[2]));
-  // leaving the community or the board for another page; the notebook under them needs drawing again
-  let left = false;
+  // leaving a shared note (drawn before anything else), the community or the board: what is under them needs drawing again
+  let left = !!S.shared;
+  S.shared = undefined;
   if (location.hash !== "#/community" && S.community) { S.community = undefined; clearInterval(chatTimer); left = true; }
   if (!location.hash.startsWith("#/board") && S.board) { S.board = undefined; left = true; }
   if (!location.hash.startsWith("#/journal") && S.journal) { S.journal = undefined; left = true; }
-  { const jr = journalRoute(); if (jr) { S.shared = undefined; return void loadJournal(jr); } }
+  { const jr = journalRoute(); if (jr) return void loadJournal(jr); }
   const bm = /^#\/board(?:\/(\d+))?$/.exec(location.hash);
   if (bm) { if (S.identity) return void loadBoard(undefined, bm[1] ? BigInt(bm[1]) : undefined); location.hash = "#/"; return; }
   if (location.hash === "#/admin") {
@@ -8088,12 +8089,6 @@ window.addEventListener("hashchange", () => {
   if (S.admin) {
     S.admin = undefined;
     render();
-  }
-  if (S.shared) {
-    S.shared = undefined;
-    render();
-    if (S.identity && !S.notebooks) void loadNotebooks();
-    if (!location.hash.startsWith("#/notebook/")) return;
   }
   if (!location.hash.startsWith("#/notebook/")) {
     void saveAll();
