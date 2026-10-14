@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="linear-gradient-1" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4338ca"/>
+      <stop offset="1" stop-color="#0ea5e9"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-2" x1="256" y1="292.907" x2="256" y2="420" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#a5e3ff"/>
+      <stop offset="1" stop-color="#38bdf8"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-3" x1="248" y1="259" x2="248" y2="241" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.85"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-4" x1="270" y1="218" x2="270" y2="206" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.65"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.65"/>
+    </linearGradient>
+  </defs>
+  <title>Lab icon</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M112 0 L400 0 C461.856 0 512 50.144 512 112 L512 400 C512 461.856 461.856 512 400 512 L112 512 C50.144 512 0 461.856 0 400 L0 112 C0 50.144 50.144 0 112 0 Z" fill="url(#linear-gradient-1)"/>
+    <path d="M163 300 C210 286 252 314 296 298 C318 290 336 292 349 300 L380 356 C393.333 380 393.333 398 380 410 C373.333 416.667 363.333 420 350 420 L162 420 C148.667 420 138.667 416.667 132 410 C118.667 398 118.667 380 132 356 Z" fill="url(#linear-gradient-2)"/>
+    <path d="M200 362 L256 336 L314 368" fill="none" stroke="#ffffff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M200 362 L314 368" fill="none" stroke="#ffffff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M188 362 C188 355.373 193.373 350 200 350 C206.627 350 212 355.373 212 362 C212 368.627 206.627 374 200 374 C193.373 374 188 368.627 188 362 Z" fill="#ffffff"/>
+    <path d="M242 336 C242 328.268 248.268 322 256 322 C263.732 322 270 328.268 270 336 C270 343.732 263.732 350 256 350 C248.268 350 242 343.732 242 336 Z" fill="#ffffff"/>
+    <path d="M303 368 C303 361.925 307.925 357 314 357 C320.075 357 325 361.925 325 368 C325 374.075 320.075 379 314 379 C307.925 379 303 374.075 303 368 Z" fill="#ffffff"/>
+    <path d="M196 100 L316 100 M220 112 L220 198 L132 356 C118.667 380 118.667 398 132 410 C138.667 416.667 148.667 420 162 420 L350 420 C363.333 420 373.333 416.667 380 410 C393.333 398 393.333 380 380 356 L292 198 L292 112" fill="none" stroke="#ffffff" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M239 250 C239 245.029 243.029 241 248 241 C252.971 241 257 245.029 257 250 C257 254.971 252.971 259 248 259 C243.029 259 239 254.971 239 250 Z" fill="url(#linear-gradient-3)"/>
+    <path d="M264 212 C264 208.686 266.686 206 270 206 C273.314 206 276 208.686 276 212 C276 215.314 273.314 218 270 218 C266.686 218 264 215.314 264 212 Z" fill="url(#linear-gradient-4)"/>
+    <path d="M384 92 L392 116 L416 124 L392 132 L384 156 L376 132 L352 124 L376 116 Z" fill="#fde68a"/>
+  </g>
+</svg>
