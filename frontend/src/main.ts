@@ -28,6 +28,7 @@ import { MONEY_TEMPLATES, NET_WORTH_NOTE, SUBSCRIPTION_TEMPLATE, budgetTotals, b
 import { CALENDAR_BOARD, LANES, LIMIT, POST_TEMPLATE, calendar, logResults, placeCard, post, posts, results } from "./creator";
 import { WORKOUT_TEMPLATE, newRecords, pace, progress, records, weekly, workouts } from "./fitness";
 import { ITEM_TEMPLATE, UPKEEP_TEMPLATE, doneUpkeep, inventory, items, upkeep, warrantiesEnding } from "./home";
+import { attachSky, skyPulse } from "./chatsky";
 import { DEFAULT_WATCH, MAX_WATCH, THESIS_TEMPLATE, TRADE_TEMPLATE, closeTrade, isOpen, isThesis, isTrade, journalStats, pnl, reviewThesis, rMultiple, symbolOf, theses, trade, tradePath, usd, watchSymbols, type Side, type Trade } from "./crypto";
 import { cardKey, isDue, review as srsReview, type Rating, type Sched } from "./srs";
 import { align, isLeanNote, leanCode, parseLean, statementCard, unmentionedHyps } from "./lean";
@@ -579,7 +580,21 @@ function decorateTables(root: ParentNode) {
     });
   });
 }
+/** The community's sky: put it back on the canvas after every render, and send a wave of light from
+ *  the author of each new message (only new ones in the channel already open, at most three). */
+let skySeen = { channel: "", last: -1n, loaded: false };
+function skySync() {
+  const c = S.community;
+  const canvas = document.querySelector<HTMLCanvasElement>("canvas[data-chat-sky]");
+  if (!c || !canvas) return;
+  attachSky(canvas, { channel: c.channel, online: c.online.filter((o) => o.channel === c.channel).map((o) => o.principal.toText()), dark: S.theme.mode === "dark", accent: getComputedStyle(document.body).getPropertyValue("--accent").trim() });
+  const last = c.messages.length ? c.messages[c.messages.length - 1].id : -1n;
+  // the messages a channel opens with are not news: only ones that arrive after it has loaded light up
+  if (skySeen.channel === c.channel && skySeen.loaded && last > skySeen.last) for (const m of c.messages.filter((x) => x.id > skySeen.last).slice(-3)) skyPulse(m.author.toText());
+  skySeen = { channel: c.channel, last, loaded: !c.loading };
+}
 function afterRender(root: ParentNode = document) {
+  skySync();
   const segOn = document.querySelector<HTMLElement>(".wsbar .segmented .tab[aria-selected=\"true\"]");
   if (segOn) segOn.parentElement!.scrollLeft = segOn.offsetLeft - segOn.parentElement!.clientWidth / 2 + segOn.offsetWidth / 2;
   const dark = S.theme.mode === "dark";
@@ -1706,7 +1721,7 @@ function onlineHtml(): string {
   return `<div class="pane-title">Online <span class="count">${here.length}</span></div>
     ${here.length ? [...byChan.entries()].map(([ch, os]) => `<div class="pane-sub" style="padding:0 10px">#${esc(ch)}</div>${os.map((o) => `<div class="online-row"><span class="avatar" style="--h:${[...o.principal.toText()].reduce((a, x) => a + x.charCodeAt(0), 0) % 360}">${esc(o.handle.slice(0, 2).toUpperCase())}</span><span>${esc(o.handle)}</span>${o.principal.toText() === S.principal ? `<span class="small muted">you</span>` : ""}</div>`).join("")}`).join("") : `<div class="empty-side">Nobody is reading right now.</div>`}
     <div class="pane-title">Notifications</div><div class="empty-side"><label class="switch" style="padding:0"><input type="checkbox" name="notify" ${notifyOn() ? "checked" : ""}> Tell me when I'm @mentioned, anywhere in the app</label>${notifyOn() && "Notification" in window && Notification.permission === "default" ? `<div class="nudge"><button type="button" class="btn btn-ghost" data-action="notify-allow">${icon("bell")}Also notify when this tab is hidden</button></div>` : ""}</div>
-    <div class="pane-title">House rules</div><div class="empty-side">Anyone signed in can read. To post, keep ICP in your in-app wallet and join; the check is renewed daily. No links, no images, no foul language; the registry refuses them. Each new message costs 0.0002 ICP (twice the ledger fee) from your wallet; edits, reactions and votes are free. Messages are cleaned up after 90 days (pinned ones stay). Admins make channels.</div>`;
+    <div class="pane-title">House rules</div><div class="empty-side">Anyone signed in can read. To post you need a notebook: it pays for each message in cycles, what storing it costs (a fraction of a cent). No links, no images, no foul language; the registry refuses them. Edits, reactions and votes are free. Messages are cleaned up after 90 days (pinned ones stay). Admins make channels.</div>`;
 }
 // --- the board: reddit-style posts per topic
 const score = (x: { ups: Principal[]; downs: Principal[] }) => x.ups.length - x.downs.length;
@@ -1808,7 +1823,7 @@ function communityPage(): string {
     ${panebar({ on: c.showChannels, what: "channels", action: "chat-side-toggle" }, { on: c.showOnline, what: "who is online", action: "chat-online-toggle" })}
     <div class="workspace community ${c.showOnline ? "" : "no-aside"} ${c.showChannels ? "" : "no-side"} ${S.mobile ? "m-note" : ""}">
       <nav class="side" id="chanpane" aria-label="Channels">${channelsHtml()}</nav>
-      <section class="main chatpane">${chatHtmlC()}</section>
+      <section class="main chatpane"><canvas class="chat-sky" data-chat-sky aria-hidden="true"></canvas>${chatHtmlC()}</section>
       <aside class="aside" id="onlinepane" aria-label="Online">${onlineHtml()}</aside>
     </div>
     ${S.mobile ? `<nav class="mobilebar" aria-label="Panes"><button type="button" class="mtab" data-action="chat-pane" data-pane="files">${icon("list")}Channels</button><button type="button" class="mtab" aria-selected="true" data-action="chat-pane" data-pane="note">${icon("chat")}Chat</button><button type="button" class="mtab" data-action="chat-pane" data-pane="links">${icon("users")}Online</button><button type="button" class="mtab" data-action="nav-home">${icon("file")}Notes</button></nav>` : ""}

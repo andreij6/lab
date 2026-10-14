@@ -582,6 +582,9 @@ abbr.gl { text-decoration: underline dotted var(--accent-2); text-underline-offs
 .shell:not(.is-mobile) .workspace.community.no-side { grid-template-columns: 0 minmax(0, 1fr) 240px; } .shell:not(.is-mobile) .workspace.community.no-aside { grid-template-columns: 240px minmax(0, 1fr) 0; } .shell:not(.is-mobile) .workspace.community.no-side.no-aside { grid-template-columns: 0 minmax(0, 1fr) 0; }
 .online-row { display: flex; align-items: center; gap: 8px; padding: 4px 10px; font-size: .9rem; }
 .chatpane .chat-log { padding: 8px 0 14px; gap: 0; }
+/* the living sky behind the chat (chatsky.ts): under the messages, above the pane's own background */
+.chatpane { position: relative; isolation: isolate; } .chat-sky { position: absolute; inset: 0; width: 100%; height: 100%; z-index: -1; pointer-events: none; }
+
 @media (max-width: 760px) { .workspace.community { grid-template-columns: 1fr; } .workspace.community .side, .workspace.community .aside, .workspace.community > .main { display: none; } .workspace.community.m-files .side, .workspace.community.m-note > .main, .workspace.community.m-links .aside { display: flex; } }
 .shell.single { grid-template-columns: minmax(0, 1fr); }
 /* chat sits at the bottom like a messenger; rain */
