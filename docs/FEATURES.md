@@ -313,8 +313,8 @@ Lab's activity as a small isometric island town, on the landing page (a slice of
 - **People online** in the chat walk in from the town gate to their channel's stall and loiter there; yours is in the accent colour. They never come out of houses, so chat is never tied to a home.
 - **Seasons** from the date: snow on the pines and frozen water, blossom, green or autumn leaves, and the days until the next. Light theme is day, dark is night.
 - **Explore.** Drag to pan, scroll or pinch to zoom, arrows, + − and 0 on the keyboard; hover (or tap) for what something is, click (or tap again) to go there: a stall opens its channel, the pavilion the board, the school #help, your home your notebooks. A legend explains it all.
-- **Privacy.** The registry's public `town()` query returns counts and small buckets only: no names, principals, handles or canister ids. It is not anonymous: a lot is a token id, which ICRC-7 already makes public, and the town shows nothing that ICRC-7, each notebook's `usage()` and its cycles don't already show. Homes, cycles and fundraisers are counted every six hours (and when the town is switched on); building sites, newcomers, the Square and the board are live.
-- Local development: add `?town-demo` to the URL for a busier town than a test network has.
+- **Privacy.** The registry's public `town()` query returns counts and small buckets only: no names, principals, handles or canister ids. It is not anonymous: a lot is a token id, which ICRC-7 already makes public, and the town shows nothing that ICRC-7, each notebook's `usage()` and its cycles don't already show. Homes (up to 20,000), cycles and fundraisers are counted every six hours (and when the town is switched on); building sites, newcomers and campers every five minutes (and when a notebook is made); the Square and the board are live. Far out, the island is drawn from cached chunks, so even 20,000 homes stay smooth.
+- Local development: add `?town-demo` (or `?town-demo=20000`) to the URL for a busier town than a test network has.
 
 ## Admin numbers
 

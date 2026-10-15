@@ -131,3 +131,12 @@ test("town: seasons and projection", () => {
   assert.equal(season(new Date(2027, 1, 28)).next, "spring");
   for (const [x, y] of [[0, 0], [3.5, -2], [-10, 12]]) { const [a, b] = unproject(...project(x, y)); assert.ok(Math.abs(a - x) < 1e-9 && Math.abs(b - y) < 1e-9); }
 });
+
+test("town: 20,000 homes lay out in a few seconds, every one placed, none on another", () => {
+  const houses = Array.from({ length: 20_000 }, (_, i) => house(i + Math.floor(i / 7)));
+  const t0 = performance.now(), pl = layoutTown(town(houses)), ms = performance.now() - t0;
+  const placed = pl.objs.filter((o) => o.k === "house");
+  assert.equal(placed.length, 20_000);
+  assert.equal(new Set(placed.map((o) => `${o.x},${o.y}`)).size, 20_000);
+  assert.ok(ms < 8000, `layout took ${ms | 0} ms`);
+});

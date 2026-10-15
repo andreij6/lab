@@ -51,7 +51,7 @@ import { cacheDel, cacheGet, cacheSet, clearQueue, queueWrite, queued, type Queu
 import { registerSW } from "virtual:pwa-register";
 import { THEMES, applyTheme, loadThemeState, saveThemeState, type ThemeState } from "./themes";
 import { zip } from "./zip";
-import { attachTown, season, townCamera, type Target as TownTarget, type TownData } from "./town";
+import { attachTown, season, townCamera, type Target as TownTarget, type TownData, type TownHouse } from "./town";
 
 // ---------- the cycles minting canister: today's ICP price in cycles ----------
 
@@ -3015,21 +3015,42 @@ function pageShell(crumb: string, body: string, bare = false): string {
 }
 // --- the town: Lab's activity as a small isometric town (registry town.rs, town.ts)
 
-const townData = (t: Town): TownData => ({
-  at: Number(t.at / 1_000_000n), houses: t.houses.map((h) => ({ lot: h.lot, storeys: h.storeys, size: h.size, lit: h.lit, low: h.low })), people: t.people, homes: t.homes, quiet: t.quiet,
+const townData = (t: Town, houses: TownHouse[]): TownData => ({
+  at: Number(t.at / 1_000_000n), houses, people: t.people, homes: t.homes, quiet: t.quiet,
   mine: t.mine, myChannel: t.my_channel, channels: t.channels.map((c) => ({ name: c.name, online: c.online, messages24h: c.messages_24h })), postTopics: t.post_topics, postsLive: t.posts_live,
   posts24h: t.posts_24h, listings: t.listings, rains24h: t.rains_24h, lastRain: t.last_rain === undefined ? undefined : Number(t.last_rain / 1_000_000n), hikers: t.hikers, off: t.off,
   building: [...t.building], notebooks: t.notebooks, spawned24h: t.spawned_24h, spawned7d: t.spawned_7d, newcomers7d: t.newcomers_7d, cycles: Number(t.cycles), burnPerDay: Number(t.burn_per_day), fundraisersOpen: t.fundraisers_open, raisedE8s: Number(t.raised_e8s), campers: t.campers, meCamping: t.me_camping,
 });
-const fetchTown = () => registry().town().then((r) => (r.__kind__ === "Ok" ? demoTown(townData(r.Ok)) : null)).catch(() => null);
-/** Local development with ?town-demo: a busier town than a test network has, to judge the look. */
-function demoTown(d: TownData): TownData {
-  if (!devMode || !/town-demo/.test(location.search)) return d;
-  const houses = Array.from({ length: 90 }, (_, i) => ({ lot: i * 2 + (i % 3), storeys: 1 + (i % 3), size: (i * 7) % 4, lit: (i * 5) % 3, low: i % 13 === 0 }));
-  const mine = d.houses.find((h) => h.lot === d.mine);
-  return { ...d, houses: [...houses.filter((h) => h.lot !== d.mine), ...(mine ? [mine] : [])].sort((a, b) => a.lot - b.lot), homes: 82, people: 95, channels: d.channels.map((c, i) => ({ ...c, online: (i * 3) % 5, messages24h: c.messages24h + i * 12 })), postTopics: ["general", "study", "crypto", "help", "careers"], postsLive: 5, rains24h: 1, lastRain: Date.now() - 600e3, hikers: 3, listings: 4, off: [],
-    building: [33, 61, 120, 181], notebooks: 140, spawned24h: 2, spawned7d: 6, newcomers7d: 7, cycles: 412e12, burnPerDay: 1.9e12, fundraisersOpen: 2, raisedE8s: 3_450_000_000, campers: 9 };
+/** The houses, fetched again only when the registry has counted them again (up to 20,000 of them). */
+let townHouses: { at: bigint; houses: TownHouse[] } | undefined;
+async function fetchTown(): Promise<TownData | null> {
+  try {
+    const r = await registry().town();
+    if (r.__kind__ !== "Ok") return null;
+    if (townHouses?.at !== r.Ok.at) {
+      const h = await registry().town_houses();
+      if (h.__kind__ === "Ok") townHouses = { at: r.Ok.at, houses: h.Ok.map((x) => ({ lot: x.lot, storeys: x.storeys, size: x.size, lit: x.lit, low: x.low })) };
+    }
+    return demoTown(townData(r.Ok, townHouses?.houses ?? []));
+  } catch {
+    return null;
+  }
 }
+/** Local development with ?town-demo (or ?town-demo=20000): a busier town than a test network has. */
+let demoHouses: TownHouse[] | undefined;
+function demoTown(d: TownData): TownData {
+  const m = devMode ? /town-demo(?:=(\d+))?/.exec(location.search) : null;
+  if (!m) return d;
+  const n = Math.min(20_000, Number(m[1] ?? 90));
+  // lots with gaps, as quiet owners and deleted notebooks leave them
+  demoHouses ??= Array.from({ length: n }, (_, i) => ({ lot: i + Math.floor(i / 7) + (i % 3 === 0 ? 1 : 0), storeys: 1 + (i % 3), size: (i * 7) % 4, lit: (i * 5) % 3, low: i % 13 === 0 })).filter((h, i, a) => i === 0 || h.lot !== a[i - 1].lot);
+  const mine = d.houses.find((h) => h.lot === d.mine);
+  const houses = mine && !demoHouses.some((h) => h.lot === mine.lot) ? [...demoHouses, mine].sort((a, b) => a.lot - b.lot) : demoHouses;
+  return { ...d, houses, homes: houses.length, people: Math.round(houses.length * 1.15), channels: d.channels.map((c, i) => ({ ...c, online: (i * 3) % 5, messages24h: c.messages24h + i * 12 })), postTopics: ["general", "study", "crypto", "help", "careers"], postsLive: 5, rains24h: 1, lastRain: Date.now() - 600e3, hikers: 3, listings: 4, off: [],
+    building: [33, 61, 120, 181], notebooks: Math.round(houses.length * 1.6), spawned24h: 2, spawned7d: 6, newcomers7d: 7, cycles: 412e12, burnPerDay: 1.9e12, fundraisersOpen: 2, raisedE8s: 3_450_000_000, campers: 9 };
+}
+/** Whether a fresh look at the town changed anything (the houses compared by identity: they are big). */
+const sameTown = (a: TownData, b: TownData) => a.houses === b.houses && JSON.stringify({ ...a, houses: 0, lastRain: 0 }) === JSON.stringify({ ...b, houses: 0, lastRain: 0 });
 let townTimer = 0;
 async function loadTown() {
   if (!flag("town")) { location.hash = "#/"; return; }
@@ -3039,7 +3060,7 @@ async function loadTown() {
     const d = await fetchTown();
     if (S.town !== t) return;
     if (!d) { if (!t.data) { toast("The town is closed right now.", "info"); location.hash = "#/"; } return; }
-    const same = !!t.data && JSON.stringify(d) === JSON.stringify(t.data);
+    const same = !!t.data && sameTown(d, t.data);
     t.data = d;
     // the canvas keeps focus and its tooltip when only the numbers moved: hand it the new data
     if (same) return;

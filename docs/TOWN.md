@@ -69,16 +69,24 @@ shows nothing new, but puts it in one call; don't market it as anonymous. Trips 
 
 - A heap cache refreshed every 6 hours (10 s after an upgrade; when the flag is switched on): every notebook's
   `usage()` and `canister_status` (cycles, idle burn a day), 50 at a time; houses grouped by owner and bucketed by
-  `house_of`, capped at 600 (most lit first); fundraisers from chat messages.
-- `town()` query computes the rest live: per-channel online and 24-hour messages, posts, listings, rains, trips,
-  building sites (notebooks made in 3 days → their owners' lots), notebooks made in 24 h and 7 days, newcomers.
+  `house_of`, capped at 20,000 (most lit first); fundraisers from chat messages.
+- Every 5 minutes (and when a notebook is made) a quick count of the notebooks list: building sites (notebooks made
+  in 3 days → their owners' lots), notebooks made in 24 h and 7 days, everyone's lot, campers, newcomers.
+- `town()` reads those and computes the rest live and cheaply: per-channel online and 24-hour messages, posts,
+  listings, rains, trips. The houses (up to 20,000, about 180 KB) come from `town_houses()`, which the app fetches
+  again only when `Town.at` changes.
 - Flag `town`, on by default; off, `town()` answers an error and the landing hides the preview.
 
 ## Frontend (`frontend/src/town.ts`)
 
 - `layoutTown` is pure and tested (`town.test.ts`): the island's cells (void, land, water, road, bridge), blocks
   along a square spiral from ring 2, lots of 2×2 tiles, the civic centre, fillers and woods from a hash.
-- The renderer draws the ground from cached paths, then every object back to front, ~30 fps, paused while hidden or
-  scrolled away; reduced motion draws still frames.
+- The island is cut into 14×14-tile chunks (two blocks, so nothing crosses one), each with its own ground paths,
+  objects and hit boxes. Close up (zoom ≥ 1) the visible chunks are drawn directly, animated. Further out each chunk
+  is drawn once into an image at half-octave zooms (simpler trees, no windows below half size) and reused; only the
+  lively buildings (fountain, factory, launchpad, hall, chapel, water tower, exchange, campfire), chimney smoke and
+  people are drawn live on top. Images are made for ~14 ms a frame and kept to ~40 million pixels, least recently
+  seen dropped first. A 20,000-home island holds 120 fps in the browser at every zoom. ~30 fps, paused while hidden
+  or scrolled away; reduced motion draws still frames. `?town-demo=20000` (local only) builds a test town that size.
 - `#/town` (signed in or out): HUD cards, a toolbar (zoom, whole island, my home, legend, day or night), tooltips that
   link to the community, board, market or your notebooks. The landing page shows a slice of it drifting.
