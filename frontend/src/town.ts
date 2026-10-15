@@ -23,7 +23,7 @@ export type Target =
   | { kind: "fountain" } | { kind: "board" } | { kind: "market" } | { kind: "factory" } | { kind: "school" } | { kind: "chapel" } | { kind: "tower" }
   | { kind: "park" } | { kind: "trail" } | { kind: "lake" } | { kind: "walker"; channel: string; me: boolean }
   | { kind: "landmark"; landmark: Landmark } | { kind: "district"; district: District } | { kind: "station" } | { kind: "visitor"; mine: boolean };
-type Kind = "station" | "canopy" | "buffer" | "trestle" | "news" | "datacentre" | "credentials" | "bank" | "exchange" | "capitol" | "statue" | "launchpad" | "office" | "sign" | "house" | "plot" | "garden" | "tree" | "pine" | "poplar" | "bush" | "rock" | "hall" | "stall" | "fountain" | "gazebo" | "market" | "crate" | "factory" | "school" | "chapel" | "tower" | "bench" | "lantern" | "bridge" | "reeds";
+type Kind = "fence" | "station" | "canopy" | "buffer" | "trestle" | "news" | "datacentre" | "credentials" | "bank" | "exchange" | "capitol" | "statue" | "launchpad" | "office" | "sign" | "house" | "plot" | "garden" | "tree" | "pine" | "poplar" | "bush" | "rock" | "hall" | "stall" | "fountain" | "gazebo" | "market" | "crate" | "factory" | "school" | "chapel" | "tower" | "bench" | "lantern" | "bridge" | "reeds";
 export type Obj = { k: Kind; x: number; y: number; w: number; d: number; s: number; tg?: Target; h?: TownHouse; face?: "x" | "y" | ""; ch?: TownChan; mine?: boolean; building?: boolean };
 /** Ground cells: nothing (beyond the shore), land, water, road, a bridge over water, railway. */
 // ---------------------------------------------------------------- districts and landmarks
@@ -34,7 +34,7 @@ export type Obj = { k: Kind; x: number; y: number; w: number; d: number; s: numb
 export type Landmark = { id: string; kind: "bank" | "exchange" | "capitol" | "statue" | "launchpad" | "news" | "datacentre" | "credentials" | "office"; title: string; blurb: string; url: string; block: [number, number]; at: [number, number, number, number]; color?: string };
 /** A district: blocks set aside (homes are never built there) for landmarks of a kind; the room
  *  left over is for the next ones. */
-export type District = { id: string; name: string; blurb: string; blocks: [number, number][]; landmarks: Landmark[] };
+export type District = { id: string; name: string; blurb: string; blocks: [number, number][]; landmarks: Landmark[]; outskirts?: boolean };
 export const DISTRICTS: District[] = [
   {
     // beside the park and the Square, on the right
@@ -62,10 +62,11 @@ export const DISTRICTS: District[] = [
     ],
   },
   {
-    // the front left corner, toward the lake
-    id: "spaceport", name: "The spaceport", blurb: "Launchpads for what is next on the Internet Computer.", blocks: [[-2, 2]],
+    // out on the coast beyond the last streets, fenced, launching over the sea: rockets are no
+    // neighbours for homes. Its landmarks' `at` counts from the corner of the site, not a block.
+    id: "spaceport", name: "The spaceport", blurb: "Launchpads for what is next on the Internet Computer, out on the coast where it is safe.", blocks: [], outskirts: true,
     landmarks: [
-      { id: "soon", kind: "launchpad", title: "SOON launchpad", blurb: "A launchpad on the Internet Computer. Watch for the next launch.", url: "https://soonlaunchpad.fun/", block: [-2, 2], at: [0.5, 0.5, 5, 5] },
+      { id: "soon", kind: "launchpad", title: "SOON launchpad", blurb: "A launchpad on the Internet Computer. Watch for the next launch.", url: "https://soonlaunchpad.fun/", block: [0, 0], at: [0.5, 0.5, 5, 5] },
     ],
   },
 ];
@@ -155,6 +156,15 @@ export function layoutTown(t: TownData): Plan {
     const bank = Math.hypot(x + 0.5 - lake[0], (y + 0.5 - lake[1]) * 1.15) < r + 2 || Math.abs(x + 0.5 - riverX(y + 0.5)) < 3;
     if (inLake || inRiver) set(x, y, WATER); else if (bank && get(x, y) === VOID && x < tlo) set(x, y, LAND);
   }
+  // the outskirts, beyond the last streets and away from homes: the spaceport on the back right coast,
+  // the works (the notebook factory) in the front right corner by the railway
+  const space: [number, number] = [thi + 4, tlo + 4], works: [number, number] = [thi + 2, thi + 1];
+  // their ground: rounded and uneven, so the coast bulges round them rather than jutting out in squares;
+  // and a strip along the front for the railway from the station to the works
+  const bulge = (cx: number, cy: number, r: number) => { for (let x = Math.floor(cx - r - 2); x <= cx + r + 2; x++) for (let y = Math.floor(cy - r - 2); y <= cy + r + 2; y++) { const a = Math.atan2(y - cy, x - cx); if (Math.hypot(x + 0.5 - cx, y + 0.5 - cy) < r * (0.92 + 0.12 * Math.sin(3 * a + cx) + 0.06 * Math.sin(7 * a)) && get(x, y) === VOID) set(x, y, LAND); } };
+  bulge(space[0] + 3, space[1] + 3, 6.5);
+  bulge(works[0] + 3.5, works[1] + 2.5, 6);
+  for (let x = -1; x <= works[0] + 8; x++) { const deep = thi + 7 + Math.round(1.2 * Math.sin(x * 0.45) + 0.8 * Math.sin(x * 1.3)); for (let y = thi + 1; y <= deep; y++) if (get(x, y) === VOID) set(x, y, LAND); }
   // no lakes of nothing inside the island: anything the sea can't reach from the edge is land
   const sea = new Uint8Array(n * n), stack: number[] = [];
   for (let i = 0; i < n; i++) for (const j of [i, (n - 1) * n + i, i * n, i * n + n - 1]) if (!cells[j] && !sea[j]) { sea[j] = 1; stack.push(j); }
@@ -165,7 +175,6 @@ export function layoutTown(t: TownData): Plan {
   for (let j = 0; j < n * n; j++) if (!cells[j] && !sea[j]) cells[j] = LAND;
   // the railway runs across the front of the island, the station by the town gate
   const TY = thi + 5;
-  for (let x = -1; x <= 16; x++) for (let y = thi + 1; y <= TY + 2; y++) if (get(x, y) === VOID) set(x, y, LAND);
   let rx0 = 7, rx1 = 7;
   while (get(rx0 - 1, TY) !== VOID && rx0 - 1 > lo + 1) rx0--;
   while (get(rx1 + 1, TY) !== VOID && rx1 + 1 < hi - 1) rx1++;
@@ -176,6 +185,10 @@ export function layoutTown(t: TownData): Plan {
   for (let x = tlo - 1; x >= lo; x--) { const v = get(x, 7); if (v === VOID) break; set(x, 7, v === WATER ? BRIDGE : ROAD); }
   // the streets: around every block of the town
   for (const [bx, by] of blocks) for (let i = 0; i <= 7; i++) for (const [x, y] of [[7 * bx + i, 7 * by], [7 * bx + i, 7 * by + 7], [7 * bx, 7 * by + i], [7 * bx + 7, 7 * by + i]]) set(x, y, ROAD);
+  // access roads from the outskirts to the nearest street: along the street rows, so they cross no lots
+  const access = (x: number, y: number) => { for (; x >= tlo - 1 && get(x, y) !== ROAD; x--) if (get(x, y) === LAND) set(x, y, ROAD); };
+  access(space[0] - 1, space[1] + 3);
+  access(works[0] + 5, thi);
   const inBlock = new Set<string>();
   for (const [bx, by] of blocks) for (let x = 1; x <= 6; x++) for (let y = 1; y <= 6; y++) inBlock.add(`${7 * bx + x},${7 * by + y}`);
 
@@ -213,7 +226,14 @@ export function layoutTown(t: TownData): Plan {
   // the districts: their landmarks, a sign, and room for more
   for (const dist of DISTRICTS) {
     for (const [bx, by] of dist.blocks) paving.push([7 * bx + 1, 7 * by + 1, 6, 6]);
-    for (const lm of dist.landmarks) { const [ox, oy, w, d] = lm.at; put({ k: lm.kind, x: 7 * lm.block[0] + 1 + ox, y: 7 * lm.block[1] + 1 + oy, w, d, s: hashOf(lm.id), tg: { kind: "landmark", landmark: lm } }); }
+    const origin = (lm: Landmark): [number, number] => (dist.outskirts ? space : [7 * lm.block[0] + 1, 7 * lm.block[1] + 1]);
+    for (const lm of dist.landmarks) { const [ox, oy, w, d] = lm.at, [x0, y0] = origin(lm); put({ k: lm.kind, x: x0 + ox, y: y0 + oy, w, d, s: hashOf(lm.id), tg: { kind: "landmark", landmark: lm } }); }
+    if (dist.outskirts) {
+      // a fence around the site (open where the road comes in) and its name at the gate
+      paving.push([space[0], space[1], 6, 6]);
+      put({ k: "fence", x: space[0] - 0.3, y: space[1] - 0.3, w: 6.6, d: 6.6, s: 0 });
+      put({ k: "sign", x: space[0] - 0.8, y: space[1] + 4.2, w: 0.3, d: 0.1, s: 1, tg: { kind: "district", district: dist } });
+    }
     // every 3×3 corner of a district block nobody holds yet: grass and a tree or two (the first one
     // carries the district's name)
     let named = false;
@@ -226,7 +246,7 @@ export function layoutTown(t: TownData): Plan {
       named = true;
     }
     // a district with no room left: its name at the front corner of its first block
-    if (!named) { const [bx, by] = dist.blocks[0]; put({ k: "sign", x: 7 * bx + 5.9, y: 7 * by + 6.2, w: 0.3, d: 0.1, s: 1, tg: { kind: "district", district: dist } }); }
+    if (!named && dist.blocks.length) { const [bx, by] = dist.blocks[0]; put({ k: "sign", x: 7 * bx + 5.9, y: 7 * by + 6.2, w: 0.3, d: 0.1, s: 1, tg: { kind: "district", district: dist } }); }
   }
   // the civic centre: the town hall
   paving.push([1, 1, 6, 6]);
@@ -256,10 +276,16 @@ export function layoutTown(t: TownData): Plan {
     for (const [x, y] of [[8.6, -1.4], [12.8, -1.6], [13, -5.4], [10.6, -1.0]]) tree(x, y, `mk${x}${y}`);
     put({ k: "bench", x: 10.3, y: -2.6, w: 1, d: 0.35, s: 0 });
   }
-  // the notebook works (back): the registry, where every notebook is made; a crate for each this week
-  paving.push([-6, -6, 6, 6]);
-  put({ k: "factory", x: -5.6, y: -5.6, w: 4.4, d: 2.8, s: 0, tg: { kind: "factory" } });
-  for (let i = 0; i < Math.min(10, t.spawned7d); i++) put({ k: "crate", x: -5.4 + (i % 5) * 0.85, y: -1.9 + Math.floor(i / 5) * 0.75, w: 0.5, d: 0.5, s: i + 20 });
+  // the notebook works, out in the front right corner by the railway: the registry, where every notebook is
+  // made, a crate in its yard for each this week, ready to go out by train
+  paving.push([works[0] - 0.3, works[1] - 0.3, 6.6, 3.9]);
+  put({ k: "factory", x: works[0], y: works[1], w: 4.4, d: 2.8, s: 0, tg: { kind: "factory" } });
+  for (let i = 0; i < Math.min(10, t.spawned7d); i++) put({ k: "crate", x: works[0] + 4.7 + (i % 2) * 0.7, y: works[1] + 0.2 + Math.floor(i / 2) * 0.62, w: 0.5, d: 0.5, s: i + 20 });
+  // where the works stood, behind the town hall: the town green, a pond under trees, benches
+  water.push([-5.3, -5.2, 3.2, 2.6]);
+  for (const [x, y] of [[-5.6, -1.6], [-1.6, -5.6], [-1.4, -1.4], [-3.6, -1.2], [-1.2, -3.4]]) tree(x, y, `gr${x}${y}`, "tree");
+  put({ k: "bench", x: -4.6, y: -2.2, w: 1, d: 0.35, s: 0, tg: { kind: "park" } });
+  put({ k: "bench", x: -2.4, y: -4.4, w: 0.35, d: 1, s: 0 });
   // the school (back left), its yard full of this week's newcomers
   put({ k: "school", x: -5.6, y: 1.4, w: 3.8, d: 2.0, s: 0, tg: { kind: "school" } });
   paving.push([-6, 4, 5, 2.6]);
@@ -283,6 +309,8 @@ export function layoutTown(t: TownData): Plan {
   // the station: a platform along the track where visitors wait (people who signed in this month and
   // have no notebook yet; yours first), a station house, tunnel mouths at both ends, a trestle over the river
   const camp = new Set<string>();
+  for (let x = space[0] - 1; x <= space[0] + 7; x++) for (let y = space[1] - 1; y <= space[1] + 7; y++) camp.add(`${x},${y}`);
+  for (let x = works[0] - 1; x <= works[0] + 7; x++) for (let y = works[1] - 1; y <= works[1] + 4; y++) camp.add(`${x},${y}`);
   for (let x = 0; x <= 15; x++) for (let y = TY - 3; y <= TY - 1; y++) camp.add(`${x},${y}`);
   paving.push([0.6, TY - 1, 14, 0.9]);
   put({ k: "station", x: 8.4, y: TY - 3, w: 4.2, d: 1.7, s: 0, tg: { kind: "station" } });
@@ -850,6 +878,21 @@ function drawObj(o: Obj, t: number) {
       const { x, y, w, d } = o, roof = night ? "#3c4252" : "#9aa3b5";
       ctx.beginPath(); for (let i = 0; i <= 4; i++) { const u = x + 0.15 + (i * (w - 0.3)) / 4, a = P(u, y + d * 0.5, 0), b = P(u, y + d * 0.5, 11); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); } ctx.stroke();
       box(x, y - 0.1, w, d + 0.2, 1.5, shade(toHex(roof), 0.05), shade(toHex(roof), 0.15), roof, 11);
+      return;
+    }
+    case "fence": {
+      // a chain-link fence round the site: posts and two wires, open where the road comes in
+      const { x, y, w, d } = o, gate = y + 3.3;
+      ctx.save(); ctx.strokeStyle = night ? "#8a93a8" : "#9aa3b5"; ctx.lineWidth = line * 0.9;
+      const run = (a: [number, number], b: [number, number]) => {
+        const len = Math.hypot(b[0] - a[0], b[1] - a[1]), n = Math.max(1, Math.round(len / 0.7));
+        ctx.beginPath();
+        for (let i = 0; i <= n; i++) { const u = i / n, px = a[0] + (b[0] - a[0]) * u, py = a[1] + (b[1] - a[1]) * u, q0 = P(px, py, 0), q1 = P(px, py, 6); ctx.moveTo(q0[0], q0[1]); ctx.lineTo(q1[0], q1[1]); }
+        for (const z of [2.5, 6]) { const q0 = P(a[0], a[1], z), q1 = P(b[0], b[1], z); ctx.moveTo(q0[0], q0[1]); ctx.lineTo(q1[0], q1[1]); }
+        ctx.stroke();
+      };
+      run([x, y], [x + w, y]); run([x + w, y], [x + w, y + d]); run([x, y + d], [x + w, y + d]); run([x, y], [x, gate - 0.9]); run([x, gate + 0.9], [x, y + d]);
+      ctx.restore();
       return;
     }
     case "buffer": {

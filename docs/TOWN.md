@@ -25,7 +25,7 @@ days) get no house; the town hall counts their plots.
 | Front | The Square: a fountain, a stall per chat channel | online now and messages in 24 h per channel; rains (the fountain runs; frozen when rain is off) |
 | Left | The board's pavilion, a paper per live post | live posts, new in 24 h |
 | Right | Market hall, a crate per listing (a park while the market is off) | listings |
-| Back | The notebook works: sawtooth roof, two stacks | notebooks made (total, 7 days, 24 hours: smoke) |
+| Back | The town green: a pond under trees, benches | — |
 | Back left | The school, its yard of newcomers | members who joined in 7 days |
 | Back right | The chapel: rose window, steeple, bell | open fundraisers (the bell swings), ICP raised |
 | Front right | Park, pond and the water tower | cycles all notebooks hold and burn a day; level = days left / 365 |
@@ -39,12 +39,17 @@ the rest of the Internet Computer. Homes skip them (`homeBlock` is the spiral wi
 | The financial district (right, by the park) | (2,0), (2,1) | OISY Wallet (a bank), ICPSwap (an exchange) |
 | The ICP quarter (left) | (−2,−1), (−2,0) | The NNS (a capitol), Dominic Williams (a statue), DFINITY on X (a news station) |
 | Embassy row (front, by the station) | (0,2) | The Pakistan Subnet (a data centre), UNDP · Universal Trusted Credentials (an office and small shops) |
-| The spaceport (front left, by the lake) | (−2,2) | SOON launchpad (a rocket that launches every two minutes) |
+| The spaceport (outskirts: the back right coast, fenced) | none: a site 4 tiles beyond the town's edge | SOON launchpad (a rocket that launches every two minutes) |
 
 To add a landmark, add an entry to its district: an id, a `kind`, a title, a blurb, a URL, its block and `at`
 ([x, y, w, d] in tiles from the block's corner). The `office` kind is a plain building in the landmark's `color`, so
 a new one needs no drawing code. A new district is a name, a blurb and blocks; pick blocks before the town reaches
 them, or homes there would move.
+
+**The outskirts**, beyond the last streets and away from homes (both move outward as the town grows): the spaceport
+on the back right coast, fenced, and the notebook works (the factory: sawtooth roof, two stacks, smoke when a notebook
+was made today, a crate per notebook this week) in the front right corner by the railway. Each gets rounded ground and
+one access road along a street row, so it crosses no lots.
 
 **The island**: the town's blocks, then an uneven belt of country (woods thinning to the shore, a lake, a river from
 the back of the island through the lake and off the front edge in a waterfall, a road out of town over a bridge).

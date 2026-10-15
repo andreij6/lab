@@ -87,7 +87,7 @@ test("town: districts hold their landmarks, and homes are never built there", ()
   for (const o of pl.objs.filter((o) => o.k === "house")) assert.ok(!held.has([Math.floor((o.x - 1) / 7), Math.floor((o.y - 1) / 7)].join()), `a home in a district at ${o.x},${o.y}`);
   // every district is named on a sign
   assert.deepEqual(new Set(pl.objs.filter((o) => o.k === "sign" && o.s === 1).map((o) => (o.tg as { district: { id: string } }).district.id)), new Set(DISTRICTS.map((d) => d.id)));
-  for (const d of DISTRICTS) for (const l of d.landmarks) assert.ok(d.blocks.some((b) => b.join() === l.block.join()), `${l.id} sits in its district`);
+  for (const d of DISTRICTS) if (!d.outskirts) for (const l of d.landmarks) assert.ok(d.blocks.some((b) => b.join() === l.block.join()), `${l.id} sits in its district`);
 });
 
 test("town: a railway across the front of the island, a station by the town gate", () => {
@@ -105,9 +105,25 @@ test("town: a railway across the front of the island, a station by the town gate
 });
 
 test("town: the districts are spread out, not side by side", () => {
-  const firsts = DISTRICTS.map((d) => d.blocks[0]);
-  for (let i = 0; i < firsts.length; i++) for (let j = i + 1; j < firsts.length; j++) assert.ok(Math.max(Math.abs(firsts[i][0] - firsts[j][0]), Math.abs(firsts[i][1] - firsts[j][1])) >= 2, `${DISTRICTS[i].id} beside ${DISTRICTS[j].id}`);
+  const firsts = DISTRICTS.filter((d) => d.blocks.length).map((d) => d.blocks[0]);
+  for (let i = 0; i < firsts.length; i++) for (let j = i + 1; j < firsts.length; j++) assert.ok(Math.max(Math.abs(firsts[i][0] - firsts[j][0]), Math.abs(firsts[i][1] - firsts[j][1])) >= 2, `districts ${i} and ${j} side by side`);
   assert.ok(!layoutTown(town([house(1)])).objs.some((o) => o.k === "sign" && o.s !== 1), "no room-for-more signs");
+});
+
+test("town: the spaceport and the factory stand out beyond the homes, each with a road in", () => {
+  for (const n of [1, 300, 1200]) {
+    const pl = layoutTown(town(Array.from({ length: n }, (_, i) => house(i))));
+    const homes = pl.objs.filter((o) => o.k === "house");
+    for (const k of ["launchpad", "factory"] as const) {
+      const site = pl.objs.find((o) => o.k === k)!, cx = site.x + site.w / 2, cy = site.y + site.d / 2;
+      const nearest = Math.min(...homes.map((h) => Math.hypot(h.x - cx, h.y - cy)));
+      assert.ok(nearest > 6, `${k} is ${nearest.toFixed(1)} tiles from a home (${n} homes)`);
+      for (let x = Math.floor(site.x); x < site.x + site.w; x++) for (let y = Math.floor(site.y); y < site.y + site.d; y++) assert.equal(cellAt(pl, x, y), LAND, `${k} on land at ${x},${y}`);
+      let road = false;
+      for (let x = Math.floor(site.x) - 2; x <= site.x + site.w + 2; x++) for (let y = Math.floor(site.y) - 2; y <= site.y + site.d + 2; y++) road ||= cellAt(pl, x, y) === ROAD;
+      assert.ok(road, `${k} has a road`);
+    }
+  }
 });
 
 test("town: new notebooks are building sites", () => {
