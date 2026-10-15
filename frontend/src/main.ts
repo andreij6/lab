@@ -4398,9 +4398,6 @@ function chatAside(): string {
     <div class="row tight" style="padding:0 8px"><button type="button" class="btn btn-ghost" data-action="chat-folders" data-all="1">Select all</button><button type="button" class="btn btn-ghost" data-action="chat-folders" data-all="0">None</button></div>
     <div class="chat-folders">${rows}</div>
     ${last ? `<div class="pane-title">Notes used last</div>${last.picks!.map((p) => `<div class="bl" data-action="open" data-path="${esc(p.path)}"><div class="t">${icon("file")}${esc(stem(p.path))}</div><div class="ctx">${esc(p.why.join(" · "))}</div></div>`).join("")}` : ""}
-    <div class="pane-title">Model</div>
-    <div class="models">${MODELS.map((m) => `<label class="model ${chatModel().id === m.id ? "on" : ""}"><input type="radio" name="chatmodel" value="${m.id}" ${chatModel().id === m.id ? "checked" : ""}><span class="tier t-${m.tier.toLowerCase()}">${m.tier}</span><b>${esc(m.name)}</b><span class="small muted">${m.paid ? "≈0.1 TC a question" : "free"}</span></label>`).join("")}</div>
-    <div class="empty-side">${LLM_LOCAL ? "Local development: your Ollama answers whichever you pick, through the stand-in canister." : esc(chatModel().note)}${chatModel().paid ? " The notebook refuses a paid model under 0.4 TC and falls back to the free one if it does not answer." : ""}</div>
     <div class="pane-title">How it works</div><div class="empty-side">1. A quick System 1 pass in your browser scores every note in the ticked folders on title, tags and word overlap and keeps the best few. 2. Their excerpts go to the Internet Computer's LLM canister, which answers from them first and cites each claim with a number you can click; whatever the notes do not cover it answers from its own knowledge, labelled "Beyond your notes". Save any answer as a note in the folder you pick. Excerpts leave your notebook for the LLM workers, so keep secrets out of the ticked folders.</div>
     ${S.chat.messages.length ? `<div style="padding:8px"><button type="button" class="btn btn-ghost" data-action="chat-clear">${icon("trash")}Clear chat</button></div>` : ""}`;
 }
@@ -7989,7 +7986,6 @@ document.addEventListener("input", (ev) => {
       break;
     case "paytoken": S.payToken = v; store("nb-pay-token", v); break;
     case "progress": if (S.shared) { const st = Number(v); S.shared.myProgress = st; void notebookOf(S.shared.canister).set_progress(S.shared.path, st).then(() => toast(st ? "Progress saved for the group." : "Mark cleared.", "ok")); } break;
-    case "chatmodel": store("nb-chat-model", v); render(); break;
     case "chattext": if (S.community) { S.community.draft = v; el.style.height = "auto"; el.style.height = `${Math.min(el.scrollHeight, 160)}px`; } break;
     case "chatq": S.chat.input = v; el.style.height = "auto"; el.style.height = `${Math.min(el.scrollHeight, 200)}px`; break;
     case "chatfolder": {
