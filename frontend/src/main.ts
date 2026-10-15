@@ -5008,10 +5008,21 @@ function toggleHighlight() {
 }
 
 function toggleSide(which: "side" | "aside") {
-  if (S.board) { const b = S.board; if (which === "side") { b.showSide = !b.showSide; store("nb-board-side", b.showSide ? "1" : "0"); } else { b.showAside = !b.showAside; store("nb-board-aside", b.showAside ? "1" : "0"); } return render(); }
-  if (S.community) { const c = S.community; if (which === "side") { c.showChannels = !c.showChannels; store("nb-chat-side", c.showChannels ? "1" : "0"); } else { c.showOnline = !c.showOnline; store("nb-chat-aside", c.showOnline ? "1" : "0"); } return render(); }
-  if (which === "side") { S.sideOpen = !S.sideOpen; store("nb-side", S.sideOpen ? "1" : "0"); } else { S.asideOpen = !S.asideOpen; store("nb-aside", S.asideOpen ? "1" : "0"); }
+  const ws = () => document.querySelector<HTMLElement>(".shell:not(.is-mobile) .workspace");
+  const from = ws() ? getComputedStyle(ws()!).gridTemplateColumns : "";
+  if (S.board) { const b = S.board; if (which === "side") { b.showSide = !b.showSide; store("nb-board-side", b.showSide ? "1" : "0"); } else { b.showAside = !b.showAside; store("nb-board-aside", b.showAside ? "1" : "0"); } }
+  else if (S.community) { const c = S.community; if (which === "side") { c.showChannels = !c.showChannels; store("nb-chat-side", c.showChannels ? "1" : "0"); } else { c.showOnline = !c.showOnline; store("nb-chat-aside", c.showOnline ? "1" : "0"); } }
+  else if (which === "side") { S.sideOpen = !S.sideOpen; store("nb-side", S.sideOpen ? "1" : "0"); } else { S.asideOpen = !S.asideOpen; store("nb-aside", S.asideOpen ? "1" : "0"); }
   render();
+  // the render swapped the DOM, so slide the columns from where they were (the closing panel stays drawn until it is gone)
+  const w = ws(), panel = w?.querySelector<HTMLElement>(`:scope > .${which}`);
+  if (!w || !from || !panel || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const opening = !w.classList.contains(which === "side" ? "no-side" : "no-aside");
+  w.classList.add("sliding");
+  const to = getComputedStyle(w).gridTemplateColumns, o = { duration: 260, easing: "cubic-bezier(.2,.8,.2,1)" };
+  const done = () => w.classList.remove("sliding");
+  w.animate([{ gridTemplateColumns: from }, { gridTemplateColumns: to }], o).finished.then(done, done);
+  panel.animate([{ opacity: opening ? 0 : 1 }, { opacity: opening ? 1 : 0 }], o);
 }
 
 function cycleView(paneId?: number) {
