@@ -12,7 +12,7 @@
 // Only one sky animates at a time (~30 fps, paused while the page is hidden); people who ask for
 // reduced motion get still frames. Low contrast under text, in light and dark themes.
 
-type RGB = [number, number, number];
+export type RGB = [number, number, number];
 type Star = { x: number; y: number; vx: number; vy: number; z: number; r: number; tw: number; ph: number; ax?: number; ay?: number };
 type Pulse = { from: number; at: number; edges: [number, number, number][] };
 export type SkyGraph = { nodes: { id: string; label: string; degree: number }[]; edges: { source: string; target: string }[] };
@@ -31,8 +31,8 @@ export const KIT_SKIES: Record<string, [string, string]> = {
   crypto: ["#f5c542", "#34d399"], money: ["#34d399", "#a3e635"], creator: ["#f472b6", "#fb923c"], fitness: ["#fb7185", "#fbbf24"],
   home: ["#fbbf24", "#2dd4bf"], trips: ["#4ade80", "#38bdf8"],
 };
-const hex = (h: string): RGB => { const m = /^#?([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i.exec(h.trim()); return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : [110, 124, 255]; };
-const hashOf = (s: string) => { let h = 2166136261; for (const c of s) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return h >>> 0; };
+export const hex = (h: string): RGB => { const m = /^#?([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i.exec(h.trim()); return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : [110, 124, 255]; };
+export const hashOf = (s: string) => { let h = 2166136261; for (const c of s) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return h >>> 0; };
 const hsl = (h: number, s: number, l: number): RGB => { const k = (n: number) => (n + h / 30) % 12, a = s * Math.min(l, 1 - l); const f = (n: number) => l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1)); return [f(0) * 255, f(8) * 255, f(4) * 255]; };
 /** The two aurora colours of `channel`, known or derived from its name. */
 export function skyColours(channel: string): [RGB, RGB] {
@@ -41,10 +41,10 @@ export function skyColours(channel: string): [RGB, RGB] {
   const h = hashOf(channel) % 360;
   return [hsl(h, 0.75, 0.62), hsl((h + 55) % 360, 0.75, 0.6)];
 }
-const mix = (a: RGB, b: RGB, t: number): RGB => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
-const rgba = (c: RGB, a: number) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${Math.max(0, Math.min(1, a)).toFixed(3)})`;
-const rng = (seed: number) => { let r = seed | 1; return () => ((r = Math.imul(r ^ (r >>> 15), 2246822519) ^ Math.imul(r ^ (r >>> 13), 3266489917)) >>> 0) / 4294967296; };
-const still = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+export const mix = (a: RGB, b: RGB, t: number): RGB => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+export const rgba = (c: RGB, a: number) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${Math.max(0, Math.min(1, a)).toFixed(3)})`;
+export const rng = (seed: number) => { let r = seed | 1; return () => ((r = Math.imul(r ^ (r >>> 15), 2246822519) ^ Math.imul(r ^ (r >>> 13), 3266489917)) >>> 0) / 4294967296; };
+export const still = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 /** A notes graph laid out in the unit square: repulsion between every pair, springs along links,
  *  a pull to the centre. Positions from `prev` stay put (a new note settles near its links). */
@@ -291,7 +291,7 @@ function cssRgb(css: string): RGB | undefined {
   return [d[0], d[1], d[2]];
 }
 const accentCache = new Map<string, RGB>();
-const accentOf = (css: string) => { if (!accentCache.has(css)) accentCache.set(css, cssRgb(css) ?? hex("#6d7cff")); return accentCache.get(css)!; };
+export const accentOf = (css: string) => { if (!accentCache.has(css)) accentCache.set(css, cssRgb(css) ?? hex("#6d7cff")); return accentCache.get(css)!; };
 
 /** Put the sky on `canvas` (again after a re-render: the stars and waves carry on). Chat: `key` is
  *  the channel and `online` the principals there. Notes: `key` is the notebook and `graph` its notes;

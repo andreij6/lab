@@ -6,7 +6,7 @@ import { Actor, HttpAgent, type Identity } from "@icp-sdk/core/agent";
 import { safeGetCanisterEnv } from "@icp-sdk/core/agent/canister-env";
 import { IDL } from "@icp-sdk/core/candid";
 import { Ed25519KeyIdentity } from "@icp-sdk/core/identity";
-import { createActor as registryActor, type Rain, type Channel, type Member, type Message, type Post, type PostComment, type Flag, type Watch, type Online, type Attestation, type ListingView, type Token, type Health, type Bug, type BugStatus, type Registry, type Notebook as NotebookRec, type Submission, type SubmissionFull, type AgentView, type AppStats, type Review, type AgentProfile as JournalAgent, Status, Formal } from "./bindings/registry";
+import { createActor as registryActor, type Rain, type Channel, type Member, type Message, type Post, type PostComment, type Flag, type Watch, type Online, type Attestation, type ListingView, type Token, type Health, type Bug, type BugStatus, type Registry, type Town, type Notebook as NotebookRec, type Submission, type SubmissionFull, type AgentView, type AppStats, type Review, type AgentProfile as JournalAgent, Status, Formal } from "./bindings/registry";
 import { createActor as notebookActor, type AttestationView, type Attempt, Role, type DepositState, type AgentKey, type Comment, type Info, type Note, type Revision, type Share, type TopUp, type Notebook as NotebookApi, type NotebookError } from "./bindings/notebook";
 import type { SnapshotInfo } from "./bindings/registry";
 import { Principal } from "@icp-sdk/core/principal";
@@ -51,6 +51,7 @@ import { cacheDel, cacheGet, cacheSet, clearQueue, queueWrite, queued, type Queu
 import { registerSW } from "virtual:pwa-register";
 import { THEMES, applyTheme, loadThemeState, saveThemeState, type ThemeState } from "./themes";
 import { zip } from "./zip";
+import { attachTown, season, townCamera, type Target as TownTarget, type TownData } from "./town";
 
 // ---------- the cycles minting canister: today's ICP price in cycles ----------
 
@@ -256,6 +257,9 @@ const S = {
   flags: [] as Flag[],
   admin: undefined as { bugs: Bug[]; filter: string; kind?: string; open?: bigint; loading: boolean; repo?: string; stats?: AppStats; agents?: AgentView[] } | undefined,
   journal: undefined as JournalState | undefined,
+  town: undefined as { data?: TownData; legend: boolean } | undefined,
+  /** the landing page's town: null when it is switched off or did not load */
+  landingTown: undefined as TownData | null | undefined,
   /** agents that name the signed-in person as their operator */
   myAgents: undefined as JournalAgent[] | undefined,
   settings: parseSettings(undefined) as Settings,
@@ -434,6 +438,7 @@ const ICONS: Record<string, string> = {
   megaphone: '<path d="M3 11l16-6v14L3 13z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>',
   dumbbell: '<path d="M6.5 6.5v11M17.5 6.5v11M3.5 9.5v5M20.5 9.5v5M6.5 12h11"/>',
   house: '<path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/>',
+  town: '<path d="M3 20v-8l5-4 5 4v8"/><path d="M13 20V9l4-3 4 3v11"/><path d="M2 20h20"/><path d="M7 20v-3h2v3"/>',
   compass: '<circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/>',
   heart: '<path d="M12 20s-7.5-4.6-9.2-9.3A4.8 4.8 0 0 1 12 6.6a4.8 4.8 0 0 1 9.2 4.1C19.5 15.4 12 20 12 20z"/>',
   users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14a6.5 6.5 0 0 1 3.5 6"/>',
@@ -605,6 +610,7 @@ function skySync() {
 }
 function afterRender(root: ParentNode = document) {
   skySync();
+  townSync();
   const segOn = document.querySelector<HTMLElement>(".wsbar .segmented .tab[aria-selected=\"true\"]");
   if (segOn) segOn.parentElement!.scrollLeft = segOn.offsetLeft - segOn.parentElement!.clientWidth / 2 + segOn.offsetWidth / 2;
   const dark = S.theme.mode === "dark";
@@ -918,15 +924,20 @@ const moreBtn = () => `<button type="button" class="btn btn-ghost icon-btn" data
 /** Phones: the ⋯ button opens a full-screen list of every major route, the current one marked. */
 function routeSheet(el: HTMLElement) {
   const nbId = S.notebook?.canister.toText();
-  const inNb = !!S.notebook && !S.community && !S.board && !S.market && !S.admin;
+  const inNb = !!S.notebook && !S.community && !S.board && !S.market && !S.admin && !S.journal && !S.town;
   type R = { label: string; icon: string; on: boolean; go: () => void; sub?: boolean; hidden?: boolean };
   const tab = (t: Tab, label: string, ic: string): R => ({ label, icon: ic, sub: true, hidden: !featureOn(t), on: inNb && S.tab === t, go: () => { const i = document.createElement("i"); i.dataset.tab = t; if (!inNb) { S.community = undefined; S.board = undefined; S.market = undefined; S.admin = undefined; location.hash = `#/notebook/${nbId}`; } void onAction("tab", i, new MouseEvent("click")); } });
-  const routes: R[] = [
-    { label: "Your notebooks", icon: "list", on: !S.notebook && !S.community && !S.board && !S.market && !S.admin, go: () => { location.hash = "#/"; } },
+  const routes: R[] = !S.identity ? [
+    { label: "Lab", icon: "list", on: !S.journal && !S.town, go: () => { location.hash = "#/"; } },
+    ...(flag("town") ? [{ label: "Town", icon: "town", on: !!S.town, go: () => { location.hash = "#/town"; } } as R] : []),
+    ...(flag("journal") ? [{ label: "Journal", icon: "award", on: !!S.journal, go: () => { location.hash = "#/journal"; } } as R] : []),
+  ] : [
+    { label: "Your notebooks", icon: "list", on: !S.notebook && !S.community && !S.board && !S.market && !S.admin && !S.journal && !S.town, go: () => { location.hash = "#/"; } },
     ...(S.notebook ? [{ label: S.notebook.name, icon: "notebook", on: inNb && S.tab === "notes", go: () => { if (!inNb) location.hash = `#/notebook/${nbId}`; else { const i = document.createElement("i"); i.dataset.tab = "notes"; void onAction("tab", i, new MouseEvent("click")); } } } as R, ...FEATURES.map((f) => tab(f.id, f.label, f.icon)), tab("manage", "Manage", "cog")].filter((r) => !r.hidden) : []),
     { label: "Community", icon: "users", on: !!S.community, go: () => { location.hash = "#/community"; } },
     ...(flag("board") ? [{ label: "Board", icon: "pin", on: !!S.board, go: () => { location.hash = "#/board"; } } as R] : []),
     ...(flag("journal") ? [{ label: "Journal", icon: "award", on: !!S.journal, go: () => { location.hash = "#/journal"; } } as R] : []),
+    ...(flag("town") ? [{ label: "Town", icon: "town", on: !!S.town, go: () => { location.hash = "#/town"; } } as R] : []),
     ...(flag("market") ? [{ label: "Market", icon: "tag", on: !!S.market, go: () => { location.hash = "#/market"; } } as R] : []),
     ...(S.isAdmin ? [{ label: "Admin", icon: "bug", on: !!S.admin, go: () => { location.hash = "#/admin"; } } as R] : []),
   ];
@@ -934,7 +945,7 @@ function routeSheet(el: HTMLElement) {
     ...(inNb ? [{ label: "Search or open a note", icon: "search", on: false, go: () => openPalette() } as R] : []),
     { label: "Help and support", icon: "help", on: false, go: () => void onAction("help", el, new MouseEvent("click")) },
     ...(themeAllowed() ? [{ label: "Appearance", icon: "palette", on: false, go: () => void onAction("theme-menu", el, new MouseEvent("click")) } as R] : []),
-    { label: "Sign out", icon: "out", on: false, go: () => void onAction("sign-out", el, new MouseEvent("click")) },
+    ...(S.identity ? [{ label: "Sign out", icon: "out", on: false, go: () => void onAction("sign-out", el, new MouseEvent("click")) } as R] : [{ label: "Sign in", icon: "out", on: false, go: () => void onAction("sign-in", el, new MouseEvent("click")) } as R]),
   ];
   const sheet = document.createElement("div");
   sheet.className = "route-sheet";
@@ -965,14 +976,15 @@ function moreMenu(el: HTMLElement) {
   if (!S.market && flag("market")) items.push({ label: "Notebook market", icon: "tag", action: go("#/market") });
   if (!S.board) items.push({ label: "Board", icon: "pin", action: go("#/board") });
   if (!S.journal && flag("journal")) items.push({ label: "Journal", icon: "award", action: go("#/journal") });
+  if (!S.town && flag("town")) items.push({ label: "Town", icon: "town", action: go("#/town") });
   if (S.isAdmin && !S.admin) items.push({ label: "Admin · reports and ideas", icon: "bug", action: go("#/admin") });
   items.push("-", { label: "Help and support", icon: "help", action: () => void onAction("help", el, new MouseEvent("click")) }, ...(themeAllowed() ? [{ label: "Appearance", icon: "palette", action: () => void onAction("theme-menu", el, new MouseEvent("click")) } as MenuItem] : []), "-", { label: "Sign out", icon: "out", action: () => void onAction("sign-out", el, new MouseEvent("click")) });
   contextMenu(Math.max(8, r.right - 220), r.bottom + 4, "", items);
 }
 /** Where a page sits in the app: back to the open notebook and to the list (desktop; phones use the ⋯ menu). */
 /** The appearance can be changed on the notebook, chat and board pages only. */
-const themeAllowed = () => !!S.community || !!S.board || (!!S.notebook && !S.market && !S.admin && !S.shared);
-const themeBtn = () => S.mobile ? moreBtn() : `${S.community ? "" : `<a class="btn btn-ghost" href="#/community" data-action="nav" title="Community chat">${icon("users")}<span class="lbl">Community</span></a>`}${S.board || !flag("board") ? "" : `<a class="btn btn-ghost" href="#/board" data-action="nav" title="Posts and discussion">${icon("pin")}<span class="lbl">Board</span></a>`}${S.market || !flag("market") ? "" : `<a class="btn btn-ghost" href="#/market" data-action="nav" title="Notebooks for sale">${icon("tag")}<span class="lbl">Market</span></a>`}${flag("journal") ? `<a class="btn btn-ghost" href="#/journal" data-action="nav" title="Agents' research, reviews and discoveries">${icon("award")}<span class="lbl">Journal</span></a>` : ""}${S.isAdmin ? `<a class="btn btn-ghost" href="#/admin" data-action="nav" title="Reports and ideas">${icon("bug")}<span class="lbl">Admin</span></a>` : ""}<button type="button" class="btn btn-ghost icon-btn" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button>${themeAllowed() ? `<button type="button" class="btn btn-ghost icon-btn" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon(S.theme.mode === "dark" ? "moon" : "sun")}</button>` : ""}`;
+const themeAllowed = () => !!S.community || !!S.board || !!S.town || (!!S.notebook && !S.market && !S.admin && !S.shared);
+const themeBtn = () => S.mobile ? moreBtn() : `${S.community ? "" : `<a class="btn btn-ghost" href="#/community" data-action="nav" title="Community chat">${icon("users")}<span class="lbl">Community</span></a>`}${S.board || !flag("board") ? "" : `<a class="btn btn-ghost" href="#/board" data-action="nav" title="Posts and discussion">${icon("pin")}<span class="lbl">Board</span></a>`}${S.market || !flag("market") ? "" : `<a class="btn btn-ghost" href="#/market" data-action="nav" title="Notebooks for sale">${icon("tag")}<span class="lbl">Market</span></a>`}${flag("journal") ? `<a class="btn btn-ghost" href="#/journal" data-action="nav" title="Agents' research, reviews and discoveries">${icon("award")}<span class="lbl">Journal</span></a>` : ""}${flag("town") && !S.town ? `<a class="btn btn-ghost" href="#/town" data-action="nav" title="Lab as a small town: who is writing, who is talking">${icon("town")}<span class="lbl">Town</span></a>` : ""}${S.isAdmin ? `<a class="btn btn-ghost" href="#/admin" data-action="nav" title="Reports and ideas">${icon("bug")}<span class="lbl">Admin</span></a>` : ""}<button type="button" class="btn btn-ghost icon-btn" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button>${themeAllowed() ? `<button type="button" class="btn btn-ghost icon-btn" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon(S.theme.mode === "dark" ? "moon" : "sun")}</button>` : ""}`;
 const account = () => `<footer class="account">${icon("shield")}<span>Signed in as <code class="principal" title="${S.principal}">${shortPrincipal(S.principal)}</code></span><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="copy-principal">${S.copied === "principal" ? "Copied" : "Copy principal"}</button><button type="button" class="btn btn-ghost" data-action="sign-out">Sign out</button></span></footer>`;
 
 function landing(): string {
@@ -988,6 +1000,7 @@ function landing(): string {
         <div class="feature">${icon("bolt")}<b>Keep it running</b><p>See the cycles left, send ICP from any wallet or top up in one click. Links are rewritten when you rename.</p></div>
       </div>
       <div class="cta"><button type="button" class="btn btn-primary btn-lg" data-action="sign-in" ${S.signin.busy ? "disabled" : ""}>${S.signin.busy ? "Signing in…" : S.signin.error ? "Retry sign in" : "Sign in"} ${icon("out")}</button>${msg}</div>
+      ${townPreview()}
     </section>
   </div>`;
 }
@@ -1071,7 +1084,7 @@ function shell(body: string): string {
 /** The vertical icon bar: sections of the open notebook on top, the app-wide places at the bottom. From a page without a notebook, a section opens the last notebook. */
 function ribbonHtml(i?: Info, low = false): string {
   if (S.mobile) return "";
-  const inNb = !!S.notebook && !S.community && !S.board && !S.market && !S.admin;
+  const inNb = !!S.notebook && !S.community && !S.board && !S.market && !S.admin && !S.journal && !S.town;
   const rb = (tab: Tab, label: string, ic: string, extra = "") => !featureOn(tab) ? "" : `<button type="button" class="rb ${inNb && S.tab === tab ? "on" : ""}" data-action="ribbon-tab" data-tab="${tab}" title="${label}" aria-label="${label}" aria-pressed="${inNb && S.tab === tab}">${icon(ic)}${extra}</button>`;
   const tripLate = S.trips.watching.some((w) => w.overdue && !w.closed);
   const tip: Partial<Record<Tab, string>> = {
@@ -1084,7 +1097,7 @@ function ribbonHtml(i?: Info, low = false): string {
   const badge: Partial<Record<Tab, string>> = { study: dueTotal() ? `<i class="rb-count">${dueTotal()}</i>` : "", work: overdueCount() ? `<i class="rb-count danger">${overdueCount()}</i>` : "", trips: tripLate ? `<i class="rb-dot"></i>` : "" };
   return `<nav class="ribbon" aria-label="Sections">
       <div class="rb-group">${rb("notes", "Notes", "file")}${S.notebook ? FEATURES.map((f) => rb(f.id, tip[f.id] ?? f.label, f.icon, badge[f.id] ?? "")).join("") : ""}</div>
-      <div class="rb-group bottom">${rb("manage", `Manage${i ? ` · ${tc(i.cycles)}` : ""}`, "cog", low ? `<i class="rb-dot"></i>` : "")}<a class="rb ${S.community ? "on" : ""}" href="#/community" data-action="nav" title="Community${S.mentions ? ` · ${S.mentions} new mention${S.mentions === 1 ? "" : "s"}` : ""}" aria-label="Community">${icon("users")}${S.mentions ? `<i class="rb-badge">${S.mentions > 9 ? "9+" : S.mentions}</i>` : ""}</a>${flag("board") ? `<a class="rb ${S.board ? "on" : ""}" href="#/board" data-action="nav" title="Board: posts and discussion" aria-label="Board">${icon("pin")}</a>` : ""}${flag("journal") ? `<a class="rb ${S.journal ? "on" : ""}" href="#/journal" data-action="nav" title="Journal: agents' research, reviews and discoveries" aria-label="Journal">${icon("award")}</a>` : ""}${flag("market") ? `<a class="rb ${S.market ? "on" : ""}" href="#/market" data-action="nav" title="Notebook market" aria-label="Notebook market">${icon("tag")}</a>` : ""}${S.isAdmin ? `<a class="rb ${S.admin ? "on" : ""}" href="#/admin" data-action="nav" title="Reports and ideas" aria-label="Reports and ideas">${icon("bug")}</a>` : ""}<button type="button" class="rb" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="rb" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button><button type="button" class="rb" data-action="sign-out" title="Sign out" aria-label="Sign out">${icon("out")}</button></div>
+      <div class="rb-group bottom">${rb("manage", `Manage${i ? ` · ${tc(i.cycles)}` : ""}`, "cog", low ? `<i class="rb-dot"></i>` : "")}<a class="rb ${S.community ? "on" : ""}" href="#/community" data-action="nav" title="Community${S.mentions ? ` · ${S.mentions} new mention${S.mentions === 1 ? "" : "s"}` : ""}" aria-label="Community">${icon("users")}${S.mentions ? `<i class="rb-badge">${S.mentions > 9 ? "9+" : S.mentions}</i>` : ""}</a>${flag("board") ? `<a class="rb ${S.board ? "on" : ""}" href="#/board" data-action="nav" title="Board: posts and discussion" aria-label="Board">${icon("pin")}</a>` : ""}${flag("journal") ? `<a class="rb ${S.journal ? "on" : ""}" href="#/journal" data-action="nav" title="Journal: agents' research, reviews and discoveries" aria-label="Journal">${icon("award")}</a>` : ""}${flag("town") ? `<a class="rb ${S.town ? "on" : ""}" href="#/town" data-action="nav" title="Town: Lab right now" aria-label="Town">${icon("town")}</a>` : ""}${flag("market") ? `<a class="rb ${S.market ? "on" : ""}" href="#/market" data-action="nav" title="Notebook market" aria-label="Notebook market">${icon("tag")}</a>` : ""}${S.isAdmin ? `<a class="rb ${S.admin ? "on" : ""}" href="#/admin" data-action="nav" title="Reports and ideas" aria-label="Reports and ideas">${icon("bug")}</a>` : ""}<button type="button" class="rb" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="rb" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button><button type="button" class="rb" data-action="sign-out" title="Sign out" aria-label="Sign out">${icon("out")}</button></div>
     </nav>`;
 }
 function shellBody(body: string, i: Info | undefined, low: boolean, alert: string, mobileNav: string): string {
@@ -3046,9 +3059,159 @@ const statusPill = (s: Submission) => { const [t, c] = STATUS_TEXT[s.status] ?? 
 const inert = (md: string) => renderMarkdown(md, { resolve: () => undefined, note: () => undefined, attachment: () => undefined });
 /** Every page but the notebooks list and the landing page: the left icon bar (signed in, on a
  *  desktop) and the top bar, the same frame as a notebook. */
-function pageShell(crumb: string, body: string): string {
+function pageShell(crumb: string, body: string, bare = false): string {
   const right = S.mobile ? moreBtn() : S.identity ? "" : `<button type="button" class="btn btn-primary" data-action="sign-in">Sign in</button>`;
-  return `<div class="shell ${S.mobile ? "is-mobile" : ""}">${S.identity ? ribbonHtml() : ""}<div class="shell-main"><header class="wsbar">${brand()}<span class="crumb">${crumb}</span><span class="right">${right}</span></header><section class="main" style="overflow:auto"><div class="page wide">${body}</div></section></div></div>`;
+  return `<div class="shell ${S.mobile ? "is-mobile" : ""}">${S.identity ? ribbonHtml() : ""}<div class="shell-main"><header class="wsbar">${brand()}<span class="crumb">${crumb}</span><span class="right">${right}</span></header>${bare ? `<section class="main">${body}</section>` : `<section class="main" style="overflow:auto"><div class="page wide">${body}</div></section>`}</div></div>`;
+}
+// --- the town: Lab's activity as a small isometric town (registry town.rs, town.ts)
+
+const townData = (t: Town): TownData => ({
+  at: Number(t.at / 1_000_000n), houses: t.houses.map((h) => ({ lot: h.lot, storeys: h.storeys, size: h.size, lit: h.lit, agent: h.agent })), people: t.people, homes: t.homes, quiet: t.quiet,
+  mine: t.mine, myChannel: t.my_channel, channels: t.channels.map((c) => ({ name: c.name, online: c.online, messages24h: c.messages_24h })), postTopics: t.post_topics, postsLive: t.posts_live,
+  posts24h: t.posts_24h, listings: t.listings, discoveries: t.discoveries, underReview: t.under_review, rains24h: t.rains_24h, lastRain: t.last_rain === undefined ? undefined : Number(t.last_rain / 1_000_000n), hikers: t.hikers, off: t.off,
+});
+const fetchTown = () => registry().town().then((r) => (r.__kind__ === "Ok" ? demoTown(townData(r.Ok)) : null)).catch(() => null);
+/** Local development with ?town-demo: a busier town than a test network has, to judge the look. */
+function demoTown(d: TownData): TownData {
+  if (!devMode || !/town-demo/.test(location.search)) return d;
+  const houses = Array.from({ length: 90 }, (_, i) => ({ lot: i * 2 + (i % 3), storeys: 1 + (i % 3), size: (i * 7) % 4, lit: (i * 5) % 3, agent: i % 11 === 0 }));
+  const mine = d.houses.find((h) => h.lot === d.mine);
+  return { ...d, houses: [...houses.filter((h) => h.lot !== d.mine), ...(mine ? [mine] : [])].sort((a, b) => a.lot - b.lot), homes: 82, people: 95, channels: d.channels.map((c, i) => ({ ...c, online: (i * 3) % 5, messages24h: c.messages24h + i * 12 })), postTopics: ["general", "study", "crypto", "help", "careers"], postsLive: 5, discoveries: 7, underReview: 2, rains24h: 1, lastRain: Date.now() - 600e3, hikers: 3, listings: 4, off: [] };
+}
+let townTimer = 0;
+async function loadTown() {
+  if (!flag("town")) { location.hash = "#/"; return; }
+  const t = S.town ?? (S.town = { legend: false });
+  render();
+  const pull = async () => {
+    const d = await fetchTown();
+    if (S.town !== t) return;
+    if (!d) { if (!t.data) { toast("The town is closed right now.", "info"); location.hash = "#/"; } return; }
+    const same = !!t.data && JSON.stringify(d) === JSON.stringify(t.data);
+    t.data = d;
+    // the canvas keeps focus and its tooltip when only the numbers moved: hand it the new data
+    if (same) return;
+    const hud = document.querySelector<HTMLElement>(".town-hud");
+    if (!hud) return render();
+    hud.innerHTML = townHud(d);
+    townSync();
+  };
+  await pull();
+  if (S.town !== t) return;
+  clearInterval(townTimer);
+  // a minute is plenty: the houses are counted every few hours, the squares live
+  townTimer = window.setInterval(() => { if (!document.hidden && S.town === t) void pull(); }, 60_000);
+}
+let landingTownAsked = false;
+function loadLandingTown() {
+  if (landingTownAsked) return;
+  landingTownAsked = true;
+  void fetchTown().then((d) => { S.landingTown = d; if (!S.identity && !S.journal && !S.town) render(); });
+}
+const townCounts = (d: TownData) => ({ online: d.channels.reduce((a, c) => a + c.online, 0), talk: d.channels.reduce((a, c) => a + c.messages24h, 0), today: d.houses.filter((h) => h.lit === 2 && !h.agent).length, agents: d.houses.filter((h) => h.agent).length });
+function townPreview(): string {
+  const d = S.landingTown;
+  if (!d) return "";
+  const n = townCounts(d);
+  return `<div class="town-preview" aria-label="Lab right now, as a small town">
+    <canvas data-town="preview" aria-hidden="true"></canvas><div class="town-tip" hidden></div>
+    <div class="town-stat glass"><span class="kicker">Lab right now</span><span><b>${d.homes}</b> home${d.homes === 1 ? "" : "s"}</span><span><b>${n.today}</b> lit today</span><span><b>${n.online}</b> online</span></div>
+    <a class="btn town-go glass" href="#/town" data-action="nav">See the town ${icon("chevron", "flip")}</a>
+  </div>`;
+}
+/** The town's numbers across the top: the clock and season, homes, who is online, what is said. */
+function townHud(d: TownData): string {
+  const n = townCounts(d), sea = season(new Date()), off = new Set(d.off);
+  const now = new Date(), clock = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }), date = now.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
+  const card = (ic: string, big: string | number, small: string, title = "") => `<div class="town-card glass" ${title ? `title="${esc(title)}"` : ""}>${icon(ic)}<span><b>${big}</b><small>${small}</small></span></div>`;
+  return [
+    card("calendar", clock, `${date} · ${sea.name} · ${sea.next} in ${sea.days} day${sea.days === 1 ? "" : "s"}`),
+    card("town", d.homes, `home${d.homes === 1 ? "" : "s"} · ${n.today} lit today`, `People with a notebook edited in the last 30 days. ${d.quiet} quiet plot${d.quiet === 1 ? "" : "s"}.`),
+    card("users", n.online, "online now", "People in the community chat this minute"),
+    card("chat", n.talk, "messages today", "Messages in the community in the last 24 hours"),
+    ...(off.has("board") ? [] : [card("pin", d.postsLive, `post${d.postsLive === 1 ? "" : "s"} on the board`)]),
+    ...(off.has("journal") ? [] : [card("award", d.discoveries, `discover${d.discoveries === 1 ? "y" : "ies"} · ${d.underReview} in review`)]),
+    ...(n.agents ? [card("bot", n.agents, `agent workshop${n.agents === 1 ? "" : "s"}`)] : []),
+  ].join("");
+}
+function townPage(): string {
+  const t = S.town!, d = t.data;
+  if (!d) return pageShell("<b>Town</b>", `<div class="town"><p class="muted town-wait">Walking into town…</p></div>`, true);
+  const n = townCounts(d), off = new Set(d.off), hud = townHud(d);
+  const legend = t.legend ? `<div class="town-legend glass" role="note"><b>Reading the town</b>
+    <span><i class="lg lg-house"></i>A home: someone with a notebook edited in the last 30 days. Bigger homes hold more notes; each storey is a notebook.</span>
+    <span><i class="lg lg-lit"></i>Lit windows (at night, in the dark theme): edited this week. Chimney smoke: edited today.</span>
+    <span><i class="lg lg-person"></i>A person: someone in the community chat right now, at their channel's stall in the Square.</span>
+    <span><i class="lg lg-bot"></i>A workshop with a blinking antenna: an AI agent's notebook, public for good.</span>
+    <span><i class="lg lg-civic"></i>The town hall, the board's pavilion, ${off.has("market") ? "" : "the market hall, "}${off.has("journal") ? "" : "the observatory and its avenue of discoveries, "}the park and the trailhead: the public spaces.</span>
+    <span class="small muted">Every lit window is someone writing in their own notebook. Nobody can see inside.</span></div>` : "";
+  const tools = `<div class="town-tools glass" role="toolbar" aria-label="Town view">
+    <button type="button" class="btn btn-ghost icon-btn" data-action="town-out" title="Zoom out (−)" aria-label="Zoom out">−</button>
+    <button type="button" class="btn btn-ghost icon-btn" data-action="town-in" title="Zoom in (+)" aria-label="Zoom in">+</button>
+    <button type="button" class="btn btn-ghost icon-btn" data-action="town-home" title="Whole town (0)" aria-label="Whole town">${icon("fit")}</button>
+    ${d.mine !== undefined ? `<button type="button" class="btn btn-ghost" data-action="town-mine" title="My home" aria-label="My home">${icon("house")}<span class="lbl">My home</span></button>` : ""}
+    <button type="button" class="btn btn-ghost ${t.legend ? "on" : ""}" data-action="town-legend" aria-pressed="${t.legend}" title="Legend" aria-label="Legend">${icon("help")}<span class="lbl">Legend</span></button>
+    <button type="button" class="btn btn-ghost icon-btn" data-action="theme-menu" title="Day or night: the appearance" aria-label="Appearance">${icon(S.theme.mode === "dark" ? "moon" : "sun")}</button></div>`;
+  const label = `Lab as a town: ${d.homes} homes, ${n.today} lit today, ${n.online} people online, ${n.talk} messages today.`;
+  return pageShell("<b>Town</b>", `<div class="town">
+    <canvas data-town="full" tabindex="0" role="img" aria-label="${esc(label)}"></canvas><div class="town-tip" hidden></div>
+    <div class="town-hud">${hud}</div>${legend}${tools}
+    ${d.at ? "" : `<div class="town-wake glass small">The town is waking up: counting homes…</div>`}
+  </div>`, true);
+}
+const NOTES_BUCKET = ["under 10 notes", "10–49 notes", "50–199 notes", "200+ notes"];
+const LIT_TEXT = ["edited this month", "edited this week", "edited today"];
+function townTip(tg: TownTarget): string {
+  const d = (S.town?.data ?? S.landingTown)!, line = (s: string) => `<span>${s}</span>`, hint = (s: string) => `<span class="hint">${s}</span>`;
+  const preview = !S.town;
+  const go = (s: string) => (preview ? hint("Click to see the town") : hint(s));
+  switch (tg.kind) {
+    case "house": {
+      const h = tg.house, nbs = `${h.storeys >= 3 ? "3 or more notebooks" : `${h.storeys} notebook${h.storeys === 1 ? "" : "s"}`} · ${NOTES_BUCKET[h.size]}`;
+      if (tg.mine) return `<b>Your home</b>${(S.notebooks ?? []).slice(0, 4).map((n) => line(`${esc(n.emoji ?? "📓")} ${esc(n.name)}`)).join("")}${line(`${NOTES_BUCKET[h.size]} · ${LIT_TEXT[h.lit]}`)}${go("Click to open your notebooks")}`;
+      return h.agent ? `<b>An agent's workshop</b>${line(nbs)}${line(LIT_TEXT[h.lit])}${line("Agents' notebooks are public for good")}` : `<b>A home</b>${line(nbs)}${line(LIT_TEXT[h.lit])}`;
+    }
+    case "plot": return `<b>Your plot</b>${line("Your notebooks have been quiet for a month.")}${line("Write in one to light your home.")}`;
+    case "hall": return `<b>Town hall</b>${line(`Lab · pop. ${d.people}`)}${line(`${d.homes} home${d.homes === 1 ? "" : "s"} lit this month · ${d.quiet} quiet plot${d.quiet === 1 ? "" : "s"}`)}`;
+    case "stall": { const c = tg.channel; return `<b>#${esc(c.name)}</b>${line(`${c.online} here now · ${c.messages24h} message${c.messages24h === 1 ? "" : "s"} today`)}${go(S.identity ? "Click to open the channel" : "Sign in to join in")}`; }
+    case "fountain": return `<b>The fountain</b>${line(d.off.includes("rain") ? "Rain is switched off: the fountain is frozen." : d.rains24h ? `${d.rains24h} rain${d.rains24h === 1 ? "" : "s"} today: the jets are running` : "No rain today. When someone makes it rain in chat, the jets run.")}`;
+    case "board": return d.off.includes("board") ? `<b>The pavilion</b>${line("The board is closed.")}` : `<b>The board's pavilion</b>${line(`${d.postsLive} post${d.postsLive === 1 ? "" : "s"} pinned · ${d.posts24h} new today`)}${go(S.identity ? "Click to open the board" : "Sign in to read the board")}`;
+    case "market": return `<b>The market hall</b>${line(`${d.listings} notebook${d.listings === 1 ? "" : "s"} for sale`)}${go(S.identity ? "Click to open the market" : "Sign in to browse")}`;
+    case "observatory": return `<b>The observatory</b>${line(`${d.underReview} submission${d.underReview === 1 ? "" : "s"} under review · ${d.discoveries} discover${d.discoveries === 1 ? "y" : "ies"}`)}${line("Agents' research, reviewed by other agents")}${go("Click to open the journal")}`;
+    case "obelisk": return `<b>Discovery #${tg.n}</b>${line("Accepted by the journal, credited to its agent for good")}${go("Click to open the journal")}`;
+    case "park": return `<b>The park</b>${line("A bench by the pond.")}`;
+    case "trail": return `<b>The trailhead</b>${line(d.hikers ? `${d.hikers} out on a trip right now, on time` : "Nobody out on a trip right now")}${line("Trips with a check-in contact, from the Trips kit")}`;
+    case "walker": return `<b>${tg.me ? "You" : "Someone"}</b>${line(`in #${esc(tg.channel)}`)}`;
+  }
+}
+function townOpen(tg: TownTarget) {
+  if (!S.town) { location.hash = "#/town"; return; }
+  const signin = () => toast("Sign in to join in.", "info");
+  switch (tg.kind) {
+    case "house": if (tg.mine) { const nbs = S.notebooks ?? []; location.hash = nbs.length === 1 ? `#/notebook/${nbs[0].canister.toText()}` : "#/"; } return;
+    case "plot": location.hash = "#/"; return;
+    case "stall": case "walker": { if (!S.identity) return signin(); store("nb-chat-channel", tg.kind === "stall" ? tg.channel.name : tg.channel); location.hash = "#/community"; return; }
+    case "board": if (!S.town.data?.off.includes("board")) { if (S.identity) location.hash = "#/board"; else signin(); } return;
+    case "market": if (S.identity) location.hash = "#/market"; else signin(); return;
+    case "observatory": case "obelisk": location.hash = "#/journal"; return;
+  }
+}
+/** Put the town on its canvas after every render (the landing preview or the town page). */
+function townSync() {
+  const canvas = document.querySelector<HTMLCanvasElement>("canvas[data-town]");
+  if (!canvas) { if (!S.identity && !S.journal && !S.town && !S.shared) loadLandingTown(); return; }
+  const data = canvas.dataset.town === "full" ? S.town?.data : S.landingTown;
+  if (!data) return;
+  attachTown(canvas, { data, mode: canvas.dataset.town === "full" ? "full" : "preview", dark: S.theme.mode === "dark", accent: getComputedStyle(document.body).getPropertyValue("--accent").trim(), onOpen: townOpen, tip: townTip });
+}
+function townAction(action: string) {
+  const t = S.town;
+  if (!t) return;
+  if (action === "town-in") townCamera("in");
+  else if (action === "town-out") townCamera("out");
+  else if (action === "town-home") townCamera("home");
+  else if (action === "town-mine") townCamera("mine");
+  else if (action === "town-legend") { t.legend = !t.legend; render(); }
 }
 function journalPage(): string {
   const j = S.journal!;
@@ -4480,7 +4643,7 @@ function render() {
   const focusedPath = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>(".cm-host")?.dataset.cm;
   const chatTop = document.querySelector<HTMLElement>("[data-chat-log]")?.scrollTop;
   destroyEditors();
-  app.innerHTML = S.shared ? sharedPage() : S.journal ? journalPage() : S.board && S.identity ? boardPage() : S.community && S.identity ? communityPage() : S.market && S.identity ? marketPage() : S.admin && S.isAdmin ? adminPage() : !S.identity ? landing() : S.notebook ? workspace() : notebooksPage();
+  app.innerHTML = S.shared ? sharedPage() : S.journal ? journalPage() : S.town ? townPage() : S.board && S.identity ? boardPage() : S.community && S.identity ? communityPage() : S.market && S.identity ? marketPage() : S.admin && S.isAdmin ? adminPage() : !S.identity ? landing() : S.notebook ? workspace() : notebooksPage();
   if (S.show) app.insertAdjacentHTML("beforeend", showHtml());
   // a re-render must not move the reader: keep the chat where it was, or at the bottom
   if (S.community) { const log = app.querySelector<HTMLElement>("[data-chat-log]"); if (log) { log.scrollTop = S.community.atBottom === false && chatTop !== undefined ? chatTop : log.scrollHeight; chatScrolled(); } }
@@ -6584,6 +6747,7 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
   const pid = el.dataset.pane ? Number(el.dataset.pane) : undefined;
   const newTab = !!(ev && (ev.metaKey || ev.ctrlKey || ev.button === 1));
   if (/^journal-|^agent-vouch$|^admin-(editor|stats)$/.test(action)) return journalAction(action, el);
+  if (/^town-/.test(action)) return townAction(action);
   const kit = /^(money|creator|fitness|home)-/.exec(action)?.[1];
   if (kit) return kit === "money" ? moneyAction(action, el) : kit === "creator" ? creatorAction(action, el) : kit === "fitness" ? fitnessAction(action, el) : homeAction(action, el);
   switch (action) {
@@ -8098,7 +8262,9 @@ window.addEventListener("hashchange", () => {
   if (location.hash !== "#/community" && S.community) { S.community = undefined; clearInterval(chatTimer); left = true; }
   if (!location.hash.startsWith("#/board") && S.board) { S.board = undefined; left = true; }
   if (!location.hash.startsWith("#/journal") && S.journal) { S.journal = undefined; left = true; }
+  if (location.hash !== "#/town" && S.town) { S.town = undefined; clearInterval(townTimer); left = true; }
   { const jr = journalRoute(); if (jr) return void loadJournal(jr); }
+  if (location.hash === "#/town") return void loadTown();
   const bm = /^#\/board(?:\/(\d+))?$/.exec(location.hash);
   if (bm) { if (S.identity) return void loadBoard(undefined, bm[1] ? BigInt(bm[1]) : undefined); location.hash = "#/"; return; }
   if (location.hash === "#/admin") {
@@ -8183,6 +8349,7 @@ currentIdentity().then(async (id) => {
   const sh = sharedRoute();
   if (sh) return openShared(sh[1], decodeURIComponent(sh[2]));
   { const jr = journalRoute(); if (jr) { if (id) void loadNotebooks(); return loadJournal(jr); } }
+  if (location.hash === "#/town") { if (id) void loadNotebooks(); return loadTown(); }
   if (!id) return;
   render();
   await loadNotebooks();

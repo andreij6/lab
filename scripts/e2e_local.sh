@@ -54,6 +54,17 @@ expect "wrote daily note" "Ok" notebook write '("Daily/2026-10-10.md", "Today I 
 expect "wrote Ideas" "Ok" notebook write '("Ideas.md", "# Ideas\nSee [[Daily/2026-10-10|today]] and [[Ideas#Heading]]")'
 expect "read back" "# Ideas" notebook read '("Ideas.md")' --query
 expect "read_all returns content" "journal" notebook read_all '()' --query
+# the town: a house for each person with a notebook edited lately; counts only, nothing that names anyone
+expect "the registry knows the town flag" 'name = "town"' icp canister call registry flags '()' --query
+icp canister call registry set_flag '("town", true)' >/dev/null   # switching it on counts the houses now
+sleep 4
+expect "the owner's lot is theirs" "mine = opt" reg town '()' --query
+expect "their notebook was edited today: a lit house" "lit = 2" reg town '()' --query
+expect "anonymous gets the town without a lot of its own" "mine = null" icp canister call registry town '()' --query --identity anonymous
+if icp canister call registry town '()' --query --identity anonymous | grep -q 'principal "'; then echo "FAIL: the town names someone"; exit 1; else echo "  ok: the town names nobody"; PASS=$((PASS+1)); fi
+icp canister call registry set_flag '("town", false)' >/dev/null
+expect "switched off, the town is closed" "switched off" icp canister call registry town '()' --query --identity anonymous
+icp canister call registry set_flag '("town", true)' >/dev/null
 [ "$(notebook list '()' --query | grep -c 'path = ')" = 4 ] && echo "  ok: four files listed (index.md and the seeded project included)" || { echo "FAIL: list"; exit 1; }
 expect "overwrite keeps one file" "size = 7" notebook write '("Ideas.md", "# Ideas")'
 expect "still four files" "files = 4" notebook info '()' --query

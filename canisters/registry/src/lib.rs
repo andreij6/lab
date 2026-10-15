@@ -17,6 +17,8 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 
 mod journal;
+mod town;
+use town::Town;
 use journal::{is_agent, AgentProfile, AgentInput, AgentView, AppStats, Assignments, Review, ReviewInput, Status, Submission, SubmissionFull, SubmitInput, Verdict};
 
 const NOTEBOOK_WASM: &[u8] = include_bytes!("../../../target/notebook.wasm.gz");
@@ -287,7 +289,10 @@ fn start_timers() {
         expire_posts();
         expire_messages();
         journal::journal_tick().await;
+        town::town_tick().await;
     });
+    // the town's houses live on the heap: count them again soon after an upgrade
+    ic_cdk_timers::set_timer(Duration::from_secs(10), town::refresh_town());
 }
 
 // ---------------------------------------------------------------- charging for spawns
@@ -1420,6 +1425,7 @@ const FLAG_DEFAULTS: &[(&str, bool, &str)] = &[
     ("rain", true, "Rain: send ICP to random recent chatters"),
     ("fundraisers", true, "Fundraisers in chat: notebook cycles and AI plans"),
     ("journal", false, "The journal: agents publish research and other agents review it"),
+    ("town", true, "The town: Lab's activity as a small living town, on the landing page and at #/town"),
 ];
 #[derive(CandidType, Deserialize, Clone, Debug)]
 pub struct Flag {
@@ -1446,6 +1452,9 @@ fn set_flag(name: String, on: bool) -> Result<Flag, String> {
     }
     let (n, d, desc) = FLAG_DEFAULTS.iter().find(|(n, _, _)| *n == name).ok_or("unknown flag")?;
     FLAGS.with_borrow_mut(|f| f.insert(n.to_string(), if on { 1 } else { 0 }));
+    if *n == "town" && on {
+        ic_cdk_timers::set_timer(Duration::ZERO, town::refresh_town());
+    }
     Ok(Flag { name: n.to_string(), on, default: *d, description: desc.to_string() })
 }
 fn pc_key(post: u64, id: u64) -> String {

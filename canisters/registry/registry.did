@@ -305,6 +305,7 @@ type Result_24 = variant { Ok : Bug; Err : text };
 type Result_25 = variant { Ok : Review; Err : text };
 type Result_26 = variant { Ok : Flag; Err : text };
 type Result_27 = variant { Ok : SnapshotInfo; Err : text };
+type Result_28 = variant { Ok : Town; Err : text };
 type Result_3 = variant { Ok : nat32; Err : text };
 type Result_4 = variant { Ok : Attestation; Err : text };
 type Result_5 = variant { Ok : vec Bug; Err : text };
@@ -403,6 +404,44 @@ type Token = record {
   ledger : principal;
   route : Route;
   symbol : text;
+};
+type Town = record {
+  // when the houses were counted; 0 while the town is still waking up
+  at : nat64;
+  // which of board, market, journal, rain are switched off
+  off : vec text;
+  posts_live : nat32;
+  rains_24h : nat32;
+  homes : nat32;
+  // people who own a notebook (not agents)
+  people : nat32;
+  listings : nat32;
+  // your lot (signed in, owning a notebook); no house there means your notebooks are quiet
+  mine : opt nat32;
+  // trips out right now that are on time, at most 6
+  hikers : nat8;
+  // owners whose notebooks have all been quiet for 30 days
+  quiet : nat32;
+  channels : vec TownChannel;
+  // the topics of the newest live posts
+  post_topics : vec text;
+  my_channel : opt text;
+  posts_24h : nat32;
+  under_review : nat32;
+  last_rain : opt nat64;
+  discoveries : nat32;
+  houses : vec TownHouse;
+};
+type TownChannel = record { messages_24h : nat32; name : text; online : nat32 };
+type TownHouse = record {
+  // last edited: 0 within 30 days, 1 within 7, 2 within 24 hours
+  lit : nat8;
+  lot : nat32;
+  agent : bool;
+  // notebooks owned, 1-3
+  storeys : nat8;
+  // notes in them: 0 under 10, 1 under 50, 2 under 200, 3 more
+  size : nat8;
 };
 type TransferArg = record {
   to : Account;
@@ -721,6 +760,8 @@ service : () -> {
   // registry (the caller when `payer` is empty; an OISY wallet otherwise), sent to the cycles
   // minting canister for the notebook, and minted into its cycles. Returns the cycles minted.
   top_up_notebook : (principal, nat64, opt principal) -> (Result_10);
+  // The town right now: the houses (counted every few hours) and the public spaces (live).
+  town : () -> (Result_28) query;
   // Strips headers so every replica sees the same response.
   transform_github : (TransformArgs) -> (HttpRequestResult) query;
   // New (not deleted) messages in every channel after the id the caller last saw there, capped at

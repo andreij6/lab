@@ -26,7 +26,7 @@ const REVIEWERS: usize = 3;
 const ARCHIVE_DAYS: u64 = 3650;
 /// a reviewer who has not reviewed after this long is replaced, and the editor may decide without them
 const REVIEW_NS: u64 = 14 * 24 * 3_600_000_000_000;
-const ACTIVE_NS: u64 = 30 * 24 * 3_600_000_000_000;
+pub const ACTIVE_NS: u64 = 30 * 24 * 3_600_000_000_000;
 /// what an agent deposits (as cycles) when it creates a notebook
 const MIN_AGENT_DEPOSIT_E8S: u64 = 100_000_000;
 /// text aimed at the reviewing agents rather than at readers: a desk rejection
@@ -856,10 +856,10 @@ pub struct AppStats {
     pub at: u64,
 }
 #[derive(CandidType, Deserialize)]
-struct Usage {
-    files: u64,
-    notes: u64,
-    last_modified: Option<u64>,
+pub struct Usage {
+    pub files: u64,
+    pub notes: u64,
+    pub last_modified: Option<u64>,
 }
 thread_local! {
     static STATS_CACHE: RefCell<Option<AppStats>> = const { RefCell::new(None) };
@@ -883,6 +883,22 @@ async fn join_all<F: std::future::Future>(fs: Vec<F>) -> Vec<F::Output> {
     .await;
     out.into_iter().map(|o| o.unwrap()).collect()
 }
+/// Every notebook's counts and last edit, None for those that did not answer.
+pub async fn usage_all(nbs: &[Notebook]) -> Vec<Option<Usage>> {
+    let mut usage: Vec<Option<Usage>> = Vec::new();
+    // ponytail: 50 calls at a time to every notebook; sample or keep running counts past a few thousand
+    for chunk in nbs.chunks(50) {
+        let calls = chunk.iter().map(|n| async move { Call::bounded_wait(n.canister, "usage").await.ok().and_then(|r| r.candid::<Usage>().ok()) });
+        usage.extend(join_all(calls.collect()).await);
+    }
+    usage
+}
+/// Discoveries so far and submissions under review.
+pub fn journal_counts() -> (u32, u32) {
+    let discoveries = NEXT_DISCOVERY.with_borrow(|n| n.get().saturating_sub(1)) as u32;
+    let under_review = SUBMISSIONS.with_borrow(|m| m.iter().filter(|e| e.value().0.status == Status::UnderReview).count()) as u32;
+    (discoveries, under_review)
+}
 /// How many people, agents, notebooks and notes there are, and how many were active in the last 30
 /// days (admins). Asks every notebook for its counts; cached for ten minutes.
 #[update]
@@ -895,12 +911,7 @@ async fn app_stats(fresh: bool) -> Result<AppStats, String> {
         return Ok(c);
     }
     let nbs: Vec<Notebook> = NOTEBOOKS.with_borrow(|m| m.iter().map(|e| e.value().0).collect());
-    let mut usage: Vec<Option<Usage>> = Vec::new();
-    // ponytail: 50 calls at a time to every notebook; sample or keep running counts past a few thousand
-    for chunk in nbs.chunks(50) {
-        let calls = chunk.iter().map(|n| async move { Call::bounded_wait(n.canister, "usage").await.ok().and_then(|r| r.candid::<Usage>().ok()) });
-        usage.extend(join_all(calls.collect()).await);
-    }
+    let usage = usage_all(&nbs).await;
     let cutoff = now.saturating_sub(ACTIVE_NS);
     let agents: Vec<AgentProfile> = AGENTS.with_borrow(|m| m.iter().map(|e| e.value().0).collect());
     let agent_set: std::collections::HashSet<Principal> = agents.iter().map(|a| a.principal).collect();
