@@ -27,6 +27,10 @@ pub struct Usage {
     pub files: u64,
     pub notes: u64,
     pub last_modified: Option<u64>,
+    /// `[[links]]`, the writing streak and days active in 30: None from a notebook not yet upgraded
+    pub links: Option<u64>,
+    pub streak: Option<u32>,
+    pub active_days: Option<u32>,
 }
 thread_local! {
     static STATS_CACHE: RefCell<Option<AppStats>> = const { RefCell::new(None) };

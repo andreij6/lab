@@ -10,13 +10,15 @@
 
 import { accentOf, hashOf, hex, mix, rgba, rng, skyColours, still, type RGB } from "./sky.ts";
 
-export type TownHouse = { lot: number; storeys: number; size: number; lit: number; low?: boolean };
+export type TownHouse = { lot: number; storeys: number; size: number; lit: number; low?: boolean; badges?: number };
+export type TownSponsor = { name: string; blurb: string; url: string; color: string };
 export type TownChan = { name: string; online: number; messages24h: number };
 export type TownData = {
   at: number; houses: TownHouse[]; people: number; homes: number; maxShown: number; quiet: number; mine?: number; myChannel?: string;
   channels: TownChan[]; postTopics: string[]; postsLive: number; posts24h: number; listings: number; rains24h: number; lastRain?: number; hikers: number; off: string[];
   building: number[]; notebooks: number; spawned24h: number; spawned7d: number; newcomers7d: number; cycles: number; burnPerDay: number; fundraisersOpen: number; raisedE8s: number;
   campers: number; meCamping: boolean;
+  sponsors: TownSponsor[]; myQuests?: [number, number, number];
 };
 export type Target =
   | { kind: "house"; house: TownHouse; mine: boolean; building: boolean } | { kind: "plot" } | { kind: "hall" } | { kind: "stall"; channel: TownChan }
@@ -31,7 +33,7 @@ export type Obj = { k: Kind; x: number; y: number; w: number; d: number; s: numb
 /** A place in the town for something beyond Lab: it links out. `at` is [x, y, w, d] in tiles from
  *  the corner of its district block (a block is 6×6 tiles). `office` is the plain building for
  *  anything new: give it a `color` and it needs no drawing code of its own. */
-export type Landmark = { id: string; kind: "bank" | "exchange" | "capitol" | "statue" | "launchpad" | "news" | "datacentre" | "swiss" | "credentials" | "office"; title: string; blurb: string; url: string; block: [number, number]; at: [number, number, number, number]; color?: string };
+export type Landmark = { sponsored?: boolean; id: string; kind: "bank" | "exchange" | "capitol" | "statue" | "launchpad" | "news" | "datacentre" | "swiss" | "credentials" | "office"; title: string; blurb: string; url: string; block: [number, number]; at: [number, number, number, number]; color?: string };
 /** A district: blocks set aside (homes are never built there) for landmarks of a kind; the room
  *  left over is for the next ones. */
 export type District = { id: string; name: string; blurb: string; blocks: [number, number][]; landmarks: Landmark[]; outskirts?: boolean };
@@ -61,6 +63,11 @@ export const DISTRICTS: District[] = [
       { id: "swiss", kind: "swiss", title: "The Swiss Subnet", blurb: "A subnet of the Internet Computer whose 13 independent node providers are all in Switzerland and Liechtenstein, so its data stays there; run by Swiss Subnet AG in Zug, live since January 2026.", url: "https://forum.dfinity.org/t/introducing-the-swiss-subnet-a-secure-and-compliant-blockchain-infrastructure-leveraging-the-internet-computer-protocol/41135", block: [-2, 1], at: [3.5, 0.4, 2.3, 2.0] },
       { id: "undp", kind: "credentials", title: "UNDP · Universal Trusted Credentials", blurb: "UNDP and the DFINITY Foundation build Universal Trusted Credentials on the Internet Computer, so small businesses can prove who they are and get financing, starting with a pilot in Cambodia.", url: "https://www.undp.org/policy-centre/singapore/press-releases/undp-partners-dfinity-foundation-enhance-financial-inclusion-msmes", block: [-2, 1], at: [0.6, 3.2, 3.0, 2.5] },
     ],
+  },
+  {
+    // the back right corner: a building for each project that pays to keep Lab running
+    id: "sponsors", name: "The Sponsors", blurb: "Projects that pay by the month for a building here; the ICP keeps Lab running.", blocks: [[1, -2], [2, -2]],
+    landmarks: [],
   },
   {
     // out on the coast beyond the last streets, fenced, launching over the sea: rockets are no
@@ -224,8 +231,10 @@ export function layoutTown(t: TownData): Plan {
     for (let s = 0; s < 8; s++) lot(bx, by, s, b * 8 + s);
     tree(7 * bx + 4, 7 * by + 4, `court${bx},${by}`, "tree");
   }
-  // the districts: their landmarks, a sign, and room for more
-  for (const dist of DISTRICTS) {
+  // the districts: their landmarks, a sign, and room for more (the sponsors' buildings come with the data)
+  const SLOTS4: [number, number, number, number][] = [[0.3, 0.3, 2.4, 2.4], [3.3, 0.3, 2.4, 2.4], [0.3, 3.3, 2.4, 2.4], [3.3, 3.3, 2.4, 2.4]];
+  const districts = DISTRICTS.map((d) => d.id !== "sponsors" ? d : { ...d, landmarks: t.sponsors.slice(0, 8).map((sp, i): Landmark => ({ sponsored: true, id: `sponsor-${i}`, kind: "office", title: sp.name, blurb: sp.blurb, url: sp.url, color: sp.color, block: d.blocks[Math.floor(i / 4)], at: SLOTS4[i % 4] })) });
+  for (const dist of districts) {
     for (const [bx, by] of dist.blocks) paving.push([7 * bx + 1, 7 * by + 1, 6, 6]);
     const origin = (lm: Landmark): [number, number] => (dist.outskirts ? space : [7 * lm.block[0] + 1, 7 * lm.block[1] + 1]);
     for (const lm of dist.landmarks) { const [ox, oy, w, d] = lm.at, [x0, y0] = origin(lm); put({ k: lm.kind, x: x0 + ox, y: y0 + oy, w, d, s: hashOf(lm.id), tg: { kind: "landmark", landmark: lm } }); }
@@ -511,6 +520,7 @@ function drawHouse(o: Obj, t: number) {
       }
     }
   }
+  trimmings(o, h, roofC, t);
   if (o.mine) ctx.restore();
   // a new notebook: another storey going up
   if (o.building) { scaffold(o, h + 4); crane(x - 0.2, y - 0.25, t); top = Math.max(top, 58); }
@@ -573,6 +583,39 @@ function flag(x: number, y: number, h: number, kind: "pk" | "blue" | "ch", t: nu
     return;
   } else poly(q, "#5b92e5", false);
   poly(q, undefined);
+}
+/** What quests earned the home: a flower bed, ivy, a flag, a statue, a lantern (TownHouse.badges bits). */
+function trimmings(o: Obj, h: number, roofC: string, t: number) {
+  const b = o.h!.badges ?? 0;
+  if (!b) return;
+  const night = S.o!.dark, { x, y, w, d } = o, p = S.pal, front = o.face !== "x";
+  if (b & 1) {
+    const bx = front ? x + 0.05 : x + w + 0.12, by = front ? y + d + 0.12 : y + 0.05;
+    poly(flat(bx, by, front ? 0.55 : 0.3, front ? 0.3 : 0.55), night ? "#3a3a34" : "#e7dcc8");
+    ["#f472b6", "#fbbf24", "#f87171", "#a78bfa"].forEach((c, i) => { const [fx, fy] = P(bx + (front ? 0.08 + i * 0.13 : 0.15), by + (front ? 0.15 : 0.08 + i * 0.13)); ctx.fillStyle = c; ctx.beginPath(); ctx.arc(fx, fy - 3, 1.3, 0, 6.283); ctx.fill(); });
+  }
+  if (b & 2) {
+    ctx.fillStyle = night ? "rgba(70,110,80,.85)" : "rgba(110,160,110,.9)";
+    for (let i = 0; i < 9; i++) { const u = 0.06 + ((i * 0.37) % 1) * 0.5, z = 1 + ((i * 0.61) % 1) * (h - 3); const [ix, iy] = front ? P(x + u * w, y + d, z) : P(x + w, y + u * d, z); ctx.beginPath(); ctx.arc(ix, iy, 1.6, 0, 6.283); ctx.fill(); }
+  }
+  if (b & 4) {
+    const [fx, fy] = P(x + w * 0.5, y + d * 0.5, h + 6 + Math.min(w, d) * 5), wave = S.still ? 0 : Math.sin(t * 3 + o.s) * 1.2;
+    ctx.beginPath(); ctx.moveTo(fx, fy); ctx.lineTo(fx, fy - 12); ctx.stroke();
+    poly([[fx, fy - 12], [fx + 7, fy - 10 + wave], [fx, fy - 7]], roofC);
+  }
+  if (b & 8) {
+    const sx = front ? x + w + 0.12 : x - 0.42, sy = front ? y + d - 0.4 : y + d + 0.12;
+    box(sx, sy, 0.3, 0.3, 3, p.wall, p.wallR, p.wall);
+    const [px, py] = P(sx + 0.15, sy + 0.15, 3), bronze = night ? "#7c9a8e" : "#8fb9a8";
+    poly([[px - 1.5, py], [px + 1.5, py], [px + 1, py - 5], [px - 1, py - 5]], bronze);
+    ctx.fillStyle = bronze; ctx.beginPath(); ctx.arc(px, py - 6.5, 1.5, 0, 6.283); ctx.fill(); ctx.stroke();
+  }
+  if (b & 16) {
+    const [lx, ly] = front ? P(x + w / 2 + 0.35, y + d + 0.2) : P(x + w + 0.2, y + d / 2 + 0.35);
+    ctx.beginPath(); ctx.moveTo(lx, ly); ctx.lineTo(lx, ly - 9); ctx.stroke();
+    if (night) { const g = ctx.createRadialGradient(lx, ly - 10, 0, lx, ly - 10, 12); g.addColorStop(0, "rgba(255,210,130,.45)"); g.addColorStop(1, "rgba(255,210,130,0)"); ctx.fillStyle = g; ctx.fillRect(lx - 12, ly - 22, 24, 24); }
+    ctx.fillStyle = night ? p.lit : "#f3dea0"; ctx.beginPath(); ctx.arc(lx, ly - 10, 1.8, 0, 6.283); ctx.fill(); ctx.stroke();
+  }
 }
 /** A pennant and "You" above your house. */
 function mineMark(o: Obj, top: number, t: number) {
@@ -1614,7 +1657,7 @@ export function attachTown(canvas: HTMLCanvasElement, o: TownOpts) {
   S.sea = season(new Date());
   S.pal = palette(o.dark, S.sea.name);
   S.accent = accentOf(o.accent);
-  const sig = JSON.stringify([o.data.houses, o.data.mine, o.data.off, o.data.channels.map((c) => c.name), o.data.listings, o.data.spawned7d, o.data.building]);
+  const sig = JSON.stringify([o.data.houses, o.data.mine, o.data.off, o.data.channels.map((c) => c.name), o.data.listings, o.data.spawned7d, o.data.building, o.data.campers, o.data.meCamping, o.data.sponsors]);
   if (sig !== S.sig || !S.plan) { S.plan = layoutTown(o.data); S.sig = sig; }
   S.data = o.data;
   syncWalkers();

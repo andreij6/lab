@@ -20,6 +20,16 @@ pub struct TownHouse {
     pub lit: u8,
     /// one of the notebooks has under 30 days of cycles left
     pub low: bool,
+    /// quests done, as bits: 1 Sprout (10 notes), 2 Weaver (25 links), 4 a week's streak, 8 a month's
+    /// streak, 16 Librarian (100 notes). Cosmetic: a flower bed, ivy, a flag, a statue, a lantern.
+    pub badges: u8,
+}
+#[derive(CandidType, Deserialize, Clone, Debug)]
+pub struct TownSponsor {
+    pub name: String,
+    pub blurb: String,
+    pub url: String,
+    pub color: String,
 }
 #[derive(CandidType, Deserialize, Clone, Debug)]
 pub struct TownChannel {
@@ -72,8 +82,12 @@ pub struct Town {
     /// fundraisers in chat that are still open, and what they raised (the chapel)
     pub fundraisers_open: u32,
     pub raised_e8s: u64,
-    /// which of board, market, rain, fundraisers are switched off
+    /// which of board, market, rain, fundraisers, sponsors are switched off
     pub off: Vec<String>,
+    /// projects that paid for a building in the Sponsors district
+    pub sponsors: Vec<TownSponsor>,
+    /// your own quests, from your notebooks: notes, links, best streak
+    pub my_quests: Option<(u64, u64, u32)>,
 }
 
 const DAY_NS: u64 = 24 * HOUR_NS;
@@ -86,6 +100,8 @@ const BUILDING_NS: u64 = 3 * DAY_NS;
 struct Counted {
     at: u64,
     houses: Vec<TownHouse>,
+    /// owner -> (notes, links, best streak), for their own quests card
+    quests: std::collections::HashMap<Principal, (u64, u64, u32)>,
     /// every home, by lot (so yours can always be shown)
     all: std::collections::BTreeMap<u32, TownHouse>,
     people: u32,
@@ -110,6 +126,10 @@ thread_local! {
     static TOWN_BUSY: Cell<bool> = const { Cell::new(false) };
 }
 
+/// Which quests a person's notebooks have done, as bits (see TownHouse::badges).
+pub fn badges_for(notes: u64, links: u64, streak: u32) -> u8 {
+    (notes >= 10) as u8 | ((links >= 25) as u8) << 1 | ((streak >= 7) as u8) << 2 | ((streak >= 30) as u8) << 3 | ((notes >= 100) as u8) << 4
+}
 /// A house from what one person owns: how many notebooks, how many notes in them, when one was
 /// last edited. None when every notebook has been quiet for 30 days.
 pub fn house_of(notebooks: u64, notes: u64, newest: Option<u64>, now: u64) -> Option<(u8, u8, u8)> {
@@ -135,8 +155,8 @@ pub async fn refresh_town() {
     let usage = stats::usage_all(&nbs).await;
     let status = status_all(&nbs).await;
     let (mut cycles, mut burn) = (0u128, 0u128);
-    // owner -> (lowest token id, notebooks, notes, newest edit, low on cycles)
-    let mut by: std::collections::BTreeMap<Principal, (u64, u64, u64, Option<u64>, bool)> = Default::default();
+    // owner -> (lowest token id, notebooks, notes, newest edit, low on cycles, links, best streak)
+    let mut by: std::collections::BTreeMap<Principal, (u64, u64, u64, Option<u64>, bool, u64, u32)> = Default::default();
     for ((n, u), st) in nbs.iter().zip(usage.iter()).zip(status.iter()) {
         if let Some((c, b)) = st {
             cycles += c;
@@ -144,7 +164,7 @@ pub async fn refresh_town() {
         }
         // notebooks from before tokens only have an address once tokenize_all has run
         let Some(id) = ID_OF.with_borrow(|m| m.get(&n.canister)) else { continue };
-        let e = by.entry(n.owner).or_insert((u64::MAX, 0, 0, None, false));
+        let e = by.entry(n.owner).or_insert((u64::MAX, 0, 0, None, false, 0, 0));
         e.0 = e.0.min(id);
         e.1 += 1;
         e.4 |= st.is_some_and(|(c, b)| b > 0 && c / b < LOW_DAYS);
@@ -152,14 +172,17 @@ pub async fn refresh_town() {
         if let Some(u) = u {
             e.2 += u.notes;
             e.3 = e.3.max(u.last_modified);
+            e.5 += u.links.unwrap_or(0);
+            e.6 = e.6.max(u.streak.unwrap_or(0));
         }
     }
+    let quests: std::collections::HashMap<Principal, (u64, u64, u32)> = by.iter().map(|(p, e)| (*p, (e.2, e.5, e.6))).collect();
     let mut people: u32 = 0;
     let mut houses: Vec<TownHouse> = Vec::new();
-    for (_, (id, count, notes, newest, low)) in by {
+    for (_, (id, count, notes, newest, low, links, streak)) in by {
         people += 1;
         if let Some((storeys, size, lit)) = house_of(count, notes, newest, now) {
-            houses.push(TownHouse { lot: (id - 1) as u32, storeys, size, lit, low });
+            houses.push(TownHouse { lot: (id - 1) as u32, storeys, size, lit, low, badges: badges_for(notes, links, streak) });
         }
     }
     // the chapel: fundraisers still open, and what fundraisers raised (messages go after 90 days)
@@ -179,7 +202,7 @@ pub async fn refresh_town() {
     let quiet = people.saturating_sub(homes);
     let all = houses.iter().map(|h| (h.lot, h.clone())).collect();
     let houses = pick_houses(&houses, MAX_HOUSES);
-    TOWN.with_borrow_mut(|t| *t = Counted { at: now, houses, all, people, homes, quiet, cycles, burn, fundraisers_open, raised_e8s });
+    TOWN.with_borrow_mut(|t| *t = Counted { at: now, houses, all, quests, people, homes, quiet, cycles, burn, fundraisers_open, raised_e8s });
 }
 /// At most `max` homes to draw, a mix of every kind: grouped by size, storeys and how recently they were
 /// edited, then taken a group at a time in turn, each group in a scattered order so the homes shown spread
@@ -306,7 +329,8 @@ fn town() -> Result<Town, String> {
     }
     // ponytail: scans every check-in; keep a running count if there are ever thousands
     let hikers = WATCHES.with_borrow(|w| w.iter().filter(|e| { let w = e.value().0; !w.closed && !watch_overdue(&w, now) }).count()).min(6) as u8;
-    let off = ["board", "market", "rain", "fundraisers"].iter().filter(|f| !on(f)).map(|f| f.to_string()).collect();
+    let off = ["board", "market", "rain", "fundraisers", "sponsors"].iter().filter(|f| !on(f)).map(|f| f.to_string()).collect();
+    let sponsors = if on("sponsors") { sponsors::live_sponsors(now).into_iter().take(8).map(|x| TownSponsor { name: x.name, blurb: x.blurb, url: x.url, color: x.color }).collect() } else { vec![] };
     // new notebooks: building sites on their owners' lots, and the factory's output
     let (mut spawned_24h, mut spawned_7d, mut notebooks) = (0, 0, 0);
     let mut new_owners = std::collections::BTreeSet::new();
@@ -334,7 +358,7 @@ fn town() -> Result<Town, String> {
     let me_camping = me != Principal::anonymous() && !owners.contains(&me) && VISITORS.with_borrow(|v| v.contains_key(&me));
     let week = now.saturating_sub(7 * DAY_NS);
     let newcomers_7d = MEMBERS.with_borrow(|m| m.iter().filter(|e| e.value().0.joined_at >= week).count()) as u32;
-    Ok(TOWN.with_borrow(|t| Town { at: t.at, homes: t.homes, max_shown: MAX_HOUSES as u32, my_house: mine.and_then(|l| t.all.get(&l).cloned()), houses: t.houses.clone(), people: t.people, quiet: t.quiet, mine, my_channel, channels, post_topics, posts_live, posts_24h, listings, rains_24h, last_rain, hikers, off, building, notebooks, spawned_24h, spawned_7d, newcomers_7d, cycles: Nat::from(t.cycles), burn_per_day: Nat::from(t.burn), campers, me_camping, fundraisers_open: t.fundraisers_open, raised_e8s: t.raised_e8s }))
+    Ok(TOWN.with_borrow(|t| Town { at: t.at, homes: t.homes, max_shown: MAX_HOUSES as u32, my_house: mine.and_then(|l| t.all.get(&l).cloned()), houses: t.houses.clone(), people: t.people, quiet: t.quiet, mine, my_channel, channels, post_topics, posts_live, posts_24h, listings, rains_24h, last_rain, hikers, off, building, notebooks, spawned_24h, spawned_7d, newcomers_7d, cycles: Nat::from(t.cycles), burn_per_day: Nat::from(t.burn), campers, me_camping, fundraisers_open: t.fundraisers_open, raised_e8s: t.raised_e8s, sponsors, my_quests: t.quests.get(&me).copied() }))
 }
 
 #[cfg(test)]
@@ -342,7 +366,7 @@ mod tests {
     use super::*;
     #[test]
     fn a_mix_of_every_kind() {
-        let houses: Vec<TownHouse> = (0..5000u32).map(|i| TownHouse { lot: i, storeys: if i % 50 == 0 { 3 } else { 1 }, size: if i % 97 == 0 { 3 } else { 0 }, lit: if i % 7 == 0 { 2 } else { 0 }, low: false }).collect();
+        let houses: Vec<TownHouse> = (0..5000u32).map(|i| TownHouse { lot: i, storeys: if i % 50 == 0 { 3 } else { 1 }, size: if i % 97 == 0 { 3 } else { 0 }, lit: if i % 7 == 0 { 2 } else { 0 }, low: false, badges: 0 }).collect();
         let shown = pick_houses(&houses, 600);
         assert_eq!(shown.len(), 600);
         assert!(shown.windows(2).all(|w| w[0].lot < w[1].lot), "street order, no repeats");
@@ -355,6 +379,13 @@ mod tests {
         assert_eq!(pick_houses(&houses[..10], 600).len(), 10);
     }
     const D: u64 = DAY_NS;
+    #[test]
+    fn quests_as_bits() {
+        assert_eq!(badges_for(0, 0, 0), 0);
+        assert_eq!(badges_for(10, 0, 0), 1);
+        assert_eq!(badges_for(9, 25, 6), 2);
+        assert_eq!(badges_for(100, 25, 30), 1 | 2 | 4 | 8 | 16);
+    }
     #[test]
     fn houses_from_buckets() {
         let now = 100 * D;

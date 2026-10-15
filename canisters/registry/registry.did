@@ -227,12 +227,14 @@ type Result_17 = variant { Ok : vec SnapshotInfo; Err : text };
 type Result_18 = variant { Ok : vec Message; Err : text };
 type Result_19 = variant { Ok : Health; Err : text };
 type Result_2 = variant { Ok : AppStats; Err : text };
-type Result_20 = variant { Ok : vec Online; Err : text };
-type Result_21 = variant { Ok : Rain; Err : text };
-type Result_22 = variant { Ok : Bug; Err : text };
-type Result_23 = variant { Ok : Flag; Err : text };
-type Result_24 = variant { Ok : SnapshotInfo; Err : text };
-type Result_25 = variant { Ok : Town; Err : text };
+type Result_20 = variant { Ok : SponsorView; Err : text };
+type Result_21 = variant { Ok : vec SponsorView; Err : text };
+type Result_22 = variant { Ok : vec Online; Err : text };
+type Result_23 = variant { Ok : Rain; Err : text };
+type Result_24 = variant { Ok : Bug; Err : text };
+type Result_25 = variant { Ok : Flag; Err : text };
+type Result_26 = variant { Ok : SnapshotInfo; Err : text };
+type Result_27 = variant { Ok : Town; Err : text };
 type Result_3 = variant { Ok : nat32; Err : text };
 type Result_4 = variant { Ok : Attestation; Err : text };
 type Result_5 = variant { Ok : vec Bug; Err : text };
@@ -250,6 +252,23 @@ type Route = variant {
   Cycles;
 };
 type SnapshotInfo = record { id : blob; total_size : nat64; taken_at : nat64 };
+type SponsorInput = record {
+  url : text;
+  name : text;
+  color : text;
+  blurb : text;
+};
+// What anyone may see of a sponsor (no principal).
+type SponsorView = record {
+  id : nat64;
+  url : text;
+  mine : bool;
+  name : text;
+  color : text;
+  paid_until : nat64;
+  approved : bool;
+  blurb : text;
+};
 type Stats = record {
   cycles_per_notebook : nat;
   notebooks : nat64;
@@ -267,11 +286,13 @@ type Token = record {
 type Town = record {
   // when the houses were counted; 0 while the town is still waking up
   at : nat64;
-  // which of board, market, rain, fundraisers are switched off
+  // which of board, market, rain, fundraisers, sponsors are switched off
   off : vec text;
   burn_per_day : nat;
   spawned_7d : nat32;
   posts_live : nat32;
+  // your own quests, from your notebooks: notes, links, best streak
+  my_quests : opt record { nat64; nat64; nat32 };
   rains_24h : nat32;
   // fundraisers in chat that are still open, and what they raised (the chapel)
   fundraisers_open : nat32;
@@ -307,6 +328,8 @@ type Town = record {
   houses : vec TownHouse;
   // people who joined the community in the last week (the school)
   newcomers_7d : nat32;
+  // projects that paid for a building in the Sponsors district
+  sponsors : vec TownSponsor;
   raised_e8s : nat64;
   // people who signed in within 30 days and have no notebook yet: tents in the campground
   campers : nat32;
@@ -320,8 +343,17 @@ type TownHouse = record {
   low : bool;
   // notebooks owned, 1-3
   storeys : nat8;
+  // quests done, as bits: 1 Sprout (10 notes), 2 Weaver (25 links), 4 a week's streak, 8 a month's
+  // streak, 16 Librarian (100 notes). Cosmetic: a flower bed, ivy, a flag, a statue, a lantern.
+  badges : nat8;
   // notes in them: 0 under 10, 1 under 50, 2 under 200, 3 more
   size : nat8;
+};
+type TownSponsor = record {
+  url : text;
+  name : text;
+  color : text;
+  blurb : text;
 };
 type TransferArg = record {
   to : Account;
@@ -509,6 +541,8 @@ service : () -> {
   my_primary : () -> (opt Notebook) query;
   // Rain that fell on you after `after` (an id), so the app can celebrate it anywhere.
   my_rain : (nat64) -> (vec Rain) query;
+  // Your own proposals, pending, approved or paid.
+  my_sponsors : () -> (vec SponsorView) query;
   my_wallet : () -> (opt principal) query;
   // My trips, newest first.
   my_watches : () -> (vec Watch) query;
@@ -522,10 +556,15 @@ service : () -> {
   // otherwise). ICP goes to the minting canister, TCYCLES is withdrawn straight into the notebook,
   // and every other token is swapped for ICP on ICPSwap first. Returns the cycles that reached the notebook.
   pay : (principal, text, nat, opt principal) -> (Result_10);
+  // Pay for an approved building for `months` (1-12), pulled from your allowance for the registry.
+  // Paying again extends the time.
+  pay_sponsor : (nat64, nat8) -> (Result_20);
+  // Admin: proposals waiting for review.
+  pending_sponsors : () -> (Result_21) query;
   // Pin or unpin a message in its channel (the author or an admin).
   pin_message : (text, nat64, bool) -> (Result_8);
   // "I am reading this channel": kept two minutes for the online list.
-  ping_chat : (text) -> (Result_20);
+  ping_chat : (text) -> (Result_22);
   // Pinned messages of a channel, oldest first.
   pinned : (text) -> (Result_18) query;
   // Post to a channel (members with a current ICP check). Markdown, 2000 characters at most.
@@ -548,7 +587,7 @@ service : () -> {
   // Send `total_e8s` of ICP, pulled from your allowance for the registry, split over `count` people
   // picked at random from those who posted in the last 30 minutes. Returns the rain, which is also
   // announced in the channel.
-  rain : (text, nat64, nat8) -> (Result_21);
+  rain : (text, nat64, nat8) -> (Result_23);
   // How many people could be rained on right now (excluding you).
   rain_eligible : () -> (nat32) query;
   // Rate a notebook you bought, 1 to 5 stars; rating again replaces your earlier one.
@@ -560,15 +599,17 @@ service : () -> {
   remove_admin : (principal) -> (Result);
   remove_token : (text) -> (Result);
   // Anyone signed in can report a bug (title + detail); the app adds where it happened.
-  report_bug : (text, text, text) -> (Result_22);
+  report_bug : (text, text, text) -> (Result_24);
   // An idea or feature request: same queue as bugs, marked so admins can triage separately.
-  report_idea : (text, text, text) -> (Result_22);
+  report_idea : (text, text, text) -> (Result_24);
   // Roll a notebook back to a snapshot: stop, load, start.
   restore_snapshot : (principal, blob) -> (Result);
+  // Admin: approve a proposal, or turn it down (which removes it).
+  review_sponsor : (nat64, bool) -> (Result);
   // Put a channel in a section, or with None back under "Channels" (admins).
   set_channel_section : (text, opt text) -> (Result_11);
   // Admin: switch a feature on or off for everyone.
-  set_flag : (text, bool) -> (Result_23);
+  set_flag : (text, bool) -> (Result_25);
   // Change one notebook's freezing threshold (controller only): the admin's knob for testing a freeze or granting more time.
   set_freezing_threshold : (principal, nat64) -> (Result);
   // Admin: the `owner/name` repository whose contributors may use the developers channel.
@@ -580,6 +621,8 @@ service : () -> {
   set_price : (nat64) -> (Result);
   // Choose which of your notebooks pays for what you do in the community.
   set_primary : (principal) -> (Result_6);
+  // Admin: what a month costs, in e8s.
+  set_sponsor_price : (nat64) -> (Result);
   // Add or change an accepted token (admin or controller).
   set_token : (Token) -> (Result);
   // Register (or with None, forget) the wallet you pay from, e.g. your OISY account.
@@ -589,13 +632,18 @@ service : () -> {
   set_watch : (text, text, text, nat64, opt nat32) -> (Result_7);
   // Drop a post into a channel: a message that links to it.
   share_post : (text, nat64) -> (Result_8);
+  // Propose a building (signed in). It shows once an admin approves it and you have paid.
+  sponsor : (SponsorInput) -> (Result_20);
+  sponsor_price : () -> (nat64) query;
+  // The buildings in the Sponsors district: approved and paid for.
+  sponsors : () -> (vec SponsorView) query;
   stats : () -> (Stats) query;
   // Convert the ICP collected from spawns into the registry's own cycles (controller or timer).
   sweep_fees : () -> (Result_10);
   // The registry keeps no tokens either: market fees in ck tokens or TCYCLES become its own cycles hourly.
   sweep_holdings : () -> (Result_15);
   // Take a snapshot of a notebook canister (its owner); at most one is kept, the newest replaces it.
-  take_snapshot : (principal, opt blob) -> (Result_24);
+  take_snapshot : (principal, opt blob) -> (Result_26);
   token_id : (principal) -> (opt nat64) query;
   // Give every notebook from before tokenisation an ICRC-7 id (controller only; new ones get it at spawn).
   tokenize_all : () -> (Result_3);
@@ -606,7 +654,7 @@ service : () -> {
   // minting canister for the notebook, and minted into its cycles. Returns the cycles minted.
   top_up_notebook : (principal, nat64, opt principal) -> (Result_10);
   // The town right now: the houses (counted every few hours) and the public spaces (live).
-  town : () -> (Result_25) query;
+  town : () -> (Result_27) query;
   // Strips headers so every replica sees the same response.
   transform_github : (TransformArgs) -> (HttpRequestResult) query;
   // New (not deleted) messages in every channel after the id the caller last saw there, capped at
@@ -615,7 +663,7 @@ service : () -> {
       vec record { text; nat32 },
     ) query;
   // Move a report along and leave a note (admin only).
-  update_bug : (nat64, BugStatus, text) -> (Result_22);
+  update_bug : (nat64, BugStatus, text) -> (Result_24);
   // Upgrade every notebook to the wasm embedded in this registry (controller only).
   upgrade_notebooks : () -> (Result_3);
   // The app says hello when someone signs in, so the town can count people without a notebook yet.

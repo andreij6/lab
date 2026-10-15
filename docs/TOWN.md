@@ -46,6 +46,16 @@ To add a landmark, add an entry to its district: an id, a `kind`, a title, a blu
 a new one needs no drawing code. A new district is a name, a blurb and blocks; pick blocks before the town reaches
 them, or homes there would move.
 
+**Quests** (TownHouse.badges, bits): 1 Sprout (10 notes: a flower bed), 2 Weaver (25 links: ivy), 4 a week's streak
+(a flag on the roof), 8 a month's streak (a statue), 16 Librarian (100 notes: a lantern). Computed by the registry at
+refresh from each notebook's `usage()` (notes, links, streak; the notebook keeps a map of days a person changed a note),
+summed per owner. `Town.my_quests` gives the caller their own (notes, links, best streak).
+
+**Sponsors** (`sponsors.rs`, MemoryIds 41-43, flag `sponsors`): propose → admin `review_sponsor` → `pay_sponsor`
+(months × `sponsor_price`, through the usual ICRC-2 allowance; the ICP is swept into the registry's cycles). `town()`
+carries the live ones (name, blurb, url, colour; no principals); the frontend fills the static Sponsors district
+(blocks (1,−2), (2,−2), eight lots) with `office` buildings in their colour.
+
 **The outskirts**, beyond the last streets and away from homes (both move outward as the town grows): the spaceport
 on the back right coast, fenced, and the notebook works (the factory: sawtooth roof, two stacks, smoke when a notebook
 was made today, a crate per notebook this week) in the front right corner by the railway. Each gets rounded ground and

@@ -283,6 +283,28 @@ thread_local! {
     /// CMC-leg block index -> top-up awaiting a successful notify_top_up; retried from a timer
     static PENDING: RefCell<StableBTreeMap<u64, C<TopUp>, Mem>> = RefCell::new(StableBTreeMap::init(mem(4)));
     static TOTALS: RefCell<StableCell<C<(u64, u128)>, Mem>> = RefCell::new(StableCell::init(mem(5), C((0, 0))));
+    /// day (days since the epoch) -> how many notes a person changed that day, for streaks
+    static DAYS: RefCell<StableBTreeMap<u32, u32, Mem>> = RefCell::new(StableBTreeMap::init(mem(19)));
+}
+const DAY_NS: u64 = 86_400_000_000_000;
+/// A person changed a note today: count it toward their streak (agents' writes do not count).
+fn bump_day() {
+    let today = (time() / DAY_NS) as u32;
+    DAYS.with_borrow_mut(|d| {
+        let n = d.get(&today).unwrap_or(0) + 1;
+        d.insert(today, n);
+        // ponytail: 400 days is plenty for a streak and a year's activity
+        while d.len() > 400 { let first = d.first_key_value().map(|(k, _)| k); if let Some(k) = first { d.remove(&k); } else { break; } }
+    });
+}
+/// Consecutive days with a change, ending today or yesterday.
+fn streak_days(today: u32) -> u32 {
+    DAYS.with_borrow(|d| {
+        let mut day = if d.contains_key(&today) { today } else if today > 0 && d.contains_key(&(today - 1)) { today - 1 } else { return 0 };
+        let mut n = 0;
+        while d.contains_key(&day) { n += 1; if day == 0 { break; } day -= 1; }
+        n
+    })
 }
 fn mem(id: u8) -> Mem {
     MM.with_borrow(|m| m.get(MemoryId::new(id)))
@@ -681,13 +703,14 @@ fn read_page(after: Option<String>, limit: u32) -> Result<Page, NotebookError> {
     Ok(Page { notes, next })
 }
 
-/// Import many files at once (a vault upload); bad names are reported, not fatal.
+/// Import many files at once (an Obsidian import); bad names are reported, not fatal.
 #[update]
 fn write_many(files: Vec<(String, String)>, overwrite: bool) -> Result<Imported, NotebookError> {
     owner()?;
     let now = time();
     let mut written = 0;
     let mut failed = vec![];
+    let mut changed_any = false;
     for (p, content) in files {
         let path = match check_path(&p).and_then(|x| people_only(&x).map(|_| x)) {
             Ok(x) => x,
@@ -701,6 +724,7 @@ fn write_many(files: Vec<(String, String)>, overwrite: bool) -> Result<Imported,
             failed.push((path, format!("larger than {MAX_CONTENT} bytes")));
             continue;
         }
+        let same = FILES.with_borrow(|f| f.get(&path).is_some_and(|c| c.0.content == content));
         let r = FILES.with_borrow_mut(|f| {
             let created = match f.get(&path) {
                 Some(_) if !overwrite => return Err("exists"),
@@ -718,10 +742,12 @@ fn write_many(files: Vec<(String, String)>, overwrite: bool) -> Result<Imported,
             Ok(()) => {
                 register_parents(&path);
                 written += 1;
+                if !same && path.ends_with(".md") { changed_any = true; }
             }
             Err(m) => failed.push((path, m.into())),
         }
     }
+    if changed_any { bump_day(); }
     Ok(Imported { written, failed })
 }
 
@@ -735,6 +761,7 @@ fn write(path: String, content: String) -> Result<FileMeta, NotebookError> {
         return Err(NotebookError::Invalid(format!("a file is limited to {} bytes", MAX_CONTENT)));
     }
     let now = time();
+    let changed = FILES.with_borrow(|f| f.get(&path).map_or(true, |c| c.0.content != content));
     let s = FILES.with_borrow_mut(|f| {
         let created = match f.get(&path) {
             Some(c) => {
@@ -749,6 +776,7 @@ fn write(path: String, content: String) -> Result<FileMeta, NotebookError> {
         Ok(s)
     })?;
     register_parents(&path);
+    if changed && path.ends_with(".md") { bump_day(); }
     Ok(meta(&path, &s))
 }
 
@@ -836,12 +864,38 @@ pub struct Usage {
     pub notes: u64,
     /// when any file last changed (ns), or none for an empty notebook
     pub last_modified: Option<u64>,
+    /// `[[links]]` across the notes
+    pub links: u64,
+    /// consecutive days (ending today or yesterday) on which a person changed a note
+    pub streak: u32,
+    /// days with a change in the last 30
+    pub active_days: u32,
 }
 
-/// How big and how recently used this notebook is, for the registry's admin numbers. Counts only.
+/// How big and how recently used this notebook is, for the registry's numbers and the town's
+/// quests. Counts only, nothing from inside the notes.
 #[query]
 fn usage() -> Usage {
-    FILES.with_borrow(|f| Usage { files: f.len(), notes: f.iter().filter(|e| e.key().ends_with(".md")).count() as u64, last_modified: f.iter().map(|e| e.value().0.modified).max() })
+    let today = (time() / DAY_NS) as u32;
+    // ponytail: one pass over every note's text per call; the registry asks a few times a day
+    let (files, notes, links, last_modified) = FILES.with_borrow(|f| {
+        let (mut notes, mut links, mut last) = (0u64, 0u64, None::<u64>);
+        for e in f.iter() {
+            let st = e.value().0;
+            last = last.max(Some(st.modified));
+            // agents' notes are theirs, not the person's writing
+            if e.key().ends_with(".md") && !e.key().starts_with("Agents/") { notes += 1; links += st.content.matches("[[").count() as u64; }
+        }
+        (f.len(), notes, links, last)
+    });
+    let active_days = DAYS.with_borrow(|d| d.range(today.saturating_sub(29)..=today).count() as u32);
+    Usage { files, notes, last_modified, links, streak: streak_days(today), active_days }
+}
+/// Someone's role over the whole notebook, for the registry (so a team member may top it up).
+#[query]
+fn role_of(who: Principal) -> Option<Role> {
+    if msg_caller() != config().registry { return None; }
+    access("", who)
 }
 
 // ---------------------------------------------------------------- ownership and the quality audit
@@ -1924,6 +1978,7 @@ fn write_shared(path: String, content: String) -> Result<FileMeta, NotebookError
         return Err(NotebookError::Invalid(format!("a file is limited to {MAX_CONTENT} bytes")));
     }
     let now = time();
+    let changed = FILES.with_borrow(|f| f.get(&path).map_or(true, |c| c.0.content != content));
     let s = FILES.with_borrow_mut(|f| {
         let created = match f.get(&path) {
             Some(c) => {
@@ -1938,6 +1993,7 @@ fn write_shared(path: String, content: String) -> Result<FileMeta, NotebookError
         Ok(s)
     })?;
     register_parents(&path);
+    if changed && path.ends_with(".md") { bump_day(); }
     Ok(meta(&path, &s))
 }
 
@@ -2550,7 +2606,11 @@ async fn llm_chat(llm: Principal, model: &str, user: String) -> Result<String, S
 }
 #[update]
 async fn ask(llm: Principal, model: String, question: String, sources: Vec<AskSource>) -> Result<AskAnswer, NotebookError> {
-    owner()?;
+    // the owner, or an editor of the whole notebook with a free model (paid ones spend the owner's cycles)
+    if owner().is_err() {
+        if access("", msg_caller()) != Some(Role::Edit) { return Err(NotebookError::Unauthorized); }
+        if PAID_MODELS.contains(&model.trim()) { return Err(NotebookError::Invalid("only the owner may use a paid model".into())); }
+    }
     let question = question.trim().to_string();
     if question.is_empty() || question.chars().count() > 1_000 {
         return Err(NotebookError::Invalid("question: 1-1000 characters".into()));

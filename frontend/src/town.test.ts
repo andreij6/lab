@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { blockAt, cellAt, DISTRICTS, homeBlock, layoutTown, project, season, unproject, BRIDGE, LAND, RAIL, ROAD, VOID, WATER, type TownData, type TownHouse } from "./town.ts";
 
-const town = (houses: TownHouse[], more: Partial<TownData> = {}): TownData => ({ at: 1, houses, people: houses.length, homes: houses.length, maxShown: 600, quiet: 0, channels: [{ name: "general", online: 2, messages24h: 5 }], postTopics: [], postsLive: 0, posts24h: 0, listings: 3, rains24h: 0, hikers: 0, off: [], building: [], notebooks: houses.length, spawned24h: 0, spawned7d: 0, newcomers7d: 0, cycles: 0, burnPerDay: 0, fundraisersOpen: 0, raisedE8s: 0, campers: 0, meCamping: false, ...more });
+const town = (houses: TownHouse[], more: Partial<TownData> = {}): TownData => ({ at: 1, houses, people: houses.length, homes: houses.length, maxShown: 600, quiet: 0, channels: [{ name: "general", online: 2, messages24h: 5 }], postTopics: [], postsLive: 0, posts24h: 0, listings: 3, rains24h: 0, hikers: 0, off: [], building: [], notebooks: houses.length, spawned24h: 0, spawned7d: 0, newcomers7d: 0, cycles: 0, burnPerDay: 0, fundraisersOpen: 0, raisedE8s: 0, campers: 0, meCamping: false, sponsors: [], ...more });
 const house = (lot: number): TownHouse => ({ lot, storeys: 1, size: lot % 4, lit: lot % 3 });
 const spot = (d: TownData) => new Map(layoutTown(d).objs.filter((o) => o.k === "house").map((o) => [o.h!.lot, [o.x, o.y]]));
 
@@ -84,6 +84,8 @@ test("town: districts hold their landmarks, and homes are never built there", ()
   for (let b = 0; b < 40; b++) assert.ok(!held.has(homeBlock(b).join()), `home block ${b}`);
   const ids = pl.objs.flatMap((o) => (o.tg?.kind === "landmark" ? [o.tg.landmark.id] : []));
   assert.deepEqual(ids.sort(), ["dfinity-news", "dominic", "icpswap", "nns", "oisy", "pakistan", "soon", "swiss", "undp"]);
+  const sp = layoutTown(town([house(1)], { sponsors: [{ name: "A", blurb: "", url: "https://a.io", color: "#29abe2" }, { name: "B", blurb: "", url: "https://b.io", color: "#ed1e79" }] })).objs.filter((o) => o.tg?.kind === "landmark" && o.tg.landmark.sponsored);
+  assert.equal(sp.length, 2, "sponsors become buildings in their district");
   for (const o of pl.objs.filter((o) => o.k === "house")) assert.ok(!held.has([Math.floor((o.x - 1) / 7), Math.floor((o.y - 1) / 7)].join()), `a home in a district at ${o.x},${o.y}`);
   // every district is named on a sign
   assert.deepEqual(new Set(pl.objs.filter((o) => o.k === "sign" && o.s === 1).map((o) => (o.tg as { district: { id: string } }).district.id)), new Set(DISTRICTS.map((d) => d.id)));

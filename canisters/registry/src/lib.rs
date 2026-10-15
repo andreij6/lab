@@ -16,8 +16,10 @@ use ic_stable_structures::{storable::Bound, DefaultMemoryImpl, StableBTreeMap, S
 use std::borrow::Cow;
 use std::cell::RefCell;
 
+mod sponsors;
 mod stats;
 mod town;
+use sponsors::{SponsorInput, SponsorView};
 use stats::AppStats;
 use town::Town;
 
@@ -1026,7 +1028,14 @@ async fn set_freezing_threshold(canister: Principal, secs: u64) -> Result<(), St
 #[update]
 async fn top_up_notebook(canister: Principal, amount_e8s: u64, payer: Option<Principal>) -> Result<Nat, String> {
     let caller = msg_caller();
-    owns(caller, canister)?;
+    // the owner, or someone the notebook says may edit all of it (a team member chipping in)
+    if owns(caller, canister).is_err() {
+        // the notebook's Role enum (canisters/notebook: View, Comment, Edit); anyone it knows may pay its bills
+        #[derive(CandidType, Deserialize, PartialEq)]
+        enum NbRole { View, Comment, Edit }
+        let role: Option<NbRole> = Call::bounded_wait(canister, "role_of").with_arg(caller).await.ok().and_then(|r| r.candid().ok()).flatten();
+        if role.is_none() { return Err("not your notebook".into()); }
+    }
     let payer = payer.unwrap_or(caller);
     if payer == Principal::anonymous() {
         return Err("payer must be a real principal".into());
@@ -1279,7 +1288,7 @@ thread_local! {
     /// the wallet a person pays from when it is not their sign-in principal (their OISY account)
     static WALLETS: RefCell<StableBTreeMap<Principal, Principal, Mem>> = RefCell::new(StableBTreeMap::init(MM.with_borrow(|m| m.get(MemoryId::new(32)))));
     static NEXT_WATCH: RefCell<ic_stable_structures::StableCell<u64, Mem>> = RefCell::new(ic_stable_structures::StableCell::init(MM.with_borrow(|m| m.get(MemoryId::new(31))), 1));
-    // MemoryIds 33-38 are retired (a journal that never shipped): leave them unused. 39: town.rs VISITORS; start new maps at 41
+    // MemoryIds 33-38 are retired (a journal that never shipped): leave them unused. 39: town.rs VISITORS; 41-43: sponsors.rs; start new maps at 44
     /// owner -> the notebook that pays for what they do in the community (none set: their oldest)
     static PRIMARY: RefCell<StableBTreeMap<Principal, Principal, Mem>> = RefCell::new(StableBTreeMap::init(MM.with_borrow(|m| m.get(MemoryId::new(40)))));
 }
@@ -1404,6 +1413,7 @@ const FLAG_DEFAULTS: &[(&str, bool, &str)] = &[
     ("rain", true, "Rain: send ICP to random recent chatters"),
     ("fundraisers", true, "Fundraisers in chat: notebook cycles and AI plans"),
     ("town", true, "The town: Lab's activity as a small living town, on the landing page and at #/town"),
+    ("sponsors", true, "Sponsored buildings in the town: projects pay ICP by the month, admins approve"),
 ];
 #[derive(CandidType, Deserialize, Clone, Debug)]
 pub struct Flag {

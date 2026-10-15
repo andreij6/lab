@@ -269,10 +269,16 @@ type TransformArgs = record {
 };
 type Usage = record {
   files : nat64;
+  // consecutive days (ending today or yesterday) on which a person changed a note
+  streak : nat32;
+  // `[[links]]` across the notes
+  links : nat64;
   // markdown notes among the files
   notes : nat64;
   // when any file last changed (ns), or none for an empty notebook
   last_modified : opt nat64;
+  // days with a change in the last 30
+  active_days : nat32;
 };
 service : (Init) -> {
   agent_keys : () -> (Result) query;
@@ -354,6 +360,8 @@ service : (Init) -> {
   // One earlier version in full; restore it by writing it back.
   revision : (text, nat64) -> (Result_20) query;
   revoke_agent_key : (text) -> (Result_8);
+  // Someone's role over the whole notebook, for the registry (so a team member may top it up).
+  role_of : (principal) -> (opt Role) query;
   search_notes : (text, nat32) -> (Result_25) query;
   // Mark where you are with a note: 1 read, 2 reviewing, 3 known (0 clears).
   set_progress : (text, nat8) -> (Result_8);
@@ -389,12 +397,13 @@ service : (Init) -> {
   // this notebook reads (dates, cookies and request ids differ from replica to replica).
   transform_fetch : (TransformArgs) -> (HttpRequestResult) query;
   unshare_note : (text) -> (Result_8);
-  // How big and how recently used this notebook is, for the registry's admin numbers. Counts only.
+  // How big and how recently used this notebook is, for the registry's numbers and the town's
+  // quests. Counts only, nothing from inside the notes.
   usage : () -> (Usage) query;
   who_is_here : (text) -> (Result_17) query;
   // Create or overwrite a file.
   write : (text, text) -> (Result_30);
-  // Import many files at once (a vault upload); bad names are reported, not fatal.
+  // Import many files at once (an Obsidian import); bad names are reported, not fatal.
   write_many : (vec record { text; text }, bool) -> (Result_31);
   // An editor's write to a shared note (owner-style rules apply; never under Agents/).
   write_shared : (text, text) -> (Result_30);

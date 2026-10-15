@@ -65,6 +65,22 @@ if icp canister call registry town '()' --query --identity anonymous | grep -q '
 icp canister call registry set_flag '("town", false)' >/dev/null
 expect "switched off, the town is closed" "switched off" icp canister call registry town '()' --query --identity anonymous
 icp canister call registry set_flag '("town", true)' >/dev/null
+# quests: the notebook counts links, streaks and active days, nothing from inside the notes
+expect "usage counts the links and today's writing" "streak = 1" notebook usage '()' --query
+expect "and the links" "links =" notebook usage '()' --query
+# sponsored buildings: propose, admin approves, pay; nothing shows until paid
+expect "a sponsor needs an https link" "https://" icp canister call registry sponsor '(record { name = "Bad Co"; blurb = ""; url = "http://x.io"; color = "#29abe2" })' --identity "$OTHER"
+expect "a proposal is taken" "approved = false" icp canister call registry sponsor '(record { name = "E2E Co"; blurb = "An e2e sponsor"; url = "https://internetcomputer.org"; color = "#29abe2" })' --identity "$OTHER"
+SPID=$(icp canister call registry my_sponsors '()' --query --identity "$OTHER" | grep -o 'id = [0-9_]*' | head -1 | tr -dc '0-9')
+expect "paying before approval is refused" "not approved" icp canister call registry pay_sponsor "($SPID : nat64, 1 : nat8)" --identity "$OTHER"
+expect "the town shows no sponsor yet" "sponsors = vec {}" icp canister call registry town '()' --query --identity anonymous
+expect "only an admin reviews" "admin only" icp canister call registry review_sponsor "($SPID : nat64, true)" --identity "$OTHER"
+expect "the admin approves" "Ok" icp canister call registry review_sponsor "($SPID : nat64, true)"
+expect "the admin sets the price" "Ok" icp canister call registry set_sponsor_price '(100_000_000 : nat64)'
+icp token approve 1.0002 "$(icp canister status registry -i)" --identity "$OTHER" >/dev/null 2>&1 || true
+expect "the sponsor pays for a month" "paid_until" icp canister call registry pay_sponsor "($SPID : nat64, 1 : nat8)" --identity "$OTHER"
+expect "and the town shows the building, without a principal" 'name = "E2E Co"' icp canister call registry town '()' --query --identity anonymous
+expect "turning one down removes it" "Ok" icp canister call registry review_sponsor "($SPID : nat64, false)"
 [ "$(notebook list '()' --query | grep -c 'path = ')" = 4 ] && echo "  ok: four files listed (index.md and the seeded project included)" || { echo "FAIL: list"; exit 1; }
 expect "overwrite keeps one file" "size = 7" notebook write '("Ideas.md", "# Ideas")'
 expect "still four files" "files = 4" notebook info '()' --query

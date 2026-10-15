@@ -6,7 +6,7 @@ import { Actor, HttpAgent, type Identity } from "@icp-sdk/core/agent";
 import { safeGetCanisterEnv } from "@icp-sdk/core/agent/canister-env";
 import { IDL } from "@icp-sdk/core/candid";
 import { Ed25519KeyIdentity } from "@icp-sdk/core/identity";
-import { createActor as registryActor, type Rain, type Channel, type Member, type Message, type Post, type PostComment, type Flag, type Watch, type Online, type Attestation, type ListingView, type Token, type Health, type Bug, type BugStatus, type Registry, type Town, type Notebook as NotebookRec, type AppStats } from "./bindings/registry";
+import { createActor as registryActor, type Rain, type Channel, type Member, type Message, type Post, type PostComment, type Flag, type Watch, type Online, type Attestation, type ListingView, type Token, type Health, type Bug, type BugStatus, type Registry, type Town, type SponsorView, type Notebook as NotebookRec, type AppStats } from "./bindings/registry";
 import { createActor as notebookActor, type AttestationView, type Attempt, Role, type DepositState, type AgentKey, type Comment, type Info, type Note, type Revision, type Share, type TopUp, type Notebook as NotebookApi, type NotebookError } from "./bindings/notebook";
 import type { SnapshotInfo } from "./bindings/registry";
 import { Principal } from "@icp-sdk/core/principal";
@@ -51,6 +51,8 @@ import { cacheDel, cacheGet, cacheSet, clearQueue, queueWrite, queued, type Queu
 import { registerSW } from "virtual:pwa-register";
 import { THEMES, applyTheme, loadThemeState, saveThemeState, type ThemeState } from "./themes";
 import { zip } from "./zip";
+import { addLink, addTag, suggest, type Suggestion } from "./garden";
+import type { Usage as NbUsage } from "./bindings/notebook";
 import { attachTown, season, townCamera, type Target as TownTarget, type TownData } from "./town";
 
 // ---------- the cycles minting canister: today's ICP price in cycles ----------
@@ -178,8 +180,8 @@ const nb = (): NotebookApi => notebookOf(S.notebook!.canister.toText());
 // ---------- state ----------
 
 type Tab = "notes" | "chat" | "graph" | "manage" | "study" | "work" | "organize" | "trips" | "research" | "writing" | "care" | "software" | "career" | "crypto" | "money" | "creator" | "fitness" | "home";
-type Settings = { bookmarks: string[]; srs: Record<string, Record<string, Sched>>; deckStats: Record<string, { reviews: number; good: number }>; study: Record<string, number>; goals: { notesPerWeek?: number; cardsPerDay?: number }; searches: { name: string; q: string }[]; rules: Rule[]; resurface: Resurface; decayDays: number; hideFaded: boolean; kanbanArchiveDays: number; features: Partial<Record<Tab, boolean>>; onboarded?: boolean; writingGoal: number; citeStyle: Style };
-const parseSettings = (j: Partial<Settings> | undefined): Settings => ({ bookmarks: Array.isArray(j?.bookmarks) ? j!.bookmarks : [], srs: j?.srs ?? {}, deckStats: j?.deckStats ?? {}, study: j?.study ?? {}, goals: j?.goals ?? {}, searches: Array.isArray(j?.searches) ? j!.searches : [], rules: Array.isArray(j?.rules) ? j!.rules : [], resurface: j?.resurface ?? {}, decayDays: typeof j?.decayDays === "number" ? j.decayDays : 180, hideFaded: !!j?.hideFaded, kanbanArchiveDays: typeof j?.kanbanArchiveDays === "number" ? j.kanbanArchiveDays : 14, features: j?.features ?? {}, onboarded: j?.onboarded, writingGoal: typeof j?.writingGoal === "number" ? j.writingGoal : 500, citeStyle: j?.citeStyle === "chicago" ? "chicago" : "apa" });
+type Settings = { bookmarks: string[]; srs: Record<string, Record<string, Sched>>; deckStats: Record<string, { reviews: number; good: number }>; study: Record<string, number>; goals: { notesPerWeek?: number; cardsPerDay?: number }; searches: { name: string; q: string }[]; rules: Rule[]; resurface: Resurface; decayDays: number; hideFaded: boolean; kanbanArchiveDays: number; features: Partial<Record<Tab, boolean>>; onboarded?: boolean; writingGoal: number; citeStyle: Style; gardenHidden: string[] };
+const parseSettings = (j: Partial<Settings> | undefined): Settings => ({ bookmarks: Array.isArray(j?.bookmarks) ? j!.bookmarks : [], srs: j?.srs ?? {}, deckStats: j?.deckStats ?? {}, study: j?.study ?? {}, goals: j?.goals ?? {}, searches: Array.isArray(j?.searches) ? j!.searches : [], rules: Array.isArray(j?.rules) ? j!.rules : [], resurface: j?.resurface ?? {}, decayDays: typeof j?.decayDays === "number" ? j.decayDays : 180, hideFaded: !!j?.hideFaded, kanbanArchiveDays: typeof j?.kanbanArchiveDays === "number" ? j.kanbanArchiveDays : 14, features: j?.features ?? {}, onboarded: j?.onboarded, writingGoal: typeof j?.writingGoal === "number" ? j.writingGoal : 500, citeStyle: j?.citeStyle === "chicago" ? "chicago" : "apa", gardenHidden: Array.isArray(j?.gardenHidden) ? j!.gardenHidden : [] });
 type ManageTab = "finance" | "notebook" | "sharing" | "agents" | "market";
 const MANAGE_TABS: [ManageTab, string, string][] = [["finance", "Cycles & money", "bolt"], ["notebook", "Notebook", "notebook"], ["sharing", "Sharing", "share"], ["agents", "Agents", "bot"], ["market", "Market", "tag"]];
 type View = "edit" | "split" | "preview";
@@ -187,7 +189,7 @@ type MobilePane = "files" | "note" | "links";
 /** A pane holds tabs (note paths); several panes sit side by side. */
 type Pane = { id: number; tabs: string[]; active?: string; view: View; study?: boolean };
 type Draft = { text: string; dirty: boolean; saving: boolean };
-type ChatMsg = { role: "you" | "notes"; text: string; picks?: Pick[]; model?: string; fallback?: string };
+type ChatMsg = { role: "you" | "notes"; text: string; picks?: Pick[]; model?: string; fallback?: string; deck?: boolean; insertInto?: string };
 /** The ICP LLM canister; locally the stand-in in canisters/llm-dev that answers with Ollama. */
 const LLM_CANISTER = env["PUBLIC_CANISTER_ID:llm"] ?? "w36hm-eqaaa-aaaal-qr76a-cai";
 const LLM_LOCAL = !!env["PUBLIC_CANISTER_ID:llm"];
@@ -252,10 +254,14 @@ const S = {
   shares: [] as Share[],
   issued: undefined as { name: string; key: string } | undefined,
   newAgent: "",
-  shared: undefined as { canister: string; path: string; note?: Note; name?: string; error?: string; loading: boolean; files?: { path: string; size: bigint; modified: bigint }[]; role?: string; comments?: Comment[]; dirty?: boolean; here?: string[]; progress?: [Principal, number][]; myProgress?: number } | undefined,
+  shared: undefined as { canister: string; path: string; note?: Note; name?: string; error?: string; loading: boolean; files?: { path: string; size: bigint; modified: bigint }[]; role?: string; comments?: Comment[]; dirty?: boolean; here?: string[]; progress?: [Principal, number][]; myProgress?: number; cycles?: bigint; teamRole?: string } | undefined,
   isAdmin: false,
   flags: [] as Flag[],
-  admin: undefined as { bugs: Bug[]; filter: string; kind?: string; open?: bigint; loading: boolean; repo?: string; stats?: AppStats } | undefined,
+  admin: undefined as { bugs: Bug[]; filter: string; kind?: string; open?: bigint; loading: boolean; repo?: string; stats?: AppStats; pending?: SponsorView[]; sponsorPrice?: bigint } | undefined,
+  /** this notebook's counts for the quests card */
+  usage: undefined as NbUsage | undefined,
+  /** copilots use the stronger paid model */
+  copilotPaid: false,
   town: undefined as { data?: TownData; legend: boolean; hudOpen?: boolean } | undefined,
   /** the landing page's town: null when it is switched off or did not load */
   landingTown: undefined as TownData | null | undefined,
@@ -434,6 +440,7 @@ const ICONS: Record<string, string> = {
   megaphone: '<path d="M3 11l16-6v14L3 13z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>',
   dumbbell: '<path d="M6.5 6.5v11M17.5 6.5v11M3.5 9.5v5M20.5 9.5v5M6.5 12h11"/>',
   house: '<path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/>',
+  award: '<circle cx="12" cy="9" r="6"/><path d="M8.5 13.9 7 22l5-3 5 3-1.5-8.1"/>',
   town: '<path d="M3 20v-8l5-4 5 4v8"/><path d="M13 20V9l4-3 4 3v11"/><path d="M2 20h20"/><path d="M7 20v-3h2v3"/>',
   compass: '<circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/>',
   heart: '<path d="M12 20s-7.5-4.6-9.2-9.3A4.8 4.8 0 0 1 12 6.6a4.8 4.8 0 0 1 9.2 4.1C19.5 15.4 12 20 12 20z"/>',
@@ -1024,6 +1031,15 @@ function notebookEmoji(v: NotebookRec): string {
   }
   return emojiFor(v.name, taken);
 }
+/** Notebooks other people shared with me that I have opened (kept in this browser). */
+function sharedWithYou(): string {
+  let seen: { canister: string; name: string; at: number }[] = [];
+  try { seen = JSON.parse(store("nb-shared-seen") ?? "[]"); } catch { /* nothing kept */ }
+  seen = seen.filter((x) => !S.notebooks?.some((n) => n.canister.toText() === x.canister));
+  if (!seen.length) return "";
+  return `<section class="card"><h2>${icon("users")} Shared with you</h2><p class="muted small">Notebooks and notes other people shared with you and you have opened, kept in this browser. A notebook you can edit is a team's; anyone it knows can chip in cycles to keep it running.</p>
+    <div class="nb-grid">${seen.map((x) => `<a class="nb-card" href="#/shared/${x.canister}/" data-action="nav"><span class="nb-emoji" aria-hidden="true">📓</span><span class="name">${esc(x.name)}</span><span class="small muted">opened ${new Date(x.at).toLocaleDateString()}</span></a>`).join("")}</div></section>`;
+}
 function notebooksPage(): string {
   const cards = S.notebooks === undefined
     ? `<p class="muted">Loading your notebooks…</p>`
@@ -1046,7 +1062,7 @@ function notebooksPage(): string {
   return `<div class="page ${S.mobile ? "" : "has-activity"}">
     <header class="topbar">${brand()}<span class="right"><span class="kicker">Your notebooks</span>${themeBtn()}</span></header>
     <section class="card"><div class="row"><h2>Notebooks you own</h2><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="keep-offline" title="Download every notebook to this device so it opens and edits without signal" ${S.offline ? "disabled" : ""}>${icon("download")}${store("nb-offline-at") ? `Offline copy from ${ago(BigInt(store("nb-offline-at")!) * 1_000_000n)} · refresh` : "Keep offline"}</button></span></div><p class="muted small">Each one is its own canister that you control. Open one to write, or Manage to keep it running.</p>${cards}${account()}</section>
-  </div>${activityGrid()}`;
+  ${sharedWithYou()}</div>${activityGrid()}`;
 }
 
 // --- workspace: shell
@@ -2301,6 +2317,7 @@ function careerTab(): string {
   const bars = `<svg class="career-bars" viewBox="0 0 ${st.weeks.length * 34} 70" role="img" aria-label="Applications sent per week">${st.weeks.map((w, i) => `<rect x="${i * 34 + 6}" y="${60 - (w.sent / max) * 52}" width="22" height="${(w.sent / max) * 52 || 1}" rx="3"><title>Week of ${w.week}: ${w.sent}</title></rect><text x="${i * 34 + 17}" y="69">${w.week.slice(5).replace("-", "/")}</text>`).join("")}</svg>`;
   const appRow = (a: (typeof apps)[number], i: number) => `<div class="run"><span><a href="#" data-action="wiki" data-target="${esc(a.company)}">${esc(a.company)}</a> <span class="small muted">${esc(a.role)}${a.applied ? ` · applied ${esc(a.applied)}` : ""}</span></span><span class="row-actions"><button type="button" class="btn btn-ghost" data-action="career-followed" data-i="${i}" title="Followed up today: check again in a week">Followed up</button><button type="button" class="btn btn-ghost" data-action="career-heard" data-i="${i}" title="Move it to Screen">Heard back</button></span></div>`;
   return `<section class="main" style="overflow:auto"><div class="page wide kit">
+    ${copilotCard("career", [{ a: "resume", icon: "edit", label: "Tailor my résumé to a job post", hint: "Paste a job post; the copilot picks from your experience notes" }, { a: "interview", icon: "help", label: "Likely interview questions", hint: "Eight questions with STAR answers from your experience notes" }])}
     <div class="card band"><div class="row"><h2>${icon("compass")} Applications</h2><span class="right-actions"><button type="button" class="btn" data-action="career-board">${icon("board")}Open the board</button><button type="button" class="btn btn-primary" data-action="career-app-add">${icon("plus")}Add application</button></span></div>
       <div class="career-stats"><div><b>${st.thisWeek}</b><span>sent this week</span></div><div><b>${st.total}</b><span>sent in all</span></div><div><b>${st.responseRate}%</b><span>heard back</span></div><div><b>${st.interviewRate}%</b><span>reached an interview</span></div><div><b>${st.offers}</b><span>offer${st.offers === 1 ? "" : "s"}</span></div>${bars}</div>
       <div class="tags nudge">${STAGES.map((sg) => `<span class="tag-chip"><span>${sg}</span><span class="cnt">${apps.filter((a) => a.stage === sg).length}</span></span>`).join("")}</div>
@@ -2525,6 +2542,7 @@ function cryptoTab(): string {
       <span class="row-actions">${t.due ? `<button type="button" class="btn btn-ghost" data-action="crypto-thesis-held" data-path="${esc(t.path)}">Still holds</button><button type="button" class="btn btn-ghost" data-action="crypto-thesis-broke" data-path="${esc(t.path)}">Broke</button>` : ""}<button type="button" class="btn btn-ghost" data-action="crypto-thesis-share" data-path="${esc(t.path)}" title="Share a snapshot in #crypto">${icon("users")}Get feedback</button></span></div>`;
   };
   return `<section class="main" style="overflow:auto"><div class="page wide kit">
+    ${copilotCard("crypto", [{ a: "thesis", icon: "coin", label: "Question a thesis", hint: "Counterarguments, what would prove it wrong, what to watch" }])}
     <div class="card band"><div class="row"><h2>${icon("coin")} Prices</h2><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="crypto-watch">Edit watchlist</button><button type="button" class="btn" data-action="crypto-refresh">${icon("refresh")}Refresh</button></span></div>
       <div class="coin-tiles">${syms.map((s) => `<div class="coin-tile"><span>${esc(s)}</span><b>${quoteText(s)}</b></div>`).join("")}</div>
       <p class="small muted nudge">${quoteError ? `<span style="color:var(--danger)">Could not get prices: ${esc(quoteError)}</span> ` : latest ? `As of ${new Date(latest * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}, from ICP's exchange rate canister. ` : "Asking ICP's exchange rate canister… "}Each refresh costs this notebook a fraction of a cent in cycles. A <code>prices</code> code block shows live prices in any note.</p>
@@ -2680,6 +2698,7 @@ function moneyTab(): string {
   const nw = netWorth(hs, priceOf), hist = nsrc ? netWorthHistory(nsrc) : [];
   const pct = bt && bt.planned ? Math.min(100, Math.round((bt.spent / bt.planned) * 100)) : 0;
   return `<section class="main" style="overflow:auto"><div class="page wide kit">
+    ${copilotCard("money", [{ a: "subs", icon: "wallet", label: "Review my subscriptions", hint: "Keep, cancel or downgrade, with the saving" }, { a: "where", icon: "coin", label: "Where is my money going?", hint: "From your budget note" }])}
     <div class="grid2">
       <div class="card band"><div class="row"><h2>${icon("columns")} Budget</h2><span class="right-actions">${bsrc ? `<button type="button" class="btn btn-ghost" data-action="money-month" title="Save this month's copy and start the next with nothing spent">New month</button>` : ""}<button type="button" class="btn ${bsrc ? "" : "btn-primary"}" data-action="money-budget">${bsrc ? "Open budget" : `${icon("plus")}Make a budget`}</button></span></div>
         ${bt ? `<div class="career-stats"><div><b>${usd(bt.planned)}</b><span>planned</span></div><div><b>${usd(bt.spent)}</b><span>spent</span></div><div><b>${money(bt.left, false)}</b><span>left</span></div></div><div class="meter" role="img" aria-label="${pct}% of the budget spent"><i style="width:${pct}%" class="${bt.left < 0 ? "over" : ""}"></i></div>` : `<p class="small muted">A spreadsheet of what you plan to spend per category and what you have spent. New month keeps a copy and clears the spending.</p>`}
@@ -2890,6 +2909,7 @@ function fitnessTab(): string {
   const recent = [...ws].reverse().slice(0, 6);
   const unit = ws[ws.length - 1]?.unit ?? "kg";
   return `<section class="main" style="overflow:auto"><div class="page wide kit">
+    ${copilotCard("fitness", [{ a: "plan", icon: "dumbbell", label: "Plan my next session", hint: "From your recent workouts and records" }])}
     <div class="card band"><div class="row"><h2>${icon("dumbbell")} Training</h2><span class="right-actions"><label class="btn btn-ghost">${icon("upload")}Run from GPX<input type="file" name="workout-gpx" accept=".gpx,application/gpx+xml" hidden></label><button type="button" class="btn btn-primary" data-action="fitness-log">${icon("plus")}Log a workout</button></span></div>
       <div class="career-stats"><div><b>${now.sessions}</b><span>sessions this week</span></div><div><b>${now.km}</b><span>km this week</span></div><div><b>${Math.round(now.volume).toLocaleString("en-US")}</b><span>${esc(unit)} lifted this week</span></div><div><b>${ws.length}</b><span>workouts in all</span></div>${weekBarsSvg(wk.map((w) => ({ week: w.week, v: w.sessions })), (r) => `Week of ${r.week}: ${r.v} session${r.v === 1 ? "" : "s"}`, "Sessions per week")}</div>
       ${recent.length ? `<div class="band-title">Recent</div><div class="runs">${recent.map((w) => { const pr = newRecords(ws, w.path); const pc = pace(w.minutes, w.km); return `<div class="run"><span><a href="#" data-action="open" data-path="${esc(w.path)}">${esc(w.title)}</a> <span class="small muted">${[w.title.toLowerCase().includes(w.kind) ? "" : esc(w.kind), w.sets.length ? `${w.sets.length} set${w.sets.length === 1 ? "" : "s"}` : "", w.km ? `${w.km} km` : "", w.minutes ? `${w.minutes} min` : "", pc ?? ""].filter(Boolean).join(" · ")}</span>${pr.length ? ` <span class="pill ok">${icon("star")}PR: ${esc(pr.join(", "))}</span>` : ""}</span></div>`; }).join("")}</div>` : `<p class="small muted">One note per workout. Write sets as <code>- Squat: 100 x 5, 105 x 3</code> or <code>- Squat: 3x5 @ 100</code>, bodyweight as <code>@ bw</code>. Runs can carry a GPX route.</p>`}
@@ -3017,22 +3037,23 @@ function pageShell(crumb: string, body: string, bare = false): string {
 }
 // --- the town: Lab's activity as a small isometric town (registry town.rs, town.ts)
 
-const townHouse = (h: Town["houses"][number]) => ({ lot: h.lot, storeys: h.storeys, size: h.size, lit: h.lit, low: h.low });
+const townHouse = (h: Town["houses"][number]) => ({ lot: h.lot, storeys: h.storeys, size: h.size, lit: h.lit, low: h.low, badges: h.badges });
 /** The town as the registry sends it, with your home added when it isn't among the ones drawn. */
 const townData = (t: Town): TownData => ({
   at: Number(t.at / 1_000_000n), houses: t.my_house && !t.houses.some((h) => h.lot === t.my_house!.lot) ? [...t.houses, t.my_house].map(townHouse).sort((a, b) => a.lot - b.lot) : t.houses.map(townHouse), people: t.people, homes: t.homes, maxShown: t.max_shown, quiet: t.quiet,
   mine: t.mine, myChannel: t.my_channel, channels: t.channels.map((c) => ({ name: c.name, online: c.online, messages24h: c.messages_24h })), postTopics: t.post_topics, postsLive: t.posts_live,
   posts24h: t.posts_24h, listings: t.listings, rains24h: t.rains_24h, lastRain: t.last_rain === undefined ? undefined : Number(t.last_rain / 1_000_000n), hikers: t.hikers, off: t.off,
   building: [...t.building], notebooks: t.notebooks, spawned24h: t.spawned_24h, spawned7d: t.spawned_7d, newcomers7d: t.newcomers_7d, cycles: Number(t.cycles), burnPerDay: Number(t.burn_per_day), fundraisersOpen: t.fundraisers_open, raisedE8s: Number(t.raised_e8s), campers: t.campers, meCamping: t.me_camping,
+  sponsors: t.sponsors.map((x) => ({ name: x.name, blurb: x.blurb, url: x.url, color: x.color })), myQuests: t.my_quests ? [Number(t.my_quests[0]), Number(t.my_quests[1]), t.my_quests[2]] : undefined,
 });
 const fetchTown = () => registry().town().then((r) => (r.__kind__ === "Ok" ? demoTown(townData(r.Ok)) : null)).catch(() => null);
 /** Local development with ?town-demo: a busier town than a test network has, to judge the look. */
 function demoTown(d: TownData): TownData {
   if (!devMode || !/town-demo/.test(location.search)) return d;
-  const houses = Array.from({ length: 90 }, (_, i) => ({ lot: i * 2 + (i % 3), storeys: 1 + (i % 3), size: (i * 7) % 4, lit: (i * 5) % 3, low: i % 13 === 0 }));
+  const houses = Array.from({ length: 90 }, (_, i) => ({ lot: i * 2 + (i % 3), storeys: 1 + (i % 3), size: (i * 7) % 4, lit: (i * 5) % 3, low: i % 13 === 0, badges: (i * 7) % 32 }));
   const mine = d.houses.find((h) => h.lot === d.mine);
   return { ...d, houses: [...houses.filter((h) => h.lot !== d.mine), ...(mine ? [mine] : [])].sort((a, b) => a.lot - b.lot), homes: 2400, people: 2600, channels: d.channels.map((c, i) => ({ ...c, online: (i * 3) % 5, messages24h: c.messages24h + i * 12 })), postTopics: ["general", "study", "crypto", "help", "careers"], postsLive: 5, rains24h: 1, lastRain: Date.now() - 600e3, hikers: 3, listings: 4, off: [],
-    building: [33, 61, 120, 181], notebooks: 140, spawned24h: 2, spawned7d: 6, newcomers7d: 7, cycles: 412e12, burnPerDay: 1.9e12, fundraisersOpen: 2, raisedE8s: 3_450_000_000, campers: 9 };
+    building: [33, 61, 120, 181], notebooks: 140, spawned24h: 2, spawned7d: 6, newcomers7d: 7, cycles: 412e12, burnPerDay: 1.9e12, fundraisersOpen: 2, raisedE8s: 3_450_000_000, campers: 9, sponsors: [{ name: "Example DAO", blurb: "A demo sponsor.", url: "https://internetcomputer.org", color: "#29abe2" }, { name: "Node Co", blurb: "Runs nodes.", url: "https://internetcomputer.org", color: "#ed1e79" }, { name: "Wallet Inc", blurb: "A wallet.", url: "https://internetcomputer.org", color: "#f15a24" }] };
 }
 let townTimer = 0;
 async function loadTown() {
@@ -3115,6 +3136,7 @@ function townPage(): string {
     <span><i class="lg lg-person"></i>A person: someone in the community chat right now, at their channel's stall in the Square.</span>
     <span><i class="lg lg-build"></i>Scaffolding and a crane: a notebook made in the last three days. A red lamp by the door: a notebook with under 30 days of cycles left.</span>
     <span><i class="lg lg-person"></i>The station: visitors on the platform signed in this month but have no notebook yet; the train comes and goes.</span>
+    <span><i class="lg lg-house"></i>Flower beds, ivy, flags, statues and lanterns on homes are quests done by writing (Manage › Notebook › Quests); nothing on a home is for sale. The Sponsors' buildings are projects that pay to keep Lab running.</span>
     <span><i class="lg lg-water"></i>The water tower: the cycles every notebook holds, its level how many days they last at today's burn; the drip is the burn.</span>
     <span><i class="lg lg-civic"></i>The notebook works makes every notebook (smoke when it has today); the school's yard holds this week's newcomers; the chapel's bell rings while a fundraiser is open. Then the town hall, the Square, the board's pavilion${off.has("market") ? "" : ", the market hall"}, the park and the trailhead.</span>
     <span class="small muted">Every lit window is someone writing in their own notebook. Nobody can see inside.</span></div>` : "";
@@ -3123,6 +3145,7 @@ function townPage(): string {
     <button type="button" class="btn btn-ghost icon-btn" data-action="town-in" title="Zoom in (+)" aria-label="Zoom in">+</button>
     <button type="button" class="btn btn-ghost icon-btn" data-action="town-home" title="Whole town (0)" aria-label="Whole town">${icon("fit")}</button>
     ${d.mine !== undefined ? `<button type="button" class="btn btn-ghost" data-action="town-mine" title="My home" aria-label="My home">${icon("house")}<span class="lbl">My home</span></button>` : ""}
+    ${!off.has("sponsors") && S.identity ? `<button type="button" class="btn btn-ghost" data-action="town-sponsor" title="Pay for a building in the Sponsors district" aria-label="Sponsor a building">${icon("coin")}<span class="lbl">Sponsor</span></button>` : ""}
     <button type="button" class="btn btn-ghost ${t.legend ? "on" : ""}" data-action="town-legend" aria-pressed="${t.legend}" title="Legend" aria-label="Legend">${icon("help")}<span class="lbl">Legend</span></button>
     <button type="button" class="btn btn-ghost icon-btn" data-action="theme-menu" title="Day or night: the appearance" aria-label="Appearance">${icon(S.theme.mode === "dark" ? "moon" : "sun")}</button></div>`;
   const label = `Lab as a town: ${d.homes} homes, ${n.today} lit today, ${n.online} people online, ${n.talk} messages today.`;
@@ -3141,7 +3164,8 @@ function townTip(tg: TownTarget): string {
   switch (tg.kind) {
     case "house": {
       const h = tg.house, nbs = `${h.storeys >= 3 ? "3 or more notebooks" : `${h.storeys} notebook${h.storeys === 1 ? "" : "s"}`} · ${NOTES_BUCKET[h.size]}`;
-      if (tg.mine) return `<b>${tg.building ? "Your home, going up" : "Your home"}</b>${(S.notebooks ?? []).slice(0, 4).map((n) => line(`${esc(n.emoji ?? "📓")} ${esc(n.name)}`)).join("")}${line(`${NOTES_BUCKET[h.size]} · ${LIT_TEXT[h.lit]}`)}${h.low ? line("A notebook has under 30 days of cycles left: top it up in Manage") : ""}${go("Click to open your notebooks")}`;
+      const earned = QUEST_ROWS(0, 0, 0).filter((_, i) => (h.badges ?? 0) & (1 << i)).map((q) => q[0]);
+      if (tg.mine) return `<b>${tg.building ? "Your home, going up" : "Your home"}</b>${(S.notebooks ?? []).slice(0, 4).map((n) => line(`${esc(n.emoji ?? "📓")} ${esc(n.name)}`)).join("")}${earned.length ? line(`Quests done: ${earned.join(", ")}`) : line("No quests done yet: write, link, keep a streak")}${line(`${NOTES_BUCKET[h.size]} · ${LIT_TEXT[h.lit]}`)}${h.low ? line("A notebook has under 30 days of cycles left: top it up in Manage") : ""}${go("Click to open your notebooks")}`;
       if (tg.building) return `<b>A home going up</b>${line(h.storeys > 1 ? "Another notebook: a new storey" : "A notebook made in the last three days")}`;
       return `<b>A home</b>${line(nbs)}${line(LIT_TEXT[h.lit])}${h.low ? line("Running low on cycles") : ""}`;
     }
@@ -3158,7 +3182,7 @@ function townTip(tg: TownTarget): string {
     case "station": return `<b>The station</b>${line(d.campers ? `${d.campers} visitor${d.campers === 1 ? "" : "s"} on the platform: signed in this month, no notebook yet` : "The platform is empty: everyone who signed in has a notebook")}${line("The people online in chat walk into town from here.")}`;
     case "visitor": return tg.mine ? `<b>You, on the platform</b>${line("You signed in but have no notebook yet. Make one and your home goes up in town.")}${go("Click to make a notebook")}` : `<b>A visitor</b>${line("Someone who signed in and hasn't made a notebook yet")}`;
     case "lake": return `<b>The lake</b>${line("The river runs from it off the edge of the island.")}`;
-    case "landmark": { const l = tg.landmark; return `<b>${esc(l.title)}</b>${line(esc(l.blurb))}${go(`Click to open ${esc(new URL(l.url).host)}`)}`; }
+    case "landmark": { const l = tg.landmark; let host = l.url; try { host = new URL(l.url).host; } catch { /* shown as is */ } return `<b>${esc(l.title)}</b>${l.sponsored ? line("A sponsored building: this project pays to keep Lab running.") : ""}${line(esc(l.blurb))}${go(`Click to open ${esc(host)}`)}`; }
     case "district": { const dd = tg.district; return `<b>${esc(dd.name)}</b>${line(esc(dd.blurb))}${line(`${dd.landmarks.length} landmarks, room for more`)}`; }
     case "park": return `<b>The park</b>${line("A bench by the pond.")}`;
     case "trail": return `<b>The trailhead</b>${line(d.hikers ? `${d.hikers} out on a trip right now, on time` : "Nobody out on a trip right now")}${line("Trips with a check-in contact, from the Trips kit")}`;
@@ -3181,6 +3205,39 @@ function townOpen(tg: TownTarget) {
     case "school": { if (!S.identity) return signin(); store("nb-chat-channel", "help"); location.hash = "#/community"; return; }
   }
 }
+/** Propose a building in the Sponsors district, or pay for one an admin approved. */
+async function sponsorDialog() {
+  if (!S.identity) return toast("Sign in to sponsor a building.", "info");
+  const [mine, price] = await Promise.all([registry().my_sponsors(), registry().sponsor_price()]);
+  const now = Date.now(), live = (x: SponsorView) => Number(x.paid_until / 1_000_000n) > now;
+  const choices = [...mine.map((x) => ({ value: String(x.id), label: `${x.name} · ${live(x) ? `live until ${new Date(Number(x.paid_until / 1_000_000n)).toLocaleDateString()}` : x.approved ? "approved: pay to put it up" : "waiting for an admin"}` })), { value: "new", label: "Propose a new building…" }];
+  const pick = mine.length ? await ask({ title: "Sponsor a building", body: `A building in the Sponsors district with your name, your colour and a link, for ${icp(price)} ICP a month. An admin approves it first; the ICP keeps Lab running.`, label: "Which", choices, value: choices[0].value, ok: "Next" }) : "new";
+  if (pick === null) return;
+  if (pick === "new") {
+    const v = await fieldsDialog("Propose a building", `${icp(price)} ICP a month once an admin approves it. Keep it honest: the town links to your site.`, [
+      { name: "name", label: "Project name", placeholder: "My DAO", required: true },
+      { name: "blurb", label: "One line about it", placeholder: "What it does on the Internet Computer", kind: "area", wide: true },
+      { name: "url", label: "Link (https)", placeholder: "https://", required: true },
+      { name: "color", label: "Colour (hex)", value: "#29abe2" },
+    ], "Propose");
+    if (!v) return;
+    const r = await registry().sponsor({ name: v.name, blurb: v.blurb ?? "", url: v.url, color: v.color || "#29abe2" }).catch((e) => ({ __kind__: "Err", Err: errMsg(e) }) as const);
+    if (r.__kind__ === "Err") return toast(r.Err, "error");
+    return toast("Proposed. An admin will look at it; come back here to pay once it is approved.", "ok");
+  }
+  const x = mine.find((y) => String(y.id) === pick);
+  if (!x) return;
+  if (!x.approved) return toast("Still waiting for an admin to approve it.", "info");
+  const m = await ask({ title: live(x) ? `Extend “${x.name}”` : `Put up “${x.name}”`, body: `${icp(price)} ICP a month, paid from your wallet.`, label: "Months", choices: [1, 3, 6, 12].map((n) => ({ value: String(n), label: `${n} month${n === 1 ? "" : "s"} · ${icp(price * BigInt(n))} ICP` })), value: "1", ok: "Pay" });
+  if (m === null) return;
+  try {
+    await approvePayment(Principal.fromText(REGISTRY), price * BigInt(m) + ICP_FEE);
+    const r = await registry().pay_sponsor(x.id, Number(m));
+    if (r.__kind__ === "Err") throw new Error(r.Err);
+    toast(`Paid. “${x.name}” stands in the town until ${new Date(Number(r.Ok.paid_until / 1_000_000n)).toLocaleDateString()}.`, "ok");
+    if (S.town) void loadTown();
+  } catch (e) { toast(errMsg(e), "error"); }
+}
 /** Put the town on its canvas after every render (the landing preview or the town page). */
 function townSync() {
   fitHud();
@@ -3199,6 +3256,7 @@ function townAction(action: string) {
   else if (action === "town-mine") townCamera("mine");
   else if (action === "town-legend") { t.legend = !t.legend; render(); }
   else if (action === "town-hud") { t.hudOpen = !t.hudOpen; render(); }
+  else if (action === "town-sponsor") void sponsorDialog();
 }
 /** Admin: the numbers. */
 function adminStatsHtml(): string {
@@ -3406,6 +3464,8 @@ async function writeNote(path: string, content: string) {
   if (!note(path)) return;
   onDraftInput(path, content);
   await save(path);
+  // today's writing may have started a streak
+  void nb().usage().then((u) => { S.usage = u; }).catch(() => {});
 }
 const pinnedSet = () => new Set(S.settings.bookmarks);
 const faded = (path: string) => { const n = note(path); return !!n && isFaded({ ...n, content: S.drafts.get(path)?.text ?? n.content }, S.settings.decayDays, pinnedSet()); };
@@ -3438,6 +3498,7 @@ function organizeTab(): string {
   const opts = (sel?: string) => md.map((p) => `<option value="${esc(p)}" ${p === sel ? "selected" : ""}>${esc(stem(p))}</option>`).join("");
   const tpls = [...Object.keys(BUILTIN_TEMPLATES).map((k) => ({ v: `builtin:${k}`, l: `${k} (built in)` })), ...paths().filter((p) => p.startsWith("Templates/")).map((p) => ({ v: p, l: stem(p).slice(10) }))];
   return `<section class="main" style="overflow:auto"><div class="page wide org">
+    ${gardenCard()}
     <div class="card band">
       <div class="row"><h2>${icon("search")} Saved searches</h2></div>
       <form class="row tight" data-form="org-search"><input class="input code" name="orgq" value="${esc(o.q)}" placeholder='tag:#client status:open modified:<7d folder:Projects -tag:done' aria-label="Search query" style="flex:1"><button type="submit" class="btn">Run</button><button type="button" class="btn btn-primary" data-action="org-save" ${o.q.trim() ? "" : "disabled"}>${icon("star")}Save</button>${o.q.trim() ? `<button type="button" class="btn btn-ghost" data-action="org-tile" title="Show this search as a tile on a dashboard">${icon("graph")}Tile</button>` : ""}</form>
@@ -3880,6 +3941,7 @@ function studyTab(): string {
   const byQuiz = new Map<string, Attempt[]>();
   for (const a of S.attempts) byQuiz.set(a.path, [...(byQuiz.get(a.path) ?? []), a]);
   return `<section class="main" style="overflow:auto"><div class="page">
+    ${copilotCard("study", [{ a: "cards", icon: "check", label: "Flashcards from a folder", hint: "Twelve Front::Back cards, saved as a deck" }, { a: "quiz", icon: "help", label: "Quiz me on a folder", hint: "Ten questions, easy to hard, with answers" }])}
     <div class="stats">
       <div class="stat"><div class="label">Due today</div><div class="num ${dueTotal() ? "accent" : ""}">${dueTotal()}</div><div class="small muted">cards across ${decks.length} deck${decks.length === 1 ? "" : "s"}</div></div>
       <div class="stat"><div class="label">Reviewed today</div><div class="num">${S.settings.study[dayKey(today)] ?? 0}</div><div class="small muted">${S.settings.goals.cardsPerDay ? `goal ${S.settings.goals.cardsPerDay} a day` : "no daily goal yet"}</div></div>
@@ -4306,7 +4368,7 @@ function chatFolders(): Set<string> {
 }
 function chatHtml(): string {
   const msgs = S.chat.messages.length
-    ? S.chat.messages.map((m, mi) => `<div class="msg ${m.role}">${m.role === "you" ? `<div class="bubble">${esc(m.text)}</div>` : `<div class="bubble md">${beyond(citeLinks(renderMd(m.text), m.picks ?? []))}${m.model ? `<div class="answer-tools"><button type="button" class="btn btn-ghost" data-action="chat-save" data-i="${mi}" title="Save this answer as a note, citations as links">${icon("plus")}Save as note</button></div>` : ""}${m.model ? `<div class="answered-by small faint">${icon("bot")}${esc(LLM_LOCAL ? "Local Ollama (stand-in)" : m.model === LLM_MODEL ? LLM_MODEL_NAME : m.model ?? "")}${m.fallback ? ` · ${esc(m.fallback)}` : ""}</div>` : m.fallback ? `<div class="answered-by small faint">${esc(m.fallback)}</div>` : ""}</div>${m.picks?.length ? `<div class="sources">${m.picks.map((p) => `<button type="button" class="src" data-action="open" data-path="${esc(p.path)}" title="${esc(p.why.join("; "))}">${icon("file")}${esc(title(p.path))}</button>`).join("")}</div>` : ""}`}</div>`).join("")
+    ? S.chat.messages.map((m, mi) => `<div class="msg ${m.role}">${m.role === "you" ? `<div class="bubble">${esc(m.text)}</div>` : `<div class="bubble md">${beyond(citeLinks(renderMd(m.text), m.picks ?? []))}${m.model ? `<div class="answer-tools"><button type="button" class="btn btn-ghost" data-action="chat-save" data-i="${mi}" title="Save this answer as a note, citations as links">${icon("plus")}Save as note</button>${m.deck ? `<button type="button" class="btn btn-ghost" data-action="chat-save-deck" data-i="${mi}" title="Save these cards as a flashcard deck">${icon("check")}Save as a deck</button>` : ""}${m.insertInto && note(m.insertInto) ? `<button type="button" class="btn btn-ghost" data-action="chat-insert" data-i="${mi}" title="Put this under a Summary heading in the note">${icon("edit")}Insert into “${esc(stem(m.insertInto))}”</button>` : ""}</div>` : ""}${m.model ? `<div class="answered-by small faint">${icon("bot")}${esc(LLM_LOCAL ? "Local Ollama (stand-in)" : m.model === LLM_MODEL ? LLM_MODEL_NAME : m.model ?? "")}${m.fallback ? ` · ${esc(m.fallback)}` : ""}</div>` : m.fallback ? `<div class="answered-by small faint">${esc(m.fallback)}</div>` : ""}</div>${m.picks?.length ? `<div class="sources">${m.picks.map((p) => `<button type="button" class="src" data-action="open" data-path="${esc(p.path)}" title="${esc(p.why.join("; "))}">${icon("file")}${esc(title(p.path))}</button>`).join("")}</div>` : ""}`}</div>`).join("")
     : `<div class="chat-empty">${icon("chat")}<h3>Ask your notes</h3><p class="muted small">Type a question in plain language. The notebook picks the notes that look relevant from the folders ticked on the right and answers from them.</p></div>`;
   // with nothing asked yet, the notebook's notes glow behind as a sky of stars (click one to open it)
   const empty = !S.chat.messages.length && !S.chat.busy;
@@ -4357,9 +4419,152 @@ async function saveAnswer(i: number) {
 /** Wrap each [n] the model wrote around a link to source n. */
 function citeLinks(html: string, picks: Pick[]): string {
   if (!picks.length) return html;
-  return html.replace(CITE, (m, ks: string) => { const parts = ks.split(/\s*,\s*/).map((k) => { const p = picks[Number(k) - 1]; return p ? `<button type="button" class="cite" data-action="open" data-path="${esc(p.path)}" title="${esc(stem(p.path))}">${k}</button>` : ""; }); return parts.every(Boolean) ? parts.join("") : m; });
+  return html.replace(CITE, (m, ks: string) => { const parts = ks.split(/\s*,\s*/).map((k) => { const p = picks[Number(k) - 1]; if (p && !note(p.path)) return `<span class="cite" title="${esc(p.path)}">${k}</span>`; return p ? `<button type="button" class="cite" data-action="open" data-path="${esc(p.path)}" title="${esc(stem(p.path))}">${k}</button>` : ""; }); return parts.every(Boolean) ? parts.join("") : m; });
 }
 /** 1. System 1 picks the notes; 2. the LLM canister answers from their excerpts, citing them by number. */
+// --- the gardener and the kit copilots: prepared questions through the same ask pipeline as the chat
+
+const notesNow = () => (S.notes ?? []).map((n) => ({ ...n, content: S.drafts.get(n.path)?.text ?? n.content }));
+const clipText = (t: string, n: number) => (t.length > n ? `${t.slice(0, n)}…` : t);
+const PAID_MODEL = "z-ai:glm-5.2";
+/** Ask the notebook's model a prepared question; the answer lands in Chat with your notes. */
+async function copilot(label: string, question: string, sources: { path: string; excerpt: string }[], o: { deck?: boolean; insertInto?: string } = {}) {
+  if (!S.notebook || S.chat.busy) return;
+  if (!featureOn("chat")) { S.settings.features.chat = true; void saveSettings(); }
+  const chat = S.chat;
+  S.tab = "chat";
+  S.chat.messages.push({ role: "you", text: label });
+  S.chat.busy = true;
+  S.chat.stage = `Asking ${LLM_LOCAL ? "your local Ollama" : S.copilotPaid ? "GLM 5.2" : LLM_MODEL_NAME}…`;
+  render();
+  const picks: Pick[] = sources.map((x) => ({ path: x.path, score: 1, why: [], snippet: "" }));
+  try {
+    const r = unwrap(await nb().ask(Principal.fromText(LLM_CANISTER), S.copilotPaid ? PAID_MODEL : LLM_MODEL, question.slice(0, 1000), sources.slice(0, 10)));
+    chat.messages.push({ role: "notes", text: r.text, picks, model: r.model, deck: o.deck, insertInto: o.insertInto });
+  } catch (e) {
+    chat.messages.push({ role: "notes", text: `The copilot could not answer: ${errMsg(e)}`, picks: [] });
+  }
+  chat.busy = false;
+  chat.stage = "";
+  // another notebook was opened meanwhile: its chat is not this one's
+  if (S.chat === chat) render();
+}
+/** A kit's copilot card: prepared questions over that kit's notes. */
+function copilotCard(kit: string, items: { a: string; icon: string; label: string; hint: string }[]): string {
+  return `<div class="card band copilot"><div class="row tight wrap"><h2 title="Answers land in Chat with your notes, cited, and can be saved as notes">${icon("bot")} Copilot</h2>${items.map((i) => `<button type="button" class="btn" data-action="copilot-${kit}-${i.a}" title="${esc(i.hint)}">${icon(i.icon)}${esc(i.label)}</button>`).join("")}<span class="right-actions"><button type="button" class="btn btn-ghost ${S.copilotPaid ? "on" : ""}" data-action="copilot-paid" aria-pressed="${S.copilotPaid}" title="${LLM_LOCAL ? "Locally your Ollama answers either way." : `GLM 5.2 instead of ${LLM_MODEL_NAME} (free): about 0.1 TC of this notebook's cycles a question.`}">${icon("bolt")}${S.copilotPaid ? "Stronger model on · 0.1 TC" : "Stronger model · 0.1 TC"}</button></span></div></div>`;
+}
+const QUEST_ROWS = (notes: number, links: number, streak: number): [string, number, number, string][] => [["Sprout", notes, 10, "a flower bed by your home"], ["Weaver", links, 25, "ivy on its walls"], ["A week of writing", streak, 7, "a flag on the roof"], ["A month of writing", streak, 30, "a statue in the yard"], ["Librarian", notes, 100, "a lantern by the door, lit at night"]];
+/** Manage › Notebook: what writing has earned your home in the town. */
+function questsCard(): string {
+  const md = (S.notes ?? []).filter((n) => n.path.endsWith(".md") && !n.path.startsWith(`${AGENT_ROOT}/`));
+  const notes = md.length, links = md.reduce((a, n) => a + (n.content.match(/\[\[/g)?.length ?? 0), 0), streak = S.usage?.streak ?? 0, days = S.usage?.active_days ?? 0;
+  return `<div class="card band"><div class="row"><h2>${icon("award")} Quests</h2><span class="right-actions"><a class="btn btn-ghost" href="#/town" data-action="nav">${icon("town")}See your home</a></span></div>
+    <p class="small muted">Writing earns your home in the town its trimmings; nothing else does, and nothing is for sale. ${streak ? `A ${streak}-day streak` : "Change a note today to start a streak"}${days ? `, ${days} of the last 30 days active` : ""}. This notebook's counts; the town adds up all of yours every few hours.</p>
+    <div class="quests">${QUEST_ROWS(notes, links, streak).map(([name, have, need, gift]) => `<div class="quest ${have >= need ? "done" : ""}"><div class="row tight"><b>${have >= need ? icon("check") : ""}${name}</b><span class="small muted">${Math.min(have, need)}/${need}</span></div><div class="bar"><i style="width:${Math.min(100, (have / need) * 100).toFixed(0)}%"></i></div><div class="small muted">${gift}</div></div>`).join("")}</div></div>`;
+}
+/** Organize: links, pairs and tags the notes could use, one click each. */
+let gardenMemo: { key: string; out: Suggestion[] } | undefined;
+function gardenCard(): string {
+  if (!S.notes) return "";
+  // suggest() is O(n²) over the notes: only again when the notes, the drafts or the dismissals changed
+  const key = `${S.notes.length}|${[...S.drafts].filter(([, d]) => d.dirty).map(([p, d]) => `${p}:${d.text.length}`).join(",")}|${S.settings.gardenHidden.length}|${S.idx.links.size}`;
+  if (gardenMemo?.key !== key || gardenMemo.out.length === 0) gardenMemo = { key, out: suggest(notesNow(), S.idx, S.settings.gardenHidden, { max: 12 }) };
+  const all = gardenMemo.out;
+  const row = (x: Suggestion) => {
+    const what = x.kind === "tag" ? `Tag <b>${esc(stem(x.path))}</b> with <code>#${esc(x.tag)}</code>` : x.kind === "link" ? `Link <b>${esc(stem(x.from))}</b> to <b>${esc(stem(x.to))}</b>` : `<b>${esc(stem(x.from))}</b> and <b>${esc(stem(x.to))}</b> belong together`;
+    return `<div class="run"><span>${icon(x.kind === "tag" ? "tag" : "link")} ${what} <span class="small muted">· ${esc(x.why)}</span></span><span class="right-actions"><button type="button" class="btn" data-action="garden-accept" data-key="${esc(x.key)}">${x.kind === "tag" ? "Tag it" : "Link them"}</button><button type="button" class="btn btn-ghost icon-btn" data-action="garden-hide" data-key="${esc(x.key)}" title="Not this one" aria-label="Dismiss">${icon("x")}</button></span></div>`;
+  };
+  return `<div class="card band"><div class="row"><h2>${icon("graph")} Gardener</h2><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="garden-ai" ${all.length ? "" : "disabled"} title="The model reads the notes involved and says which links matter most">${icon("bot")}Ask the AI which matter most</button></span></div>
+    <p class="small muted">Links your notes could use, notes that belong together, tags their neighbours carry. One click each; what you dismiss stays dismissed. Missing notes and duplicate titles are in Health below.</p>
+    ${all.length ? `<div class="runs">${all.map(row).join("")}</div>` : `<p class="small muted">Nothing to suggest right now: the garden is tidy.</p>`}</div>`;
+}
+async function gardenAction(action: string, el: HTMLElement) {
+  const key = el.dataset.key ?? "";
+  if (action === "garden-hide") { S.settings.gardenHidden = [...S.settings.gardenHidden, key].slice(-500); await saveSettings(); return render(); }
+  const all = suggest(notesNow(), S.idx, S.settings.gardenHidden, { max: 200 });
+  if (action === "garden-ai") {
+    const linksOnly = all.filter((x): x is Exclude<Suggestion, { kind: "tag" }> => x.kind !== "tag");
+    const paths = [...new Set(linksOnly.flatMap((x) => [x.from, x.to]))].slice(0, 10);
+    const pairs = linksOnly.slice(0, 12).map((x) => `${stem(x.from)} → ${stem(x.to)}`).join("; ");
+    const q = clipText(`These notes could link to each other: ${pairs}. Which three links matter most for finding things later, and why? A short numbered list.`, 1000);
+    return copilot("Gardener: which of these links matter most?", q, paths.map((p) => ({ path: p, excerpt: excerpt(notesNow().find((n) => n.path === p)?.content ?? "", q, Math.floor(7600 / Math.max(1, paths.length))) })));
+  }
+  const x = all.find((y) => y.key === key);
+  if (!x) return;
+  if (x.kind === "tag") await writeNote(x.path, addTag(draftOf(x.path).text, x.tag));
+  else await writeNote(x.from, addLink(draftOf(x.from).text, stem(x.to)));
+  toast(x.kind === "tag" ? "Tagged." : "Linked.", "ok");
+  render();
+}
+/** A kit copilot button: gather that kit's notes, ask. */
+async function copilotAction(action: string, el: HTMLElement) {
+  if (action === "copilot-paid") { S.copilotPaid = !S.copilotPaid; return render(); }
+  const notes = notesNow(), today = dayKey(new Date());
+  const per = (n: number) => Math.min(2000, Math.floor(7600 / Math.max(1, n)));
+  const src = (paths: string[], q: string) => paths.slice(0, 10).map((p) => ({ path: p, excerpt: excerpt(notes.find((n) => n.path === p)?.content ?? "", q, per(paths.length)) }));
+  const folderPick = async (title: string) => { const folders = ["", ...S.folders.filter((f) => f !== AGENT_ROOT && !f.startsWith(`${AGENT_ROOT}/`))]; const f = await ask({ title, label: "Folder", choices: folders.map((x) => ({ value: x, label: x || "Top level" })), value: "", ok: "Go" }); if (f === null) return undefined; return notes.filter((n) => n.path.endsWith(".md") && !n.path.startsWith(`${AGENT_ROOT}/`) && (f ? n.path.startsWith(`${f}/`) : !n.path.includes("/"))).map((n) => n.path).slice(0, 10); };
+  switch (action) {
+    case "copilot-career-resume": {
+      const post = await ask({ title: "Tailor my résumé", label: "Paste the job post", multiline: true, ok: "Tailor" });
+      if (!post?.trim()) return;
+      const exp = notes.filter((n) => isExperience(n.content)).map((n) => n.path).slice(0, 9);
+      const q = "Tailor my résumé to this job post: pick the experience and bullet points that fit, order them by relevance, write a three-line summary for the top, and list what the post asks for that my notes do not show.";
+      return copilot("Career copilot: tailor my résumé to a job post", q, [{ path: "Job post", excerpt: clipText(post, 2400) }, ...src(exp, post)]);
+    }
+    case "copilot-career-interview": {
+      const exp = notes.filter((n) => isExperience(n.content)).map((n) => n.path).slice(0, 10);
+      if (!exp.length) return toast("Add an experience note first (Career › Experience bank).", "info");
+      return copilot("Career copilot: likely interview questions", "From my experience notes, write eight interview questions I am likely to get for roles like these, each with a short STAR answer drawn from my notes.", src(exp, "interview experience role"));
+    }
+    case "copilot-study-cards": case "copilot-study-quiz": {
+      const paths = await folderPick(action.endsWith("cards") ? "Flashcards from a folder" : "Quiz me on a folder");
+      if (!paths) return;
+      if (!paths.length) return toast("No notes in that folder.", "info");
+      const cards = action.endsWith("cards");
+      return copilot(cards ? "Study copilot: flashcards from my notes" : "Study copilot: quiz me", cards ? "Write 12 flashcards from these notes as lines of `Front::Back`, one card per paragraph, covering what a student must know. No preamble, no numbering." : "Quiz me: ten questions on these notes, from easy to hard, then a line that says `Answers` and the answers.", src(paths, "key ideas definitions"), { deck: cards });
+    }
+    case "copilot-money-subs": {
+      const subs = subscriptions(notes, today);
+      if (!subs.length) return toast("No subscriptions logged yet.", "info");
+      const text = subs.map((x) => `${x.name}: ${x.cost} every ${x.every}, ${x.status}, about ${x.monthly.toFixed(2)} a month${x.renews ? `, renews ${x.renews}` : ""}`).join("\n");
+      return copilot("Money copilot: review my subscriptions", "Review my subscriptions: which to keep, cancel or downgrade and why, the monthly saving of each change, and the total.", [{ path: "Subscriptions", excerpt: clipText(text, 6000) }]);
+    }
+    case "copilot-money-where": {
+      const b = notes.find((n) => /budget/i.test(stem(n.path)) && n.path.endsWith(".md"));
+      if (!b) return toast("No budget note yet (Money › templates).", "info");
+      return copilot("Money copilot: where is my money going?", "From my budget, name the biggest categories, where spending runs past the plan, and three specific cuts with their monthly saving.", [{ path: b.path, excerpt: clipText(b.content, 7000) }]);
+    }
+    case "copilot-fitness-plan": {
+      const ws = workouts(notes).slice(-6);
+      if (!ws.length) return toast("Log a workout first.", "info");
+      const recs = records(workouts(notes)).slice(0, 20).map((r) => JSON.stringify(r)).join("\n");
+      return copilot("Fitness copilot: plan my next session", "Plan my next training session from my recent workouts and records: exercises, sets, reps and loads, where to progress and where to back off, and how long it should take.", [{ path: "Records", excerpt: clipText(recs, 1200) }, ...src(ws.map((w) => w.path), "sets reps weight")]);
+    }
+    case "copilot-crypto-thesis": {
+      const ts = theses(notes, today);
+      if (!ts.length) return toast("Write a thesis first (Crypto › Theses).", "info");
+      const pick = ts.length === 1 ? ts[0].path : await ask({ title: "Question a thesis", label: "Thesis", choices: ts.map((t) => ({ value: t.path, label: t.title })), value: ts[0].path, ok: "Go" });
+      if (!pick) return;
+      return copilot(`Crypto copilot: question “${stem(pick)}”`, "Question this thesis: the three strongest counterarguments, what would prove it wrong, what to watch over the next month, and whether the position size fits the confidence.", src([pick], "thesis risk"));
+    }
+    case "copilot-work-meeting": {
+      const path = el.dataset.path!;
+      return copilot(`Summarise “${stem(path)}”`, "Summarise this meeting in short bullets: decisions, actions with their owners and dates, and open questions. Nothing that is not in the note.", src([path], "decisions actions"), { insertInto: path });
+    }
+  }
+}
+/** `content` with an AI summary under a "## Summary" heading right after the title. */
+function summaryInto(content: string, text: string): string {
+  const clean = text.replace(CITE, "").replace(/\n{3,}/g, "\n\n").trim();
+  const block = `\n## Summary\n\n${clean}\n`;
+  const old = /\n## Summary\n[\s\S]*?(?=\n#{1,6} |$)/.exec(content);
+  if (old) return `${content.slice(0, old.index)}${block}${content.slice(old.index + old[0].length)}`;
+  const h1 = /^# .*$/m.exec(content);
+  if (h1) { const at = h1.index + h1[0].length; return `${content.slice(0, at)}\n${block}${content.slice(at)}`; }
+  // no title: after the front matter, never inside it
+  const fm = /^---\n[\s\S]*?\n---\n/.exec(content), at = fm ? fm[0].length : 0;
+  return `${content.slice(0, at)}${block}\n${content.slice(at)}`;
+}
 async function askNotes() {
   const q = S.chat.input.trim();
   if (!q || !S.notes || S.chat.busy) return;
@@ -4433,6 +4638,7 @@ function manageTab(): string {
     <p class="small muted nudge">Canister <code>${v.canister.toText()}</code> · created ${when(v.created_at)} · controllers: you and the registry.</p>
     <nav class="segmented sub" role="tablist" aria-label="Manage sections">${MANAGE_TABS.filter(([k]) => k !== "market" || flag("market")).map(([k, label, ic]) => `<button type="button" role="tab" class="tab" aria-selected="${S.manageTab === k}" data-action="manage-tab" data-tab="${k}">${icon(ic)}<span class="lbl">${label}</span></button>`).join("")}</nav>
     ${S.manageTab === "notebook" ? featuresCard() : ""}
+    ${S.manageTab === "notebook" ? questsCard() : ""}
     ${S.manageTab === "notebook" ? `<form class="card band" data-form="nb-meta"><h2>${esc(notebookEmoji(v))} Icon and description</h2><p class="muted small">What the notebook's card shows on the list. Leave the icon empty to let the app pick one from the name.</p><div class="row tight"><label class="field"><span class="label">Icon (one emoji)</span><input class="input" name="emoji" value="${esc(v.emoji ?? "")}" placeholder="${esc(notebookEmoji(v))}" maxlength="4" style="max-width:90px;font-size:1.3rem;text-align:center"></label><label class="field" style="flex:1;min-width:220px"><span class="label">Description</span><input class="input" name="desc" value="${esc(v.description ?? "")}" maxlength="280" placeholder="What it is for, who it is for"></label><button type="submit" class="btn btn-primary" style="align-self:flex-end" ${S.busy ? "disabled" : ""}>Save</button></div></form>` : ""}
     ${S.manageTab === "finance" ? `
     <div class="card band">
@@ -4833,6 +5039,7 @@ function reindex() {
 }
 
 async function loadNotebook() {
+  S.usage = undefined;
   const a = nb();
   const notes: Note[] = [];
   let after: string | null = null;
@@ -4861,6 +5068,7 @@ async function loadNotebook() {
   void cacheSet(`nb:${S.notebook!.canister.toText()}`, { notes: S.notes, folders: S.folders, settings: S.settings, at: Date.now() });
   S.info = info;
   S.topups = topups;
+  void nb().usage().then((u) => { S.usage = u; }).catch(() => {});
   for (const [p, d] of S.drafts) if (!d.dirty) S.drafts.delete(p);
   for (const p of S.panes) {
     p.tabs = p.tabs.filter((t) => note(t));
@@ -5961,6 +6169,7 @@ function menuFor(kind: "file" | "folder" | "root", path: string, x: number, y: n
       { label: "Version history…", icon: "history", action: () => void historyDialog(path) },
       { label: S.shares.some((x) => x.path === path) ? "Sharing…" : "Share…", icon: "share", action: () => void shareDialog(path) },
       "-",
+      ...(isMeeting(draftOf(path).text) ? [{ label: "Summarise the meeting with AI", icon: "bot", action: () => { const i = document.createElement("i"); i.dataset.path = path; void copilotAction("copilot-work-meeting", i); } } as MenuItem] : []),
       { label: "Make flashcards", icon: "check", action: () => void studyNote("cards", path) },
       { label: "Summarise", icon: "list", action: () => void studyNote("summary", path) },
       { label: "Explain simply", icon: "help", action: () => void studyNote("explain", path) },
@@ -6100,6 +6309,14 @@ async function openShared(canister: string, path: string) {
     S.shared.name = info?.[0];
     const role = await a.my_role(key);
     S.shared.role = role ?? undefined;
+    void a.info().then((i) => { if (S.shared?.canister === canister) { S.shared.cycles = i.cycles; render(); } }).catch(() => {});
+    // the role over the whole notebook decides the team buttons (a note's editor is not the team)
+    void a.my_role("").then((r) => { if (S.shared?.canister === canister) { S.shared.teamRole = r ?? undefined; render(); } }).catch(() => {});
+    // remember notebooks shared with me, so the home page can list them
+    if (role && S.identity && info?.[0] && !S.notebooks?.some((n) => n.canister.toText() === canister)) {
+      const seen = (JSON.parse(store("nb-shared-seen") ?? "[]") as { canister: string; name: string; at: number }[]).filter((x) => x.canister !== canister);
+      store("nb-shared-seen", JSON.stringify([{ canister, name: info[0], at: Date.now() }, ...seen].slice(0, 20)));
+    }
     if (isFolder) {
       const r = await a.list_shared(key);
       if (r.__kind__ === "Err") S.shared.error = "Not shared with you.";
@@ -6162,8 +6379,9 @@ function sharedPage(): string {
       ? `${progressBar}<p class="small muted">${icon("edit")} You can edit this note. ${sh.dirty ? "Unsaved changes." : "Changes save a second after you stop typing."}</p><div class="editor-panes view-edit shared-edit"><div class="cm-host" data-cm="${esc(sh.path)}"></div></div>${comments}`
       : `${progressBar}<article class="md shared-note">${renderMarkdown(sh.note!.content, { self: sh.path, resolve: () => undefined, note: () => undefined, attachment: () => undefined })}</article>${comments}`;
   }
+  const team = S.identity && !sh.loading && !sh.error && sh.teamRole ? `<div class="row tight team-row">${sh.teamRole === "Edit" && sh.files ? `<button type="button" class="btn" data-action="shared-new">${icon("plus")}New note</button>` : ""}${sh.teamRole === "Edit" && sh.note && isMeeting(sh.note.content) ? `<button type="button" class="btn" data-action="shared-summarise" title="The free model, paid for in this notebook's cycles">${icon("bot")}Summarise the meeting with AI</button>` : ""}${sh.cycles !== undefined ? `<button type="button" class="btn btn-ghost" data-action="shared-chip-in" title="Top this notebook up from your wallet; the ICP becomes its cycles">${icon("bolt")}Chip in cycles<span class="small muted"> · ${tc(sh.cycles)} left</span></button>` : ""}</div>` : "";
   return pageShell(`<b>${esc(sh.name || "Shared")}</b><span class="faint">/</span><span>${esc(sh.files ? (sh.path || "Everything shared") : title(sh.path))}</span>`, `
-    <section class="card">
+    <section class="card">${team}
       ${crumb}
       <h1 class="shared-title">${esc(sh.files ? (sh.path || sh.name || "Shared notes") : title(sh.path))}</h1>
       ${sh.note ? `<p class="small muted">${esc(sh.path)} · updated ${when(sh.note.modified)}${sh.note.agent ? ` · written by agent ${esc(sh.note.agent)}` : ""}</p>` : ""}
@@ -6548,6 +6766,8 @@ async function loadAdmin() {
   try {
     void registry().github_repo().then((repo) => { if (S.admin) { S.admin.repo = repo; render(); } }).catch(() => {});
     void registry().app_stats(false).then((r) => { if (S.admin && r.__kind__ === "Ok") { S.admin.stats = r.Ok; render(); } }).catch(() => {});
+    void registry().pending_sponsors().then((r) => { if (S.admin && r.__kind__ === "Ok") { S.admin.pending = r.Ok; render(); } }).catch(() => {});
+    void registry().sponsor_price().then((p) => { if (S.admin) { S.admin.sponsorPrice = p; render(); } }).catch(() => {});
     const r = await registry().bugs();
     if (r.__kind__ === "Err") throw new Error(r.Err);
     S.admin.bugs = r.Ok;
@@ -6586,6 +6806,10 @@ function adminPage(): string {
       <div class="tags" style="padding:4px 0 4px">${kinds}</div>
       <div class="tags" style="padding:0 0 12px">${chips}</div>
       ${a.loading ? `<p class="muted">Loading…</p>` : shown.length ? `<div class="bugs">${rows}</div>` : `<p class="muted">Nothing here.</p>`}
+      <div class="band-title nudge">Sponsored buildings</div>
+      <p class="small muted">Projects propose a building in the town's Sponsors district and pay ${a.sponsorPrice !== undefined ? `${icp(a.sponsorPrice)} ICP` : "…"} a month once approved. The town links to their site, so look before you approve.</p>
+      <div class="row tight"><label class="field"><span class="label">Price a month (ICP)</span><input class="input" name="sponsor-price" value="${a.sponsorPrice !== undefined ? icp(a.sponsorPrice) : ""}" style="max-width:120px"></label><button type="button" class="btn" data-action="admin-sponsor-price" style="align-self:flex-end">Set</button></div>
+      ${a.pending?.length ? `<div class="runs nudge">${a.pending.map((x) => `<div class="run"><span><b>${esc(x.name)}</b> <span class="small muted">· ${esc(x.blurb)} · <a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.url)}</a></span></span><span class="right-actions"><button type="button" class="btn btn-primary" data-action="admin-sponsor-ok" data-id="${x.id}">Approve</button><button type="button" class="btn btn-ghost" data-action="admin-sponsor-no" data-id="${x.id}">Turn down</button></span></div>`).join("")}</div>` : `<p class="small muted">Nothing waiting for review.</p>`}
       <div class="band-title nudge">Feature flags</div>
       <div class="runs">${S.flags.map((f) => `<div class="run"><span><b>${esc(f.name)}</b> <span class="small muted">· ${esc(f.description)}${f.on === f.default ? "" : ` · default ${f.default ? "on" : "off"}`}</span></span><label class="switch"><input type="checkbox" name="flag" data-flag="${esc(f.name)}" ${f.on ? "checked" : ""}> ${f.on ? "On" : "Off"}</label></div>`).join("") || `<p class="small muted">Loading…</p>`}</div>
       <p class="small muted">Switching a flag off hides the feature for everyone and the registry refuses its calls. The market stays off until it has been tried on mainnet.</p>
@@ -6626,6 +6850,8 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
   const newTab = !!(ev && (ev.metaKey || ev.ctrlKey || ev.button === 1));
   if (action === "admin-stats") return adminStatsAction();
   if (/^town-/.test(action)) return townAction(action);
+  if (/^garden-/.test(action)) return gardenAction(action, el);
+  if (/^copilot-/.test(action)) return copilotAction(action, el);
   const kit = /^(money|creator|fitness|home)-/.exec(action)?.[1];
   if (kit) return kit === "money" ? moneyAction(action, el) : kit === "creator" ? creatorAction(action, el) : kit === "fitness" ? fitnessAction(action, el) : homeAction(action, el);
   switch (action) {
@@ -6660,7 +6886,83 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
       S.chat.excluded = el.dataset.all === "1" ? new Set() : new Set(chatFolders());
       store(`nb-chat-off-${S.notebook!.canister.toText()}`, JSON.stringify([...S.chat.excluded]));
       return render();
+    case "shared-new": {
+      const sh = S.shared;
+      if (!sh) return;
+      const name = await ask({ title: "New note", label: "Name", placeholder: "Meeting 12 May", ok: "Create" });
+      if (!name?.trim()) return;
+      const path = `${sh.path ? `${sh.path}/` : ""}${name.trim().replace(/[\\/:*?"<>|#^[\]]/g, " ").trim()}.md`;
+      const r = await notebookOf(sh.canister).write_shared(path, `# ${name.trim()}\n\n`);
+      if (r.__kind__ === "Err") return toast(describe(r.Err), "error");
+      location.hash = `#/shared/${sh.canister}/${encodeURIComponent(path)}`;
+      return;
+    }
+    case "shared-chip-in": {
+      const sh = S.shared;
+      if (!sh) return;
+      const v = await ask({ title: `Chip in cycles for “${sh.name ?? "this notebook"}”`, body: "The ICP leaves your wallet and is minted straight into this notebook's cycles; nobody holds it on the way.", label: "ICP", value: "0.1", ok: "Chip in" });
+      if (v === null) return;
+      const n = Number(v);
+      if (!(n >= 0.01)) return toast("Minimum is 0.01 ICP.", "error");
+      const amount = BigInt(Math.round(n * 1e8));
+      try {
+        await approvePayment(Principal.fromText(REGISTRY), amount + ICP_FEE);
+        const r = await registry().top_up_notebook(Principal.fromText(sh.canister), amount, null);
+        if (r.__kind__ === "Err") throw new Error(r.Err);
+        toast("Topped up. Thank you.", "ok");
+        const i = await notebookOf(sh.canister).info();
+        if (S.shared?.canister === sh.canister) { S.shared.cycles = i.cycles; render(); }
+      } catch (e) { toast(errMsg(e), "error"); }
+      return;
+    }
+    case "shared-summarise": {
+      const sh = S.shared;
+      if (!sh?.note) return;
+      toast("Summarising…", "info");
+      try {
+        const q = "Summarise this meeting in short bullets: decisions, actions with their owners and dates, and open questions. Nothing that is not in the note.";
+        const r = unwrap(await notebookOf(sh.canister).ask(Principal.fromText(LLM_CANISTER), LLM_MODEL, q, [{ path: sh.path, excerpt: clipText(sh.note.content, 7000) }]));
+        const content = summaryInto(draftOf(`shared:${sh.path}`).text || sh.note.content, r.text);
+        const w = await notebookOf(sh.canister).write_shared(sh.path, content);
+        if (w.__kind__ === "Err") throw new Error(describe(w.Err));
+        toast("Summary added.", "ok");
+        return openShared(sh.canister, sh.path);
+      } catch (e) { return toast(errMsg(e), "error"); }
+    }
+    case "admin-sponsor-price": {
+      const v = Number((document.querySelector("[name=sponsor-price]") as HTMLInputElement)?.value);
+      if (!(v >= 0)) return toast("A number of ICP.", "error");
+      const r = await registry().set_sponsor_price(BigInt(Math.round(v * 1e8)));
+      if (r.__kind__ === "Err") return toast(r.Err, "error");
+      if (S.admin) S.admin.sponsorPrice = BigInt(Math.round(v * 1e8));
+      toast("Price set.", "ok");
+      return render();
+    }
+    case "admin-sponsor-ok": case "admin-sponsor-no": {
+      const r = await registry().review_sponsor(BigInt(el.dataset.id!), action === "admin-sponsor-ok");
+      if (r.__kind__ === "Err") return toast(r.Err, "error");
+      if (S.admin) S.admin.pending = (S.admin.pending ?? []).filter((x) => String(x.id) !== el.dataset.id);
+      toast(action === "admin-sponsor-ok" ? "Approved; they can pay now." : "Turned down.", "ok");
+      return render();
+    }
     case "chat-save": return saveAnswer(Number(el.dataset.i));
+    case "chat-save-deck": {
+      const m = S.chat.messages[Number(el.dataset.i)];
+      if (!m) return;
+      const name = await ask({ title: "Save the cards as a deck", label: "Name", value: "Flashcards", ok: "Save" });
+      if (!name?.trim()) return;
+      const path = uniquePath(`${name.trim()}.md`);
+      await createQuiet(path, `---\nquiz: cards\n---\n# ${name.trim()}\n\n${m.text.replace(CITE, "").trim()}\n`);
+      toast("Deck saved.", "ok");
+      return open(path);
+    }
+    case "chat-insert": {
+      const m = S.chat.messages[Number(el.dataset.i)];
+      if (!m?.insertInto || !note(m.insertInto)) return;
+      await writeNote(m.insertInto, summaryInto(draftOf(m.insertInto).text, m.text));
+      toast("Summary added.", "ok");
+      return open(m.insertInto);
+    }
     // --- features and kits
     case "tour": return onboarding();
     case "bib-paste": { const t = await ask({ title: "Paste BibTeX", multiline: true, placeholder: "@article{key, author = {…}, title = {…}, year = {…}}", ok: "Add" }); if (t?.trim()) { const list = parseBibtex(t); if (!list.length) return toast("No BibTeX entries found.", "error"); await addSources(list); } return; }
