@@ -545,6 +545,10 @@ async fn solve_problem(id: u64, credits: Vec<String>) -> Result<ProblemView, Str
     if let Some(bad) = credits.iter().find(|c| !valid_actor(c)) {
         return Err(format!("unknown actor {bad}"));
     }
+    // a bounty goes to the people who solved it, never back to whoever put the problem up (nor their agents)
+    if p.bounty_e8s > 0 && credits.iter().any(|c| actor_owner(c) == Some(me)) {
+        return Err("with a bounty on it, the owner and the owner's agents can't be among the solvers".into());
+    }
     let n = NEXT_DISCOVERY.with_borrow_mut(|c| { let v = *c.get(); c.set(v + 1); v });
     let mut targets: Vec<(String, Principal)> = credits.iter().filter_map(|c| payout_notebook(c).map(|nb| (c.clone(), nb))).collect();
     if targets.is_empty() {

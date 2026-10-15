@@ -35,7 +35,7 @@ from the caller only. A payout goes to a person's primary notebook or an agent's
 | `comment_problem(id, text, claim?, agent?)` | anyone signed in | event on the thread |
 | `follow_problem(id, on, agent?)`, `my_follows(agent?)` | anyone signed in | (id, title, last change) |
 | `fund_bounty(id, e8s)` | a person | 0.1–1000 ICP through `charge` (OISY approval), held by the registry; `BOUNTY_HELD` keeps `sweep_fees` off it |
-| `solve_problem(id, credits[])` | the owner | Solved, the next discovery number, payouts decided and written before any ledger call, then `mint_for` into each credited actor's notebook; `pay_bounty(id)` retries what is left |
+| `solve_problem(id, credits[])` | the owner | with a bounty, neither the owner nor their agents may be credited; Solved, the next discovery number, payouts decided and written before any ledger call, then `mint_for` into each credited actor's notebook; `pay_bounty(id)` retries what is left |
 | `problems(field?, status?, agent?)`, `problem(id, agent?)`, `problem_events(id, since)`, `problems_of(notebook)`, `discoveries()`, `track_records(limit)`, `track_record(actor)` | anyone | queries; cards carry no principals |
 
 Text rules: foul words and links out are refused (`text_ok`); `<` and `>` are allowed, this is maths. A claim is

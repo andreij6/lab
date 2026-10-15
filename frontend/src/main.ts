@@ -3149,16 +3149,21 @@ function problemsPage(): string {
   else if (p.tab === "discoveries") main = `<div class="chat-head"><b>Discoveries</b><span class="small muted">Solved problems, numbered for good, crediting everyone merged or checked</span>${tabs}</div>
     <div class="plist">${p.loading && !p.discoveries ? `<p class="muted small" style="padding:12px">Loading…</p>` : p.discoveries?.length ? p.discoveries.map((d) => `<a href="#/problems/${d.problem}" class="prow pcard" data-action="nav"><div class="prow-main"><span class="ptitle"><span class="pill ok">№${d.n}</span> ${esc(d.title)}</span><div class="small muted">${esc(fieldLabel(d.field))} · ${d.credits.map(([, n]) => esc(n)).join(", ")} · ${when(d.at)} · note ${esc(d.note_hash.slice(0, 10))}…</div></div></a>`).join("") : `<div class="chat-empty">${icon("award")}<h3>No discoveries yet</h3><p class="muted small">When a problem's owner calls it solved, it is numbered here with everyone credited, and an obelisk goes up on the town green.</p></div>`}</div>`;
   else if (p.tab === "agents") main = `<div class="chat-head"><b>Track records</b><span class="small muted">People and agents, by what they have checked, sent and solved</span>${tabs}</div>
-    <div class="plist">${p.loading && !p.records ? `<p class="muted small" style="padding:12px">Loading…</p>` : p.records?.length ? `<table class="table"><thead><tr><th>Who</th><th>Checks</th><th>Attempts</th><th>Merged</th><th>Solved</th><th>Problems</th><th>Since</th></tr></thead><tbody>${p.records.map((r) => `<tr><td>${esc(r.name)}${r.agent ? ` <span class="pill agent">${icon("bot")}agent</span>` : ""}</td><td>${r.checks}</td><td>${r.attempts}</td><td>${r.merged}</td><td>${r.solved}</td><td>${r.problems}</td><td class="small muted">${ago(r.since)}</td></tr>`).join("")}</tbody></table>` : `<div class="chat-empty">${icon("bot")}<h3>Nobody yet</h3><p class="muted small">Check a claim, send an attempt or publish a problem to appear here. Agents act through their notebook's API: see the agent skill.</p></div>`}</div>`;
+    <div class="plist">${p.loading && !p.records ? `<p class="muted small" style="padding:12px">Loading…</p>` : p.records?.length ? `<div class="ptable-wrap" style="margin:12px;max-height:none"><table class="ptable"><thead><tr><th>Who</th><th>Checks</th><th>Attempts</th><th>Merged</th><th>Solved</th><th>Problems</th><th>Since</th></tr></thead><tbody>${p.records.map((r) => `<tr><td>${esc(r.name)}${r.agent ? ` <span class="pill agent">${icon("bot")}agent</span>` : ""}</td><td>${r.checks}</td><td>${r.attempts}</td><td>${r.merged}</td><td>${r.solved}</td><td>${r.problems}</td><td class="small muted">${ago(r.since)}</td></tr>`).join("")}</tbody></table></div>` : `<div class="chat-empty">${icon("bot")}<h3>Nobody yet</h3><p class="muted small">Check a claim, send an attempt or publish a problem to appear here. Agents act through their notebook's API: see the agent skill.</p></div>`}</div>`;
   else {
     const side = `<div class="pane-head"><span class="pane-title" style="padding:0">Fields</span></div>
       <div class="chans"><button type="button" class="chan ${!p.field ? "on" : ""}" data-action="problems-field" data-field=""><span class="hash">∗</span>all</button>${FIELDS.map(([v, l]) => `<button type="button" class="chan ${p.field === v ? "on" : ""}" data-action="problems-field" data-field="${v}"><span class="hash">#</span>${esc(l)}</button>`).join("")}</div>
       <div class="wallet"><div class="pane-title">Publishing</div><div class="small muted">A problem is a note: make one with New › Problem, write the statement and its claims, and publish it from the note. Checks, attempts and bounties come to you here; agents join through your notebook's API.</div>${S.identity ? `<div class="nudge"><button type="button" class="btn btn-primary" data-action="problem-new">${icon("plus")}New problem</button></div>` : ""}</div>`;
     main = `<div class="chat-head"><b>${p.field ? esc(fieldLabel(p.field)) : "All fields"}</b><span class="small muted">${p.status === "solved" ? "solved" : p.status === "all" ? "open and solved" : "open"}</span><span class="right-actions"><span class="segmented sub">${(["open", "solved", "all"] as const).map((k) => `<button type="button" class="tab ${p.status === k ? "on" : ""}" data-action="problems-status" data-status="${k}">${k[0].toUpperCase()}${k.slice(1)}</button>`).join("")}</span>${tabs}</span></div>
       <div class="plist">${p.loading && !p.cards.length ? `<p class="muted small" style="padding:12px">Loading…</p>` : p.cards.filter((c) => p.status !== "open" || c.status !== ProblemStatus.Solved).length ? p.cards.filter((c) => p.status !== "open" || c.status !== ProblemStatus.Solved).map(problemCardHtml).join("") : `<div class="chat-empty">${icon("target")}<h3>No problems ${p.status === "solved" ? "solved" : "open"}${p.field ? ` in ${esc(fieldLabel(p.field))}` : ""} yet</h3><p class="muted small">Publish one from a problem note. Claims get checked by other people and their agents; attempts come back for you to merge; a bounty waits for whoever solves it.</p></div>`}</div>`;
-    return pageShell(`<b>Problems</b>${p.field ? `<span class="faint">/</span><span>${esc(fieldLabel(p.field))}</span>` : ""}`, `<div class="workspace community ${S.mobile ? "m-note" : ""}"><nav class="side" aria-label="Fields">${side}</nav><section class="main chatpane board">${main}</section></div>`, true);
+    return problemsShell(`<b>Problems</b>${p.field ? `<span class="faint">/</span><span>${esc(fieldLabel(p.field))}</span>` : ""}`, `<div class="workspace community no-aside ${S.mobile ? "m-note" : ""}"><nav class="side" aria-label="Fields">${side}</nav><section class="main chatpane board">${main}</section></div>`);
   }
-  return pageShell(`<b>Problems</b>${p.open ? `<span class="faint">/</span><span>${esc(p.open.card.title)}</span>` : ""}`, `<div class="workspace community no-side ${S.mobile ? "m-note" : ""}"><section class="main chatpane board">${main}</section></div>`, true);
+  return problemsShell(`<b>Problems</b>${p.open ? `<span class="faint">/</span><span>${esc(p.open.card.title)}</span>` : ""}`, `<div class="workspace community no-side no-aside ${S.mobile ? "m-note" : ""}"><section class="main chatpane board">${main}</section></div>`);
+}
+/** The board's shell (bar, then the workspace filling the rest), signed in or out. */
+function problemsShell(crumb: string, workspace: string): string {
+  const right = S.mobile ? moreBtn() : S.identity ? "" : `<button type="button" class="btn btn-primary" data-action="sign-in">Sign in</button>`;
+  return `<div class="shell ${S.mobile ? "is-mobile" : ""} ${S.identity ? "" : "single"}">${S.identity ? ribbonHtml() : ""}<div class="shell-main"><header class="wsbar">${brand()}<span class="crumb">${crumb}</span><span class="right">${right}</span></header>${workspace}</div></div>`;
 }
 /** Publish (or refresh) a problem note on the board: shared publicly, read-only, then registered with its hash and claims. */
 async function publishProblem(notebook: Principal, path: string, content: string, quiet = false): Promise<ProblemCard | undefined> {
@@ -3343,8 +3348,10 @@ async function problemAction(action: string, el: HTMLElement) {
       const latest = new Map<string, boolean>();
       for (const e of v.events) if (e.kind === EventKind.Check) { people.set(e.by, e.by_name); latest.set(`${e.by}#${e.claim}`, e.text.startsWith("pass")); }
       for (const [k, pass] of latest) if (pass) did.add(k.split("#")[0]);
-      people.set(`p:${S.principal}`, "you");
-      const chosen = await pickMany("Call it solved", `Credit who solved it: they are named on the next numbered discovery${v.card.bounty_e8s ? `, and the bounty of ${icpText(v.card.bounty_e8s)} is split equally into their notebooks` : ""}. This cannot be undone.`, [...people].map(([value, label]) => ({ value, label, on: did.has(value) })), "Solved");
+      // with a bounty on it, the owner is not among the solvers: the money goes to the others
+      if (!v.card.bounty_e8s) people.set(`p:${S.principal}`, "you");
+      const chosen = await pickMany("Call it solved", `Credit who solved it: they are named on the next numbered discovery${v.card.bounty_e8s ? `, and the bounty of ${icpText(v.card.bounty_e8s)} is split equally into their notebooks; as the owner you can't be one of them` : ""}. This cannot be undone.`, [...people].map(([value, label]) => ({ value, label, on: did.has(value) })), "Solved");
+      if (!people.size) return toast("Nobody has checked a claim or sent an attempt yet; there is nobody to credit.", "info");
       if (!chosen) return;
       if (!chosen.length) return toast("Credit at least one person or agent.", "error");
       try { const r = await registry().solve_problem(v.card.id, chosen); if (r.__kind__ === "Err") throw new Error(r.Err); toast(`Discovery №${r.Ok.card.discovery}. An obelisk goes up on the green.`, "ok"); } catch (e) { fail(e); }
@@ -5554,7 +5561,9 @@ function syncHash() {
 }
 
 /** Open a note in the focused pane: replaces the active tab unless `newTab`; `paneId` targets a pane. */
-async function open(path: string, o: { newTab?: boolean; paneId?: number } = {}) {
+/** A note with nothing in it yet: empty, or only front matter and a title. */
+const blankNote = (text: string) => !frontmatter(text).body.replace(/^#[^\n]*\n?/, "").trim();
+async function open(path: string, o: { newTab?: boolean; paneId?: number; view?: View } = {}) {
   const n = note(path);
   if (!n) return;
   const p = pane(o.paneId);
@@ -5577,7 +5586,9 @@ async function open(path: string, o: { newTab?: boolean; paneId?: number } = {})
   if (S.mobile) {
     S.mobilePane = "note";
     p.view = "preview"; // reading mode first on a phone
-  }
+  } else if (o.view) p.view = o.view;
+  // a note opens in reading mode when it has something in it, in editing mode when it is blank; switching between open tabs keeps the pane as it is
+  else if (i < 0 && path.endsWith(".md")) p.view = blankNote(draftOf(path).text) ? "edit" : "preview";
   S.tab = "notes";
   syncHash();
   render();
@@ -5866,7 +5877,7 @@ async function newNote(name?: string, folder?: string, paneId?: number, content 
     S.notes.sort((x, y) => x.path.localeCompare(y.path));
     if (dir(path) && !S.folders.includes(dir(path))) S.folders = [...S.folders, dir(path)].sort();
     reindex();
-    await open(path, { newTab: true, paneId });
+    await open(path, { newTab: true, paneId, view: "edit" });
     if (S.mobile && !isExcalidraw(path)) {
       pane().view = "edit";
       render();
