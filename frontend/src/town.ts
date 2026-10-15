@@ -23,7 +23,7 @@ export type Target =
   | { kind: "fountain" } | { kind: "board" } | { kind: "market" } | { kind: "factory" } | { kind: "school" } | { kind: "chapel" } | { kind: "tower" }
   | { kind: "park" } | { kind: "trail" } | { kind: "lake" } | { kind: "walker"; channel: string; me: boolean }
   | { kind: "landmark"; landmark: Landmark } | { kind: "district"; district: District } | { kind: "station" } | { kind: "visitor"; mine: boolean };
-type Kind = "fence" | "station" | "canopy" | "buffer" | "trestle" | "news" | "datacentre" | "credentials" | "bank" | "exchange" | "capitol" | "statue" | "launchpad" | "office" | "sign" | "house" | "plot" | "garden" | "tree" | "pine" | "poplar" | "bush" | "rock" | "hall" | "stall" | "fountain" | "gazebo" | "market" | "crate" | "factory" | "school" | "chapel" | "tower" | "bench" | "lantern" | "bridge" | "reeds";
+type Kind = "swiss" | "fence" | "station" | "canopy" | "buffer" | "trestle" | "news" | "datacentre" | "credentials" | "bank" | "exchange" | "capitol" | "statue" | "launchpad" | "office" | "sign" | "house" | "plot" | "garden" | "tree" | "pine" | "poplar" | "bush" | "rock" | "hall" | "stall" | "fountain" | "gazebo" | "market" | "crate" | "factory" | "school" | "chapel" | "tower" | "bench" | "lantern" | "bridge" | "reeds";
 export type Obj = { k: Kind; x: number; y: number; w: number; d: number; s: number; tg?: Target; h?: TownHouse; face?: "x" | "y" | ""; ch?: TownChan; mine?: boolean; building?: boolean };
 /** Ground cells: nothing (beyond the shore), land, water, road, a bridge over water, railway. */
 // ---------------------------------------------------------------- districts and landmarks
@@ -31,7 +31,7 @@ export type Obj = { k: Kind; x: number; y: number; w: number; d: number; s: numb
 /** A place in the town for something beyond Lab: it links out. `at` is [x, y, w, d] in tiles from
  *  the corner of its district block (a block is 6×6 tiles). `office` is the plain building for
  *  anything new: give it a `color` and it needs no drawing code of its own. */
-export type Landmark = { id: string; kind: "bank" | "exchange" | "capitol" | "statue" | "launchpad" | "news" | "datacentre" | "credentials" | "office"; title: string; blurb: string; url: string; block: [number, number]; at: [number, number, number, number]; color?: string };
+export type Landmark = { id: string; kind: "bank" | "exchange" | "capitol" | "statue" | "launchpad" | "news" | "datacentre" | "swiss" | "credentials" | "office"; title: string; blurb: string; url: string; block: [number, number]; at: [number, number, number, number]; color?: string };
 /** A district: blocks set aside (homes are never built there) for landmarks of a kind; the room
  *  left over is for the next ones. */
 export type District = { id: string; name: string; blurb: string; blocks: [number, number][]; landmarks: Landmark[]; outskirts?: boolean };
@@ -49,16 +49,17 @@ export const DISTRICTS: District[] = [
     id: "icp", name: "The ICP quarter", blurb: "The Internet Computer's government, its news, and the people who built it.", blocks: [[-2, -1], [-2, 0]],
     landmarks: [
       { id: "nns", kind: "capitol", title: "The NNS", blurb: "The Network Nervous System: the Internet Computer's government, where ICP neurons vote on every proposal.", url: "https://nns.internetcomputer.org/", block: [-2, -1], at: [0.2, 0.2, 5.6, 2.6] },
-      { id: "dfinity-news", kind: "news", title: "DFINITY on X", blurb: "The news station: what's new on the Internet Computer, from the DFINITY Foundation's account on X.", url: "https://x.com/dfinity", block: [-2, 0], at: [0.4, 0.4, 3.2, 2.0] },
-      { id: "dominic", kind: "statue", title: "Dominic Williams", blurb: "Founder and chief scientist of DFINITY, who set out to build the Internet Computer.", url: "https://x.com/dominic_w", block: [-2, -1], at: [1.5, 3, 3, 2.9] },
+      { id: "dfinity-news", kind: "news", title: "DFINITY on X", blurb: "The news station: what's new on the Internet Computer, from the DFINITY Foundation's account on X.", url: "https://x.com/dfinity", block: [-2, 0], at: [0.2, 0.2, 2.8, 2.0] },
+      { id: "dominic", kind: "statue", title: "Dominic Williams", blurb: "Founder and chief scientist of DFINITY, who set out to build the Internet Computer.", url: "https://x.com/dominic_w", block: [-2, 0], at: [3.0, 3.0, 2.9, 2.9] },
     ],
   },
   {
-    // by the station, where visitors arrive
-    id: "embassies", name: "Embassy row", blurb: "Countries and global programmes building on the Internet Computer.", blocks: [[0, 2]],
+    // next to the government quarter
+    id: "embassies", name: "Embassy row", blurb: "Countries and global programmes building on the Internet Computer.", blocks: [[-2, 1]],
     landmarks: [
-      { id: "pakistan", kind: "datacentre", title: "The Pakistan Subnet", blurb: "In February 2026 the Pakistan Digital Authority and the DFINITY Foundation agreed to build a Pakistan Subnet: a sovereign cloud on the Internet Computer for national apps and AI.", url: "https://internetcomputer.org/news/media-releases/pakistan-digital-authority-dfinity-partnership-announcement/", block: [0, 2], at: [0.3, 0.4, 3.4, 2.0] },
-      { id: "undp", kind: "credentials", title: "UNDP · Universal Trusted Credentials", blurb: "UNDP and the DFINITY Foundation build Universal Trusted Credentials on the Internet Computer, so small businesses can prove who they are and get financing, starting with a pilot in Cambodia.", url: "https://www.undp.org/policy-centre/singapore/press-releases/undp-partners-dfinity-foundation-enhance-financial-inclusion-msmes", block: [0, 2], at: [0.6, 3.2, 3.0, 2.5] },
+      { id: "pakistan", kind: "datacentre", title: "The Pakistan Subnet", blurb: "In February 2026 the Pakistan Digital Authority and the DFINITY Foundation agreed to build a Pakistan Subnet: a sovereign cloud on the Internet Computer for national apps and AI.", url: "https://internetcomputer.org/news/media-releases/pakistan-digital-authority-dfinity-partnership-announcement/", block: [-2, 1], at: [0.2, 0.3, 3.0, 2.0] },
+      { id: "swiss", kind: "swiss", title: "The Swiss Subnet", blurb: "A subnet of the Internet Computer whose 13 independent node providers are all in Switzerland and Liechtenstein, so its data stays there; run by Swiss Subnet AG in Zug, live since January 2026.", url: "https://forum.dfinity.org/t/introducing-the-swiss-subnet-a-secure-and-compliant-blockchain-infrastructure-leveraging-the-internet-computer-protocol/41135", block: [-2, 1], at: [3.5, 0.4, 2.3, 2.0] },
+      { id: "undp", kind: "credentials", title: "UNDP · Universal Trusted Credentials", blurb: "UNDP and the DFINITY Foundation build Universal Trusted Credentials on the Internet Computer, so small businesses can prove who they are and get financing, starting with a pilot in Cambodia.", url: "https://www.undp.org/policy-centre/singapore/press-releases/undp-partners-dfinity-foundation-enhance-financial-inclusion-msmes", block: [-2, 1], at: [0.6, 3.2, 3.0, 2.5] },
     ],
   },
   {
@@ -551,7 +552,7 @@ function falcon(t: number, firing: boolean, night: boolean) {
   poly([[-r, 0], [r, 0], [r, -72], [-r, -72]], undefined);
 }
 /** A flag on a pole: Pakistan's (green, a white band at the hoist, a crescent and star), or plain sky blue. */
-function flag(x: number, y: number, h: number, kind: "pk" | "blue", t: number) {
+function flag(x: number, y: number, h: number, kind: "pk" | "blue" | "ch", t: number) {
   const [px, py] = P(x, y), top = py - h, wave = S.still ? 0 : Math.sin(t * 3 + x) * 1.2;
   ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px, top - 2); ctx.stroke();
   const fw = 15, fh = 10, q: [number, number][] = [[px, top], [px + fw, top + wave], [px + fw, top + fh + wave], [px, top + fh]];
@@ -562,6 +563,14 @@ function flag(x: number, y: number, h: number, kind: "pk" | "blue", t: number) {
     ctx.fillStyle = "#ffffff"; ctx.beginPath(); ctx.arc(cx, cy, 3, 0, 6.283); ctx.fill();
     ctx.fillStyle = "#01411c"; ctx.beginPath(); ctx.arc(cx + 1.1, cy - 0.6, 2.5, 0, 6.283); ctx.fill();
     ctx.fillStyle = "#ffffff"; ctx.beginPath(); ctx.arc(cx + 2.4, cy - 1.4, 0.9, 0, 6.283); ctx.fill();
+  } else if (kind === "ch") {
+    // square, red, a white cross
+    const sq: [number, number][] = [[px, top], [px + fh, top + wave * 0.7], [px + fh, top + fh + wave * 0.7], [px, top + fh]];
+    poly(sq, "#d52b1e", false);
+    const cx = px + fh / 2, cy = top + fh / 2 + wave * 0.35;
+    ctx.fillStyle = "#ffffff"; ctx.fillRect(cx - 1.1, cy - 3.4, 2.2, 6.8); ctx.fillRect(cx - 3.4, cy - 1.1, 6.8, 2.2);
+    poly(sq, undefined);
+    return;
   } else poly(q, "#5b92e5", false);
   poly(q, undefined);
 }
@@ -948,6 +957,26 @@ function drawObj(o: Obj, t: number) {
       flag(x + w + 0.25, y + d + 0.15, 30, "pk", t);
       return hit([P(x, y, 0), P(x + w, y + d, 0), P(x, y + d, 0), P(x + w, y, 0), P(x + w + 0.25, y + d + 0.15, 40)], o.tg);
     }
+    case "swiss": {
+      // the Swiss Subnet: a chalet of a data centre, steep eaves and a balcony, 13 lights for its 13
+      // node providers, the Swiss flag
+      const { x, y, w, d } = o, h = 11, wall = night ? "#5a6276" : "#f6f3ec", wood = night ? "#6a4e3a" : "#a8754a", roof = night ? "#4a3e36" : "#8a5a3c";
+      box(x, y, w, d, h, wall, shade(toHex(wall), 0.08));
+      // a stone base, the nodes' lights along it
+      box(x - 0.04, y - 0.04, w + 0.08, d + 0.08, 3, shade(toHex(wall), 0.18), shade(toHex(wall), 0.26), undefined);
+      for (let i = 0; i < 13; i++) { const u = 0.15 + i * ((w - 0.3) / 13), on = S.still || Math.sin(t * 2.2 + i * 0.9) > -0.4; onFace("y", x, y, w, d, u, u + 0.09, 0.8, 2.2, on ? "#34d399" : "#14532d", false); }
+      for (let i = 0; i < 3; i++) onFace("y", x, y, w, d, 0.3 + i * 0.7, 0.6 + i * 0.7, 5, 9, night ? p.lit : p.win);
+      // the balcony
+      onFace("y", x, y, w, d + 0.25, 0.1, w - 0.1, 6, 7, wood);
+      ctx.save(); ctx.strokeStyle = wood; ctx.beginPath(); for (let i = 0; i <= 8; i++) { const u = 0.1 + i * ((w - 0.2) / 8), a = P(x + u, y + d + 0.25, 6), b = P(x + u, y + d + 0.25, 4.3); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); } ctx.stroke(); ctx.restore();
+      // a steep gable roof with deep eaves, ridge along y
+      const e = 0.35, rh = 10;
+      poly([P(x - e, y - e, h - 1), P(x - e, y + d + e, h - 1), P(x + w / 2, y + d + e, h + rh), P(x + w / 2, y - e, h + rh)], shade(toHex(roof), 0.12));
+      poly([P(x + w + e, y - e, h - 1), P(x + w + e, y + d + e, h - 1), P(x + w / 2, y + d + e, h + rh), P(x + w / 2, y - e, h + rh)], roof);
+      poly([P(x, y + d, h), P(x + w, y + d, h), P(x + w / 2, y + d, h + rh - 1)], wood);
+      flag(x + w + 0.3, y + d * 0.5, 26, "ch", t);
+      return hit([P(x, y, 0), P(x + w, y + d, 0), P(x, y + d, 0), P(x + w, y, 0), P(x + w / 2, y, h + rh)], o.tg);
+    }
     case "credentials": {
       // UNDP's Universal Trusted Credentials: an office with a sky-blue flag, small businesses in front of it
       const { x, y, w, d } = o, h = 12, wall = night ? "#53607a" : "#f4f8fc", blue = "#5b92e5";
@@ -989,16 +1018,41 @@ function drawObj(o: Obj, t: number) {
       for (let i = 0; i < 5; i++) box(px0 + 0.1 + i * ((pw - 0.3) / 4), py + 0.3, 0.12, 0.12, h - 1.5, stone, stoneR, undefined, 1.5);
       poly([P(px0 - 0.1, py + 0.55, h), P(px0 + pw + 0.1, py + 0.55, h), P(px0 + pw / 2, py + 0.55, h + 6)], stone);
       poly([P(px0 - 0.1, py, h), P(px0 - 0.1, py + 0.55, h), P(px0 + pw / 2, py + 0.55, h + 6), P(px0 + pw / 2, py, h + 6)], shade(toHex(stone), 0.06));
-      // the dome on its drum
-      const cx = x + w / 2, cy = y + d / 2;
-      box(cx - 0.7, cy - 0.7, 1.4, 1.4, 6, stone, stoneR, undefined, h);
-      const [sx, sy] = P(cx, cy, h + 6);
-      ctx.beginPath(); ctx.ellipse(sx, sy, 22, 11, 0, Math.PI, 0); ctx.bezierCurveTo(sx + 22, sy - 26, sx - 22, sy - 26, sx - 22, sy); ctx.closePath();
-      ctx.fillStyle = night ? "#6d7894" : "#dfe6ef"; ctx.fill(); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(sx, sy - 20); ctx.lineTo(sx, sy - 40); ctx.stroke();
+      // the rotunda: a drum ringed with columns, an entablature, a ribbed dome, a lantern and the flag
+      const cx = x + w / 2, cy = y + d / 2, [sx, base] = P(cx, cy, h), rx = 23, ry = 11.5, dh = 13;
+      const top = base - dh, stoneD = shade(toHex(stone), 0.14), domeC = night ? "#6d7894" : "#e4eaf2";
+      // the drum's back wall, in shade behind the columns
+      ctx.beginPath(); ctx.ellipse(sx, base, rx - 3, ry - 1.5, 0, 0, Math.PI); ctx.lineTo(sx - rx + 3, top); ctx.ellipse(sx, top, rx - 3, ry - 1.5, 0, Math.PI, 0, true); ctx.closePath(); ctx.fillStyle = stoneD; ctx.fill();
+      // a base ring, then the columns round the front half
+      ctx.beginPath(); ctx.ellipse(sx, base, rx, ry, 0, 0, 6.283); ctx.fillStyle = stone; ctx.fill(); ctx.stroke();
+      for (let i = 0; i <= 10; i++) {
+        const a = (i / 10) * Math.PI, px = sx + Math.cos(a) * (rx - 1.5), py = Math.sin(a) * (ry - 1);
+        const lit = Math.cos(a) < 0.3;
+        ctx.fillStyle = lit ? stone : shade(toHex(stone), 0.07); ctx.fillRect(px - 1.3, top + py, 2.6, dh);
+        ctx.strokeRect(px - 1.3, top + py, 2.6, dh);
+      }
+      // the entablature
+      ctx.beginPath(); ctx.ellipse(sx, top, rx + 0.5, ry + 0.3, 0, 0, Math.PI); ctx.lineTo(sx - rx - 0.5, top - 3); ctx.ellipse(sx, top - 3, rx + 0.5, ry + 0.3, 0, Math.PI, 0, true); ctx.closePath(); ctx.fillStyle = stone; ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.ellipse(sx, top - 3, rx + 0.5, ry + 0.3, 0, 0, 6.283); ctx.fillStyle = shade(toHex(stone), 0.04); ctx.fill(); ctx.stroke();
+      // the dome, lit from the left, with ribs
+      const db = top - 4, dr = rx - 2, dhh = 26;
+      const dg = ctx.createLinearGradient(sx - dr, 0, sx + dr, 0); dg.addColorStop(0, domeC); dg.addColorStop(1, shade(toHex(domeC), 0.18));
+      ctx.beginPath(); ctx.moveTo(sx - dr, db); ctx.bezierCurveTo(sx - dr, db - dhh * 0.95, sx + dr, db - dhh * 0.95, sx + dr, db); ctx.ellipse(sx, db, dr, ry - 2, 0, 0, Math.PI); ctx.closePath(); ctx.fillStyle = dg; ctx.fill(); ctx.stroke();
+      ctx.save(); ctx.globalAlpha = 0.45; ctx.beginPath();
+      for (const k of [-0.75, -0.4, 0, 0.4, 0.75]) { const bx = sx + k * dr, by = db + Math.sqrt(Math.max(0, 1 - k * k)) * (ry - 2); ctx.moveTo(bx, by); ctx.quadraticCurveTo(sx + k * dr * 0.85, db - dhh * 0.55, sx, db - dhh * 0.71); }
+      ctx.stroke(); ctx.restore();
+      // the lantern on top, and the flag
+      const lb = db - dhh * 0.71;
+      ctx.beginPath(); ctx.ellipse(sx, lb, 5, 2.5, 0, 0, 6.283); ctx.fillStyle = stone; ctx.fill(); ctx.stroke();
+      ctx.fillStyle = stone; ctx.fillRect(sx - 4, lb - 6, 8, 6); ctx.strokeRect(sx - 4, lb - 6, 8, 6);
+      ctx.fillStyle = night ? p.lit : p.win; ctx.fillRect(sx - 1, lb - 5, 2, 4);
+      ctx.beginPath(); ctx.ellipse(sx, lb - 6, 4.6, 2.3, 0, Math.PI, 0); ctx.bezierCurveTo(sx + 4.6, lb - 11, sx - 4.6, lb - 11, sx - 4.6, lb - 6); ctx.fillStyle = domeC; ctx.fill(); ctx.stroke();
+      const fy0 = lb - 10;
+      ctx.beginPath(); ctx.moveTo(sx, fy0); ctx.lineTo(sx, fy0 - 16); ctx.stroke();
       const wave = S.still ? 0 : Math.sin(t * 3) * 1.2;
-      ICP.forEach((c, i) => poly([[sx, sy - 40 + i * 1.6], [sx + 13, sy - 39 + i * 1.6 + wave], [sx + 13, sy - 37.4 + i * 1.6 + wave], [sx, sy - 38.4 + i * 1.6]], c, false));
-      poly([[sx, sy - 40], [sx + 13, sy - 39 + wave], [sx + 13, sy - 31 + wave], [sx, sy - 32]], undefined);
+      ICP.forEach((c, i) => poly([[sx, fy0 - 16 + i * 1.6], [sx + 13, fy0 - 15 + i * 1.6 + wave], [sx + 13, fy0 - 13.4 + i * 1.6 + wave], [sx, fy0 - 14.4 + i * 1.6]], c, false));
+      poly([[sx, fy0 - 16], [sx + 13, fy0 - 15 + wave], [sx + 13, fy0 - 7 + wave], [sx, fy0 - 8]], undefined);
+      const sy = fy0 + 20;
       return hit([P(x, y, 0), P(x + w, y + d + 0.8, 0), P(x, y + d + 0.8, 0), P(x + w, y, 0), [sx, sy - 42]], o.tg);
     }
     case "bank": {

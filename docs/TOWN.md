@@ -38,7 +38,7 @@ the rest of the Internet Computer. Homes skip them (`homeBlock` is the spiral wi
 |---|---|---|
 | The financial district (right, by the park) | (2,0), (2,1) | OISY Wallet (a bank), ICPSwap (an exchange) |
 | The ICP quarter (left) | (−2,−1), (−2,0) | The NNS (a capitol), Dominic Williams (a statue), DFINITY on X (a news station) |
-| Embassy row (front, by the station) | (0,2) | The Pakistan Subnet (a data centre), UNDP · Universal Trusted Credentials (an office and small shops) |
+| Embassy row (left, beside the ICP quarter) | (−2,1) | The Swiss Subnet (a chalet data centre), the Pakistan Subnet (a data centre), UNDP · Universal Trusted Credentials (an office and small shops) |
 | The spaceport (outskirts: the back right coast, fenced) | none: a site 4 tiles beyond the town's edge | SOON launchpad (a rocket that launches every two minutes) |
 
 To add a landmark, add an entry to its district: an id, a `kind`, a title, a blurb, a URL, its block and `at`

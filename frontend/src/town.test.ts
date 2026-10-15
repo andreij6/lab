@@ -83,7 +83,7 @@ test("town: districts hold their landmarks, and homes are never built there", ()
   const held = new Set(DISTRICTS.flatMap((d) => d.blocks.map((b) => b.join())));
   for (let b = 0; b < 40; b++) assert.ok(!held.has(homeBlock(b).join()), `home block ${b}`);
   const ids = pl.objs.flatMap((o) => (o.tg?.kind === "landmark" ? [o.tg.landmark.id] : []));
-  assert.deepEqual(ids.sort(), ["dfinity-news", "dominic", "icpswap", "nns", "oisy", "pakistan", "soon", "undp"]);
+  assert.deepEqual(ids.sort(), ["dfinity-news", "dominic", "icpswap", "nns", "oisy", "pakistan", "soon", "swiss", "undp"]);
   for (const o of pl.objs.filter((o) => o.k === "house")) assert.ok(!held.has([Math.floor((o.x - 1) / 7), Math.floor((o.y - 1) / 7)].join()), `a home in a district at ${o.x},${o.y}`);
   // every district is named on a sign
   assert.deepEqual(new Set(pl.objs.filter((o) => o.k === "sign" && o.s === 1).map((o) => (o.tg as { district: { id: string } }).district.id)), new Set(DISTRICTS.map((d) => d.id)));
