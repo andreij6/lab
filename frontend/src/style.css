@@ -695,21 +695,7 @@ body .wsbar, body .topbar { padding-right: 50px; } /* keep the corner clear for 
 .town canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; outline: none; }
 .town canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
 .town-wait { padding: 24px; }
-.town-hud { position: absolute; top: 12px; left: 12px; right: 12px; display: flex; flex-wrap: wrap; gap: 8px; pointer-events: none; }
-.town-card { display: flex; align-items: center; gap: 10px; padding: 8px 14px 8px 12px; pointer-events: auto; }
-/* too many cards for one row: the first and a "See more" (open: all of them) */
-.town-more { display: none; font: 600 .82rem var(--sans); color: var(--accent-2); cursor: pointer; }
-.town-hud.collapsed .town-more { display: flex; }
-.town-hud.collapsed:not(.open) .town-card:not(:first-child):not(.town-more) { display: none; }
-.town-card .ico { width: 18px; height: 18px; color: var(--fg-2); }
-.town-card span { display: flex; flex-direction: column; line-height: 1.15; }
-.town-card b { font: 650 1.05rem/1.2 var(--mono); color: var(--fg); }
-.town-card small { font: .74rem/1.3 var(--mono); color: var(--fg-2); }
-.town-tools { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); display: flex; gap: 4px; padding: 5px; align-items: center; }
-.town-tools .icon-btn { font: 600 1rem var(--mono); width: 32px; height: 32px; }
-.town-tools .btn { white-space: nowrap; }
-.town-tools .btn.on { background: var(--accent-dim); color: var(--accent-2); }
-.town-legend { position: absolute; bottom: 68px; left: 50%; transform: translateX(-50%); width: min(560px, calc(100% - 24px)); max-height: calc(100% - 140px); overflow: auto; padding: 14px 16px; display: grid; gap: 7px; font-size: .86rem; }
+.town-hud.collapsed .town-legend { position: absolute; bottom: 86px; left: 50%; transform: translateX(-50%); width: min(560px, calc(100% - 24px)); max-height: calc(100% - 140px); overflow: auto; padding: 14px 16px; display: grid; gap: 7px; font-size: .86rem; }
 .town-legend span { display: flex; gap: 10px; align-items: baseline; }
 .lg { flex: none; width: 10px; height: 10px; border-radius: 3px; border: 1px solid var(--fg-2); transform: translateY(1px); }
 .lg-house { background: #f2b8c6; } .lg-lit { background: #ffd98a; } .lg-person { background: #5b6b8c; border-radius: 50%; } .lg-build { background: #e0a92e; } .lg-water { background: #8cc3e3; } .lg-civic { background: var(--bg); }
@@ -723,9 +709,7 @@ body .wsbar, body .topbar { padding-right: 50px; } /* keep the corner clear for 
 .town-stat b { color: var(--fg); font-size: .95rem; } .town-stat .kicker { font-family: var(--sans); }
 .town-go { position: absolute; right: 12px; bottom: 12px; text-decoration: none; color: var(--fg); }
 @media (max-width: 760px) {
-  .town-hud { top: 8px; left: 8px; right: 8px; gap: 6px; } .town-card { padding: 6px 10px; } .town-card .ico { display: none; } .town-card b { font-size: .92rem; }
-  .town-tools { bottom: 10px; } .town-tools .btn:not(.icon-btn) { padding: 6px 8px; } .town-tools .lbl { display: none; } .town-legend { bottom: 62px; font-size: .8rem; }
-  .town-preview { height: 230px; margin-top: 20px; } .town-stat { gap: 10px; font-size: .74rem; padding: 6px 10px; } .town-stat .kicker { display: none; } .town-go { top: 10px; bottom: auto; right: 10px; }
+      .town-preview { height: 230px; margin-top: 20px; } .town-stat { gap: 10px; font-size: .74rem; padding: 6px 10px; } .town-stat .kicker { display: none; } .town-go { top: 10px; bottom: auto; right: 10px; }
 }
 /* chat with your notes: the community's composer, and the notes' sky behind it while nothing is asked */
 .chat { position: relative; isolation: isolate; }
@@ -751,3 +735,15 @@ body .wsbar, body .topbar { padding-right: 50px; } /* keep the corner clear for 
 .card.copilot { margin-bottom: 18px; }
 /* the landing page: the community's sky behind the whole page */
 .landing-sky { position: fixed; inset: 0; width: 100%; height: 100%; z-index: -1; pointer-events: none; }
+/* the dock: the town's numbers and its controls in one bar along the bottom */
+.town-dock { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); width: min(1100px, calc(100% - 24px)); display: flex; align-items: center; gap: 10px; padding: 6px 8px; }
+.dock-stats { flex: 1; min-width: 0; display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; -webkit-mask-image: linear-gradient(90deg, #000 94%, transparent); mask-image: linear-gradient(90deg, #000 94%, transparent); }
+.dock-stats::-webkit-scrollbar { display: none; }
+.chip { display: inline-flex; align-items: center; gap: 8px; padding: 4px 12px 4px 8px; border-right: 1px solid var(--line); white-space: nowrap; }
+.chip:last-child { border-right: 0; } .chip .ico { width: 16px; height: 16px; color: var(--fg-3); flex: none; }
+.chip span { display: flex; flex-direction: column; line-height: 1.15; } .chip b { font: 650 .98rem/1.15 var(--mono); color: var(--fg); } .chip small { font: .68rem/1.3 var(--mono); color: var(--fg-2); }
+.dock-tools { display: flex; gap: 2px; align-items: center; flex: none; padding-left: 8px; border-left: 1px solid var(--line); }
+.dock-tools .icon-btn { font: 600 1rem var(--mono); width: 30px; height: 30px; } .dock-tools .btn { white-space: nowrap; } .dock-tools .btn.on { background: var(--accent-dim); color: var(--accent-2); }
+/* the tour's card, above the dock */
+.town-tour { position: absolute; left: 50%; bottom: 84px; transform: translateX(-50%); width: min(520px, calc(100% - 24px)); padding: 14px 16px 12px; display: grid; gap: 8px; }
+.town-tour p { margin: 0; font-size: .9rem; line-height: 1.5; } .town-tour .row .grow { flex: 1; }

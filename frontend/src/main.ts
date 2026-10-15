@@ -53,7 +53,7 @@ import { THEMES, applyTheme, loadThemeState, saveThemeState, type ThemeState } f
 import { zip } from "./zip";
 import { addLink, addTag, suggest, type Suggestion } from "./garden";
 import type { Usage as NbUsage } from "./bindings/notebook";
-import { DISTRICTS, attachTown, season, townCamera, type Target as TownTarget, type TownData } from "./town";
+import { DISTRICTS, attachTown, season, townCamera, townFly, townSpotlight, type Target as TownTarget, type TownData } from "./town";
 
 // ---------- the cycles minting canister: today's ICP price in cycles ----------
 
@@ -273,7 +273,7 @@ const S = {
   /** this notebook's counts for the quests card */
   usage: undefined as NbUsage | undefined,
 
-  town: undefined as { data?: TownData; legend: boolean; hudOpen?: boolean } | undefined,
+  town: undefined as { data?: TownData; legend: boolean; tour?: number } | undefined,
   /** buildings that went up in the town since it was last looked at: a dot on its icon */
   townNews: 0,
   /** the landing page's town: null when it is switched off or did not load */
@@ -3086,14 +3086,15 @@ async function loadTown() {
     t.data = d;
     // the canvas keeps focus and its tooltip when only the numbers moved: hand it the new data
     if (same) return;
-    const hud = document.querySelector<HTMLElement>(".town-hud");
+    const hud = document.querySelector<HTMLElement>(".dock-stats");
     if (!hud) return render();
     hud.innerHTML = townHud(d);
-    fitHud();
     townSync();
   };
   await pull();
   if (S.town !== t) return;
+  // the first look at the town: a tour
+  if (t.data && !store("nb-town-toured") && !matchMedia("(prefers-reduced-motion: reduce)").matches) void tourStep(0);
   clearInterval(townTimer);
   // a minute is plenty: the houses are counted every few hours, the squares live
   townTimer = window.setInterval(() => { if (!document.hidden && S.town === t) void pull(); }, 60_000);
@@ -3139,59 +3140,75 @@ function townPreview(): string {
     <a class="btn town-go glass" href="#/town" data-action="nav">See the town ${icon("chevron", "flip")}</a>
   </div>`;
 }
-/** The town's numbers across the top: the clock and season, homes, who is online, what is said. */
+/** The town's numbers, as chips in the dock at the bottom: the clock and season, homes, who is online, what is
+ *  said, the board, the cycles, homes going up. */
 function townHud(d: TownData): string {
   const n = townCounts(d), sea = season(new Date()), off = new Set(d.off);
   const now = new Date(), clock = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }), date = now.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
-  const card = (ic: string, big: string | number, small: string, title = "") => `<div class="town-card glass" ${title ? `title="${esc(title)}"` : ""}>${icon(ic)}<span><b>${big}</b><small>${small}</small></span></div>`;
+  const chip = (ic: string, big: string | number, small: string, title = "") => `<span class="chip" ${title ? `title="${esc(title)}"` : ""}>${icon(ic)}<span><b>${big}</b><small>${small}</small></span></span>`;
   return [
-    card("town", d.homes, `home${d.homes === 1 ? "" : "s"}${d.homes > d.houses.length ? ` · ${d.houses.length} shown` : ""} · ${n.today} lit today`, `People with a notebook edited in the last 30 days. ${d.quiet} quiet plot${d.quiet === 1 ? "" : "s"}.${d.homes > d.houses.length ? ` The town draws at most ${d.maxShown} homes, a mix of every kind, and always yours.` : ""}`),
-    card("calendar", clock, `${date} · ${sea.name} · ${sea.next} in ${sea.days} day${sea.days === 1 ? "" : "s"}`),
-    card("users", n.online, "online now", "People in the community chat this minute"),
-    card("chat", n.talk, "messages today", "Messages in the community in the last 24 hours"),
-    ...(off.has("board") ? [] : [card("pin", d.postsLive, `post${d.postsLive === 1 ? "" : "s"} on the board`)]),
-    card("bolt", cyclesText(d.cycles), `held · ${cyclesText(d.burnPerDay)} a day${n.days !== undefined ? ` · ${n.days} days` : ""}`, "Cycles every notebook holds between them, and what they burn a day: the water tower"),
-    ...(d.building.length ? [card("plus", d.building.length, `home${d.building.length === 1 ? "" : "s"} going up`, "Notebooks made in the last three days")] : []),
-    // shown only when the cards don't fit on one row (fitHud)
-    `<button type="button" class="town-card town-more glass" data-action="town-hud" aria-expanded="${!!S.town?.hudOpen}">${S.town?.hudOpen ? "See less" : "See more"}</button>`,
+    chip("calendar", clock, `${date} · ${sea.name}, ${sea.next} in ${sea.days}d`),
+    chip("town", d.homes, `home${d.homes === 1 ? "" : "s"}${d.homes > d.houses.length ? ` · ${d.houses.length} shown` : ""} · ${n.today} lit today`, `People with a notebook edited in the last 30 days. ${d.quiet} quiet plot${d.quiet === 1 ? "" : "s"}.${d.homes > d.houses.length ? ` The town draws at most ${d.maxShown} homes, a mix of every kind, and always yours.` : ""}`),
+    chip("users", n.online, "online", "People in the community chat this minute"),
+    chip("chat", n.talk, "messages today", "Messages in the community in the last 24 hours"),
+    ...(off.has("board") ? [] : [chip("pin", d.postsLive, `post${d.postsLive === 1 ? "" : "s"}`, "Live posts on the board")]),
+    chip("bolt", cyclesText(d.cycles), `held · ${cyclesText(d.burnPerDay)}/day${n.days !== undefined ? ` · ${n.days}d` : ""}`, "Cycles every notebook holds between them, what they burn a day, and how long that lasts: the water tower"),
+    ...(d.building.length ? [chip("plus", d.building.length, `going up`, "Notebooks made in the last three days")] : []),
   ].join("");
 }
-/** The HUD on one row: when its cards would wrap, show just the first and a "See more". */
-function fitHud() {
-  const hud = document.querySelector<HTMLElement>(".town-hud");
-  if (!hud) return;
-  hud.classList.remove("collapsed");
-  const cards = [...hud.querySelectorAll<HTMLElement>(".town-card:not(.town-more)")];
-  if (cards.length > 1 && cards[cards.length - 1].offsetTop > cards[0].offsetTop) hud.classList.add("collapsed");
+/** The tour: the camera flies to the places that matter and a card says why. A step whose building
+ *  is switched off is skipped. */
+const TOUR: { kind: TownTarget["kind"] | "model"; id?: string; zoom: number; title: string; text: (d: TownData) => string }[] = [
+  { kind: "hall", zoom: 1.5, title: "Welcome to the town", text: (d) => `This is Lab drawn as a town. Everything you see is real: ${d.people} ${d.people === 1 ? "person owns" : "people own"} a notebook here, and the town hall keeps the count. Nobody can see inside anyone's notes; the town only shows that writing happens.` },
+  { kind: "model", zoom: 2.2, title: "A home: what a notebook becomes", text: () => "Start a notebook and a home like this goes up on your lot. Each storey is a notebook, a bigger house holds more notes, the windows light up at night when you wrote this week, the chimney smokes when you wrote today. The flower bed, ivy, flag, statue and lantern are quests: write, link your notes, keep a streak. Nothing on a home is for sale." },
+  { kind: "fountain", zoom: 1.8, title: "The Square: the community", text: (d) => `A stall for each chat channel, in its colours. The people walking about are online right now (${townCounts(d).online} at the moment); ${townCounts(d).talk} message${townCounts(d).talk === 1 ? "" : "s"} today. The fountain runs on a day someone makes it rain ICP on the chatters.` },
+  { kind: "board", zoom: 1.8, title: "The board", text: (d) => `Posts and discussion, a paper pinned up for each live post (${d.postsLive} now). Writing anywhere in the community is paid in cycles by your notebook, never in ICP.` },
+  { kind: "tower", zoom: 2, title: "The water tower: cycles", text: (d) => `Every notebook pays its own way in cycles. Between them the notebooks hold ${cyclesText(d.cycles)} and burn ${cyclesText(d.burnPerDay)} a day: the tower's level is how long that lasts, the drip is the burn. Top yours up in Manage.` },
+  { kind: "factory", zoom: 1.8, title: "The notebook works", text: (d) => `Where the registry makes every notebook (${d.notebooks} so far, ${d.spawned7d} this week). Its stacks smoke on a day one was made, and each new one is a crate in the yard, going out by train.` },
+  { kind: "landmark", id: "nns", zoom: 1.7, title: "The ICP quarter", text: () => "Lab runs on the Internet Computer, and the town has room for it: the NNS, the network's government; the news station; the people who built it; the wallet and the exchange in the financial district; embassies for countries and programmes building on it. Click any of them to visit." },
+  { kind: "station", zoom: 1.8, title: "The station", text: (d) => `Visitors wait here: people who signed in but have no notebook yet (${d.campers} now). Make a notebook and your home goes up in town. Everyone online walks in from here.` },
+  { kind: "landmark", id: "soon", zoom: 1.6, title: "The spaceport", text: () => "Out on the coast, well away from the homes: a launchpad for what is next on the Internet Computer. A rocket goes up every couple of minutes. That is the tour: drag to look around, scroll to zoom, hover anything for what it is." },
+];
+async function tourStep(to: number) {
+  const t = S.town;
+  if (!t?.data) return;
+  if (to < 0 || to >= TOUR.length) { t.tour = undefined; townSpotlight(true); store("nb-town-toured", "1"); render(); townCamera("home"); return; }
+  t.tour = to;
+  render();
+  const step = TOUR[to];
+  if (!townFly(step.kind, step.id, step.zoom)) return tourStep(to + 1);
 }
-addEventListener("resize", () => fitHud());
 function townPage(): string {
   const t = S.town!, d = t.data;
   if (!d) return pageShell("<b>Town</b>", `<div class="town"><p class="muted town-wait">Walking into town…</p></div>`, true);
-  const n = townCounts(d), off = new Set(d.off), hud = townHud(d);
+  const n = townCounts(d), off = new Set(d.off);
   const legend = t.legend ? `<div class="town-legend glass" role="note"><b>Reading the town</b>
     <span><i class="lg lg-house"></i>A home: someone with a notebook edited in the last 30 days. Bigger homes hold more notes; each storey is a notebook.</span>
     <span><i class="lg lg-house"></i>The town draws at most ${d.maxShown} homes${d.homes > d.houses.length ? ` (${d.houses.length} of ${d.homes} now)` : ""}: when there are more, a mix of every kind, spread across town. Yours is always one of them.</span>
     <span><i class="lg lg-lit"></i>Lit windows (at night, in the dark theme): edited this week. Chimney smoke: edited today.</span>
     <span><i class="lg lg-person"></i>A person: someone in the community chat right now, at their channel's stall in the Square.</span>
-    <span><i class="lg lg-build"></i>Scaffolding and a crane: a notebook made in the last three days. A red lamp by the door: a notebook with under 30 days of cycles left.</span>
     <span><i class="lg lg-person"></i>The station: visitors on the platform signed in this month but have no notebook yet; the train comes and goes.</span>
     <span><i class="lg lg-house"></i>Flower beds, ivy, flags, statues and lanterns on homes are quests done by writing (Manage › Notebook › Quests); nothing on a home is for sale. The Sponsors' buildings are projects that pay to keep Lab running.</span>
+    <span><i class="lg lg-build"></i>Scaffolding and a crane: a notebook made in the last three days. A red lamp by the door: a notebook with under 30 days of cycles left.</span>
     <span><i class="lg lg-water"></i>The water tower: the cycles every notebook holds, its level how many days they last at today's burn; the drip is the burn.</span>
     <span><i class="lg lg-civic"></i>The notebook works makes every notebook (smoke when it has today); the school's yard holds this week's newcomers; the chapel's bell rings while a fundraiser is open. Then the town hall, the Square, the board's pavilion${off.has("market") ? "" : ", the market hall"}, the park and the trailhead.</span>
     <span class="small muted">Every lit window is someone writing in their own notebook. Nobody can see inside.</span></div>` : "";
-  const tools = `<div class="town-tools glass" role="toolbar" aria-label="Town view">
+  const step = t.tour !== undefined ? TOUR[t.tour] : undefined;
+  const tour = step ? `<div class="town-tour glass" role="dialog" aria-label="Tour of the town"><div class="row tight"><b>${esc(step.title)}</b><span class="small muted">${t.tour! + 1} of ${TOUR.length}</span></div><p>${esc(step.text(d))}</p>
+    <div class="row tight"><button type="button" class="btn btn-ghost" data-action="town-tour-end">Skip</button><span class="grow"></span><button type="button" class="btn" data-action="town-tour-back" ${t.tour === 0 ? "disabled" : ""}>Back</button><button type="button" class="btn btn-primary" data-action="town-tour-next">${t.tour === TOUR.length - 1 ? "Done" : "Next"}</button></div></div>` : "";
+  const dock = `<div class="town-dock glass"><div class="dock-stats">${townHud(d)}</div><div class="dock-tools" role="toolbar" aria-label="Town view">
     <button type="button" class="btn btn-ghost icon-btn" data-action="town-out" title="Zoom out (−)" aria-label="Zoom out">−</button>
     <button type="button" class="btn btn-ghost icon-btn" data-action="town-in" title="Zoom in (+)" aria-label="Zoom in">+</button>
     <button type="button" class="btn btn-ghost icon-btn" data-action="town-home" title="Whole town (0)" aria-label="Whole town">${icon("fit")}</button>
-    ${d.mine !== undefined ? `<button type="button" class="btn btn-ghost" data-action="town-mine" title="My home" aria-label="My home">${icon("house")}<span class="lbl">My home</span></button>` : ""}
-    ${!off.has("sponsors") && S.identity ? `<button type="button" class="btn btn-ghost" data-action="town-sponsor" title="Pay for a building in the Sponsors district" aria-label="Sponsor a building">${icon("coin")}<span class="lbl">Sponsor</span></button>` : ""}
+    ${d.mine !== undefined ? `<button type="button" class="btn btn-ghost icon-btn" data-action="town-mine" title="My home" aria-label="My home">${icon("house")}</button>` : ""}
+    <button type="button" class="btn btn-ghost ${step ? "on" : ""}" data-action="town-tour" title="A tour of the town" aria-label="Tour">${icon("compass")}<span class="lbl">Tour</span></button>
     <button type="button" class="btn btn-ghost ${t.legend ? "on" : ""}" data-action="town-legend" aria-pressed="${t.legend}" title="Legend" aria-label="Legend">${icon("help")}<span class="lbl">Legend</span></button>
-    <button type="button" class="btn btn-ghost icon-btn" data-action="theme-menu" title="Day or night: the appearance" aria-label="Appearance">${icon(S.theme.mode === "dark" ? "moon" : "sun")}</button></div>`;
+    ${!off.has("sponsors") && S.identity ? `<button type="button" class="btn btn-ghost icon-btn" data-action="town-sponsor" title="Pay for a building in the Sponsors district" aria-label="Sponsor a building">${icon("coin")}</button>` : ""}
+    <button type="button" class="btn btn-ghost icon-btn" data-action="theme-menu" title="Day or night: the appearance" aria-label="Appearance">${icon(S.theme.mode === "dark" ? "moon" : "sun")}</button></div></div>`;
   const label = `Lab as a town: ${d.homes} homes, ${n.today} lit today, ${n.online} people online, ${n.talk} messages today.`;
   return pageShell("<b>Town</b>", `<div class="town">
     <canvas data-town="full" tabindex="0" role="img" aria-label="${esc(label)}"></canvas><div class="town-tip" hidden></div>
-    <div class="town-hud ${t.hudOpen ? "open" : ""}">${hud}</div>${legend}${tools}
+    ${legend}${tour}${dock}
     ${d.at ? "" : `<div class="town-wake glass small">The town is waking up: counting homes…</div>`}
   </div>`, true);
 }
@@ -3206,6 +3223,7 @@ function townTip(tg: TownTarget): string {
       const h = tg.house, nbs = `${h.storeys >= 3 ? "3 or more notebooks" : `${h.storeys} notebook${h.storeys === 1 ? "" : "s"}`} · ${NOTES_BUCKET[h.size]}`;
       const earned = QUEST_ROWS(0, 0, 0).filter((_, i) => (h.badges ?? 0) & (1 << i)).map((q) => q[0]);
       if (tg.mine) return `<b>${tg.building ? "Your home, going up" : "Your home"}</b>${(S.notebooks ?? []).slice(0, 4).map((n) => line(`${esc(n.emoji ?? "📓")} ${esc(n.name)}`)).join("")}${earned.length ? line(`Quests done: ${earned.join(", ")}`) : line("No quests done yet: write, link, keep a streak")}${line(`${NOTES_BUCKET[h.size]} · ${LIT_TEXT[h.lit]}`)}${h.low ? line("A notebook has under 30 days of cycles left: top it up in Manage") : ""}${go("Click to open your notebooks")}`;
+      if (tg.model) return `<b>The model home</b>${line("What a notebook becomes here: two storeys for two notebooks, lit windows for writing this week, smoke for today, and every quest done.")}${go("Take the tour for the rest")}`;
       if (tg.building) return `<b>A home going up</b>${line(h.storeys > 1 ? "Another notebook: a new storey" : "A notebook made in the last three days")}`;
       return `<b>A home</b>${line(nbs)}${line(LIT_TEXT[h.lit])}${h.low ? line("Running low on cycles") : ""}`;
     }
@@ -3233,7 +3251,7 @@ function townOpen(tg: TownTarget) {
   if (!S.town) { location.hash = "#/town"; return; }
   const signin = () => toast("Sign in to join in.", "info");
   switch (tg.kind) {
-    case "house": if (tg.mine) { const nbs = S.notebooks ?? []; location.hash = nbs.length === 1 ? `#/notebook/${nbs[0].canister.toText()}` : "#/"; } return;
+    case "house": if (tg.model) return void tourStep(1); if (tg.mine) { const nbs = S.notebooks ?? []; location.hash = nbs.length === 1 ? `#/notebook/${nbs[0].canister.toText()}` : "#/"; } return;
     case "plot": location.hash = "#/"; return;
     case "stall": case "walker": { if (!S.identity) return signin(); store("nb-chat-channel", tg.kind === "stall" ? tg.channel.name : tg.channel); location.hash = "#/community"; return; }
     case "board": if (!S.town.data?.off.includes("board")) { if (S.identity) location.hash = "#/board"; else signin(); } return;
@@ -3280,7 +3298,6 @@ async function sponsorDialog() {
 }
 /** Put the town on its canvas after every render (the landing preview or the town page). */
 function townSync() {
-  fitHud();
   const canvas = document.querySelector<HTMLCanvasElement>("canvas[data-town]");
   if (!canvas) { if (!S.identity && !S.town && !S.shared) loadLandingTown(); return; }
   const data = canvas.dataset.town === "full" ? S.town?.data : S.landingTown;
@@ -3295,7 +3312,10 @@ function townAction(action: string) {
   else if (action === "town-home") townCamera("home");
   else if (action === "town-mine") townCamera("mine");
   else if (action === "town-legend") { t.legend = !t.legend; render(); }
-  else if (action === "town-hud") { t.hudOpen = !t.hudOpen; render(); }
+  else if (action === "town-tour") { if (t.tour !== undefined) void tourStep(-1); else void tourStep(0); }
+  else if (action === "town-tour-next") void tourStep((t.tour ?? -1) + 1);
+  else if (action === "town-tour-back") void tourStep((t.tour ?? 1) - 1);
+  else if (action === "town-tour-end") void tourStep(-1);
   else if (action === "town-sponsor") void sponsorDialog();
 }
 /** Admin: the numbers. */

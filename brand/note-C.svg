@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="linear-gradient-1" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4338ca"/>
+      <stop offset="1" stop-color="#0ea5e9"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-2" x1="256" y1="267" x2="256" y2="245" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.7"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.7"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-3" x1="300" y1="104" x2="300" y2="88" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.7"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.7"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-4" x1="104" y1="307" x2="104" y2="293" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.7"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.7"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-5" x1="410" y1="309" x2="410" y2="291" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.7"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.7"/>
+    </linearGradient>
+  </defs>
+  <title>Note C</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M112 0 L400 0 C461.856 0 512 50.144 512 112 L512 400 C512 461.856 461.856 512 400 512 L112 512 C50.144 512 0 461.856 0 400 L0 112 C0 50.144 50.144 0 112 0 Z" fill="url(#linear-gradient-1)"/>
+    <path d="M150 380 L150 132" fill="none" stroke="#ffffff" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M150 132 L362 380" fill="none" stroke="#ffffff" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M362 380 L362 132" fill="none" stroke="#ffffff" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M132 380 C132 370.059 140.059 362 150 362 C159.941 362 168 370.059 168 380 C168 389.941 159.941 398 150 398 C140.059 398 132 389.941 132 380 Z" fill="#ffffff"/>
+    <path d="M128 132 C128 119.85 137.85 110 150 110 C162.15 110 172 119.85 172 132 C172 144.15 162.15 154 150 154 C137.85 154 128 144.15 128 132 Z" fill="#ffffff"/>
+    <path d="M344 380 C344 370.059 352.059 362 362 362 C371.941 362 380 370.059 380 380 C380 389.941 371.941 398 362 398 C352.059 398 344 389.941 344 380 Z" fill="#ffffff"/>
+    <path d="M340 132 C340 119.85 349.85 110 362 110 C374.15 110 384 119.85 384 132 C384 144.15 374.15 154 362 154 C349.85 154 340 144.15 340 132 Z" fill="#ffffff"/>
+    <path d="M245 256 C245 249.925 249.925 245 256 245 C262.075 245 267 249.925 267 256 C267 262.075 262.075 267 256 267 C249.925 267 245 262.075 245 256 Z" fill="url(#linear-gradient-2)"/>
+    <path d="M292 96 C292 91.582 295.582 88 300 88 C304.418 88 308 91.582 308 96 C308 100.418 304.418 104 300 104 C295.582 104 292 100.418 292 96 Z" fill="url(#linear-gradient-3)"/>
+    <path d="M97 300 C97 296.134 100.134 293 104 293 C107.866 293 111 296.134 111 300 C111 303.866 107.866 307 104 307 C100.134 307 97 303.866 97 300 Z" fill="url(#linear-gradient-4)"/>
+    <path d="M401 300 C401 295.029 405.029 291 410 291 C414.971 291 419 295.029 419 300 C419 304.971 414.971 309 410 309 C405.029 309 401 304.971 401 300 Z" fill="url(#linear-gradient-5)"/>
+    <path d="M420 84 L428.32 101.68 L446 110 L428.32 118.32 L420 136 L411.68 118.32 L394 110 L411.68 101.68 Z" fill="#fde68a"/>
+  </g>
+</svg>

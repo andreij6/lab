@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="linear-gradient-1" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4338ca"/>
+      <stop offset="1" stop-color="#0ea5e9"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-2" x1="280" y1="368" x2="280" y2="96" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.35"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-3" x1="256" y1="400" x2="256" y2="128" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.6"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.6"/>
+    </linearGradient>
+  </defs>
+  <title>Note E</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M112 0 L400 0 C461.856 0 512 50.144 512 112 L512 400 C512 461.856 461.856 512 400 512 L112 512 C50.144 512 0 461.856 0 400 L0 112 C0 50.144 50.144 0 112 0 Z" fill="url(#linear-gradient-1)"/>
+    <path d="M200 96 L360 96 C373.255 96 384 106.745 384 120 L384 344 C384 357.255 373.255 368 360 368 L200 368 C186.745 368 176 357.255 176 344 L176 120 C176 106.745 186.745 96 200 96 Z" fill="url(#linear-gradient-2)"/>
+    <path d="M176 128 L336 128 C349.255 128 360 138.745 360 152 L360 376 C360 389.255 349.255 400 336 400 L176 400 C162.745 400 152 389.255 152 376 L152 152 C152 138.745 162.745 128 176 128 Z" fill="url(#linear-gradient-3)"/>
+    <path d="M152 160 L312 160 C325.255 160 336 170.745 336 184 L336 408 C336 421.255 325.255 432 312 432 L152 432 C138.745 432 128 421.255 128 408 L128 184 C128 170.745 138.745 160 152 160 Z" fill="#ffffff"/>
+    <path d="M168 220 L272 220 C276.418 220 280 223.582 280 228 L280 228 C280 232.418 276.418 236 272 236 L168 236 C163.582 236 160 232.418 160 228 L160 228 C160 223.582 163.582 220 168 220 Z" fill="#4338ca"/>
+    <path d="M168 268 L302 268 C306.418 268 310 271.582 310 276 L310 276 C310 280.418 306.418 284 302 284 L168 284 C163.582 284 160 280.418 160 276 L160 276 C160 271.582 163.582 268 168 268 Z" fill="#4338ca"/>
+    <path d="M168 316 L242 316 C246.418 316 250 319.582 250 324 L250 324 C250 328.418 246.418 332 242 332 L168 332 C163.582 332 160 328.418 160 324 L160 324 C160 319.582 163.582 316 168 316 Z" fill="#4338ca"/>
+    <path d="M410 82 L419.6 102.4 L440 112 L419.6 121.6 L410 142 L400.4 121.6 L380 112 L400.4 102.4 Z" fill="#fde68a"/>
+  </g>
+</svg>

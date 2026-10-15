@@ -21,12 +21,12 @@ export type TownData = {
   sponsors: TownSponsor[]; myQuests?: [number, number, number];
 };
 export type Target =
-  | { kind: "house"; house: TownHouse; mine: boolean; building: boolean } | { kind: "plot" } | { kind: "hall" } | { kind: "stall"; channel: TownChan }
+  | { kind: "house"; house: TownHouse; mine: boolean; building: boolean; model?: boolean } | { kind: "plot" } | { kind: "hall" } | { kind: "stall"; channel: TownChan }
   | { kind: "fountain" } | { kind: "board" } | { kind: "market" } | { kind: "factory" } | { kind: "school" } | { kind: "chapel" } | { kind: "tower" }
   | { kind: "park" } | { kind: "trail" } | { kind: "lake" } | { kind: "walker"; channel: string; me: boolean }
   | { kind: "landmark"; landmark: Landmark } | { kind: "district"; district: District } | { kind: "station" } | { kind: "visitor"; mine: boolean };
 type Kind = "swiss" | "fence" | "station" | "canopy" | "buffer" | "trestle" | "news" | "datacentre" | "credentials" | "bank" | "exchange" | "capitol" | "statue" | "launchpad" | "office" | "sign" | "house" | "plot" | "garden" | "tree" | "pine" | "poplar" | "bush" | "rock" | "hall" | "stall" | "fountain" | "gazebo" | "market" | "crate" | "factory" | "school" | "chapel" | "tower" | "bench" | "lantern" | "bridge" | "reeds";
-export type Obj = { k: Kind; x: number; y: number; w: number; d: number; s: number; tg?: Target; h?: TownHouse; face?: "x" | "y" | ""; ch?: TownChan; mine?: boolean; building?: boolean };
+export type Obj = { k: Kind; x: number; y: number; w: number; d: number; s: number; tg?: Target; h?: TownHouse; face?: "x" | "y" | ""; ch?: TownChan; mine?: boolean; building?: boolean; model?: boolean };
 /** Ground cells: nothing (beyond the shore), land, water, road, a bridge over water, railway. */
 // ---------------------------------------------------------------- districts and landmarks
 
@@ -291,11 +291,13 @@ export function layoutTown(t: TownData): Plan {
   paving.push([works[0] - 0.3, works[1] - 0.3, 6.6, 3.9]);
   put({ k: "factory", x: works[0], y: works[1], w: 4.4, d: 2.8, s: 0, tg: { kind: "factory" } });
   for (let i = 0; i < Math.min(10, t.spawned7d); i++) put({ k: "crate", x: works[0] + 4.7 + (i % 2) * 0.7, y: works[1] + 0.2 + Math.floor(i / 2) * 0.62, w: 0.5, d: 0.5, s: i + 20 });
-  // where the works stood, behind the town hall: the town green, a pond under trees, benches
-  water.push([-5.3, -5.2, 3.2, 2.6]);
-  for (const [x, y] of [[-5.6, -1.6], [-1.6, -5.6], [-1.4, -1.4], [-3.6, -1.2], [-1.2, -3.4]]) tree(x, y, `gr${x}${y}`, "tree");
+  // where the works stood, behind the town hall: the town green, with the model home on it (what a
+  // notebook becomes here, every trimming on), trees and a bench
+  const model: TownHouse = { lot: -1, storeys: 2, size: 2, lit: 2, badges: 31 };
+  put({ k: "house", x: -5.0, y: -4.9, w: 1.5, d: 1.45, s: hashOf("model home"), h: model, face: "y", model: true, tg: { kind: "house", house: model, mine: false, building: false, model: true } });
+  put({ k: "garden", x: -2.6, y: -5.4, w: 1.2, d: 1.2, s: 3 });
+  for (const [x, y] of [[-5.6, -1.6], [-1.6, -5.6], [-1.4, -1.4], [-3.6, -1.2], [-1.2, -3.4], [-5.5, -2.6]]) tree(x, y, `gr${x}${y}`, "tree");
   put({ k: "bench", x: -4.6, y: -2.2, w: 1, d: 0.35, s: 0, tg: { kind: "park" } });
-  put({ k: "bench", x: -2.4, y: -4.4, w: 0.35, d: 1, s: 0 });
   // the school (back left), its yard full of this week's newcomers
   put({ k: "school", x: -5.6, y: 1.4, w: 3.8, d: 2.0, s: 0, tg: { kind: "school" } });
   paving.push([-6, 4, 5, 2.6]);
@@ -384,6 +386,9 @@ const S = {
   w: 0, h: 0, dpr: 1, plan: undefined as Plan | undefined, data: undefined as TownData | undefined, sig: "", o: undefined as TownOpts | undefined,
   pal: palette(false, "winter"), sea: season(new Date()), accent: hex("#6d7cff"),
   cam: { x: 0, y: 0, z: 1 }, camHome: [0, 0] as [number, number], camMode: "", fit: 1,
+  /** a flight of the camera, eased, and the thing the tour is pointing at */
+  fly: undefined as { from: { x: number; y: number; z: number }; to: { x: number; y: number; z: number }; t0: number; dur: number } | undefined,
+  spot: undefined as Target | undefined,
   walkers: [] as Walker[], hikers: [] as { u: number; speed: number; c: number }[], bubbles: [] as { i: number; at: number }[], nextBubble: new Map<string, number>(),
   hits: [] as Hit[], hover: undefined as Target | undefined,
   raf: 0, last: 0, t0: performance.now(), still: still(), ro: undefined as ResizeObserver | undefined,
@@ -531,6 +536,7 @@ function drawHouse(o: Obj, t: number) {
     ctx.fillStyle = on ? "#f0504a" : "#8a3a36"; ctx.beginPath(); ctx.arc(lx, ly, 1.7, 0, 6.283); ctx.fill(); ctx.stroke();
   }
   if (o.mine) mineMark(o, top, t);
+  if (o.model) { const [px, py] = P(x + w / 2, y + d / 2, top + 6); label("Model home", px, py, S.o!.dark ? "#c8d0e0" : "#5a6276"); }
   hit([P(x, y, 0), P(x + w, y, 0), P(x + w, y + d, 0), P(x, y + d, 0), P(x + w / 2, y + d / 2, top)], o.tg);
 }
 /** A two-stage rocket in the Falcon 9 manner, drawn upward from (0, 0): white and slender, black
@@ -1367,6 +1373,11 @@ function frame(now: number) {
   ctx = S.ctx;
   const { w, h, dpr, cam } = S, preview = S.o.mode === "preview";
   if (!S.still) stepWalkers(dt);
+  if (S.fly) {
+    const u = Math.min(1, (now - S.fly.t0) / S.fly.dur), e = u < 0.5 ? 2 * u * u : 1 - (-2 * u + 2) ** 2 / 2, { from, to } = S.fly;
+    cam.x = from.x + (to.x - from.x) * e; cam.y = from.y + (to.y - from.y) * e; cam.z = from.z + (to.z - from.z) * e;
+    if (u >= 1) S.fly = undefined;
+  }
   if (preview && !S.still) { cam.x = S.camHome[0] + Math.sin(t * 0.045) * 150; cam.y = S.camHome[1] + Math.sin(t * 0.031) * 50; }
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
@@ -1416,6 +1427,7 @@ function frame(now: number) {
   if (!S.still) bubbles(t);
   if (S.data!.lastRain && Date.now() - S.data!.lastRain < 3600e3 && !S.still) rainCloud(t);
   if (S.hover && S.o.mode === "full") outlineHover();
+  if (S.spot) spotlight(t);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   if (!S.still) weather(dt);
 }
@@ -1502,6 +1514,16 @@ function weather(dt: number) {
     ctx.fill();
   }
 }
+/** The tour's pointer: a pulsing ring round what it is talking about. */
+function spotlight(t: number) {
+  const want = S.spot!, h = S.hits.find((x) => x.tg === want || (x.tg.kind === want.kind && (x.tg as { landmark?: Landmark }).landmark?.id === (want as { landmark?: Landmark }).landmark?.id && (x.tg as { model?: boolean }).model === (want as { model?: boolean }).model));
+  if (!h) return;
+  const cx = (h.x0 + h.x1) / 2, cy = (h.y0 + h.y1) / 2, rx = (h.x1 - h.x0) / 2 + 10, ry = (h.y1 - h.y0) / 2 + 10, pulse = S.still ? 0 : (t * 0.8) % 1;
+  ctx.save(); ctx.lineWidth = line * 1.6; ctx.strokeStyle = rgba(S.accent, 0.9); ctx.setLineDash([6, 4]); ctx.lineDashOffset = -t * 12;
+  ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, 6.283); ctx.stroke();
+  ctx.setLineDash([]); ctx.strokeStyle = rgba(S.accent, 0.5 * (1 - pulse)); ctx.lineWidth = line * 2;
+  ctx.beginPath(); ctx.ellipse(cx, cy, rx + pulse * 18, ry + pulse * 18, 0, 0, 6.283); ctx.stroke(); ctx.restore();
+}
 function outlineHover() {
   const h = S.hits.find((x) => x.tg === S.hover);
   if (!h) return;
@@ -1541,8 +1563,23 @@ function home() {
   S.cam = { x: (b.l + b.r) / 2, y: (b.top + b.bot) / 2, z: S.fit };
 }
 /** The camera from the toolbar: zoom, recentre, or fly to a lot. */
+/** Fly to something in the town and point at it (the tour); `kind` is a target kind, `id` a landmark's id.
+ *  Returns false when the town has no such thing. */
+export function townFly(kind: Target["kind"] | "model", id?: string, zoom = 1.7): boolean {
+  if (!S.plan) return false;
+  const o = S.plan.objs.find((x) => x.tg && (kind === "model" ? x.model === true : x.tg.kind === kind && (!id || (x.tg as { landmark?: Landmark }).landmark?.id === id)));
+  if (!o) return false;
+  const [cx, cy] = P(o.x + o.w / 2, o.y + o.d / 2, 10);
+  S.spot = o.tg;
+  S.fly = { from: { ...S.cam }, to: { x: cx, y: cy, z: clampZ(zoom) }, t0: performance.now(), dur: S.still ? 1 : 1100 };
+  if (S.still) { S.cam = { ...S.fly.to }; S.fly = undefined; frame(performance.now()); }
+  return true;
+}
+/** The tour is over: nothing pointed at. */
+export function townSpotlight(off: true) { if (off) S.spot = undefined; }
 export function townCamera(cmd: "in" | "out" | "home" | "mine") {
   if (!S.plan) return;
+  S.fly = undefined;
   if (cmd === "in" || cmd === "out") S.cam.z = clampZ(S.cam.z * (cmd === "in" ? 1.25 : 0.8));
   else if (cmd === "home") home();
   else {

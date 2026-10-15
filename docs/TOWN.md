@@ -101,5 +101,7 @@ shows nothing new, but puts it in one call; don't market it as anonymous. Trips 
   along a square spiral from ring 2, lots of 2×2 tiles, the civic centre, fillers and woods from a hash.
 - The renderer draws the ground from cached paths, then every object back to front, ~30 fps, paused while hidden or
   scrolled away; reduced motion draws still frames.
-- `#/town` (signed in or out): HUD cards, a toolbar (zoom, whole island, my home, legend, day or night), tooltips that
+- `#/town` (signed in or out): a dock along the bottom (stat chips and the controls: zoom, whole island, my home, tour,
+  legend, sponsor, day or night), a tour (`TOUR` steps in main.ts; `townFly` eases the camera and `spotlight` rings the
+  target; the model home on the green is a fixed house with every badge), tooltips that
   link to the community, board, market or your notebooks. The landing page shows a slice of it drifting.
