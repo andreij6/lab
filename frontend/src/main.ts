@@ -28,7 +28,7 @@ import { MONEY_TEMPLATES, NET_WORTH_NOTE, SUBSCRIPTION_TEMPLATE, budgetTotals, b
 import { CALENDAR_BOARD, LANES, LIMIT, POST_TEMPLATE, calendar, logResults, placeCard, post, posts, results } from "./creator";
 import { WORKOUT_TEMPLATE, newRecords, pace, progress, records, weekly, workouts } from "./fitness";
 import { ITEM_TEMPLATE, UPKEEP_TEMPLATE, doneUpkeep, inventory, items, upkeep, warrantiesEnding } from "./home";
-import { attachSky, skyPulse } from "./chatsky";
+import { attachSky, paintBand, skyPulse } from "./sky";
 import { DEFAULT_WATCH, MAX_WATCH, THESIS_TEMPLATE, TRADE_TEMPLATE, closeTrade, isOpen, isThesis, isTrade, journalStats, pnl, reviewThesis, rMultiple, symbolOf, theses, trade, tradePath, usd, watchSymbols, type Side, type Trade } from "./crypto";
 import { cardKey, isDue, review as srsReview, type Rating, type Sched } from "./srs";
 import { align, isLeanNote, leanCode, parseLean, statementCard, unmentionedHyps } from "./lean";
@@ -583,11 +583,21 @@ function decorateTables(root: ParentNode) {
 /** The community's sky: put it back on the canvas after every render, and send a wave of light from
  *  the author of each new message (only new ones in the channel already open, at most three). */
 let skySeen = { channel: "", last: -1n, loaded: false };
+let skyGraph: { notes?: unknown; idx?: unknown; g?: ReturnType<typeof graphData> } = {};
 function skySync() {
+  const dark = S.theme.mode === "dark", accent = getComputedStyle(document.body).getPropertyValue("--accent").trim();
+  document.querySelectorAll<HTMLCanvasElement>("canvas[data-kit-band]").forEach((k) => paintBand(k, k.dataset.kitBand!, dark, accent));
+  // an open notebook with nothing open: its notes as stars, its links as lines
+  const notesSky = document.querySelector<HTMLCanvasElement>("canvas[data-notes-sky]");
+  if (notesSky && S.notebook && S.notes) {
+    if (skyGraph.notes !== S.notes || skyGraph.idx !== S.idx) skyGraph = { notes: S.notes, idx: S.idx, g: graphData(S.notes.filter((n) => !isAttachment(n.path)), S.idx, { unresolved: false }) };
+    attachSky(notesSky, { mode: "notes", key: S.notebook.canister.toText(), graph: skyGraph.g, dark, accent, onOpen: (id) => void open(id) });
+    return;
+  }
   const c = S.community;
   const canvas = document.querySelector<HTMLCanvasElement>("canvas[data-chat-sky]");
   if (!c || !canvas) return;
-  attachSky(canvas, { channel: c.channel, online: c.online.filter((o) => o.channel === c.channel).map((o) => o.principal.toText()), dark: S.theme.mode === "dark", accent: getComputedStyle(document.body).getPropertyValue("--accent").trim() });
+  attachSky(canvas, { mode: "chat", key: c.channel, online: c.online.filter((o) => o.channel === c.channel).map((o) => o.principal.toText()), dark, accent });
   const last = c.messages.length ? c.messages[c.messages.length - 1].id : -1n;
   // the messages a channel opens with are not news: only ones that arrive after it has loaded light up
   if (skySeen.channel === c.channel && skySeen.loaded && last > skySeen.last) for (const m of c.messages.filter((x) => x.id > skySeen.last).slice(-3)) skyPulse(m.author.toText());
@@ -1228,7 +1238,7 @@ function tabbar(p: Pane): string {
 function editorBody(p: Pane): string {
   const c = p.active;
   if (!c) {
-    return `<div class="empty">${icon("file", "big")}<div><h2>Nothing open</h2><p class="muted">Pick a note on the left, or make a new one.</p></div>
+    return `<div class="empty"><canvas class="notes-sky" data-notes-sky aria-hidden="true"></canvas>${icon("file", "big")}<div><h2>Nothing open</h2><p class="muted">Pick a note on the left, or make a new one.</p></div>
       <button type="button" class="btn btn-primary" data-action="new">${icon("plus")}New note</button>
       <div class="hints"><span class="kbd">${MOD}N</span><span>New note</span><span class="kbd">${MOD}K</span><span>Open or create by name</span><span class="kbd">${MOD}E</span><span>Edit / split / reading</span><span class="kbd">${MOD}\\</span><span>Split to the right</span><span class="kbd">${MOD} click</span><span>Open in a new tab</span><span class="kbd">right-click</span><span>Folders, drawings, rename, move, delete</span></div></div>`;
   }
@@ -4408,24 +4418,25 @@ function manageTab(): string {
   </div></section>`;
 }
 
+/** A kit's tab opens with a still slice of sky in its colours behind its name (it eases in when
+ *  the kit is opened, not on every re-render). */
+let bandShown = "";
+function withBand(t: Tab, html: string): string {
+  const f = FEATURES.find((x) => x.id === t);
+  if (!f) return html;
+  const enter = bandShown !== t;
+  bandShown = t;
+  return html.replace(/<div class="page[^"]*">/, (m) => `${m}<div class="kit-band${enter ? " enter" : ""}"><canvas data-kit-band="${t}" aria-hidden="true"></canvas><span class="kit-band-icon">${icon(f.icon)}</span><div><h1>${esc(f.label)}</h1><p class="small">${esc(f.desc)}</p></div></div>`);
+}
 function workspace(): string {
+  if (S.tab === "manage" || S.tab === "graph") bandShown = "";
   if (S.tab === "manage") return shell(manageTab());
   if (S.tab === "graph") return shell(graphTab());
-  if (S.tab === "study") return shell(studyTab());
-  if (S.tab === "work") return shell(workTab());
-  if (!featureOn(S.tab)) S.tab = "notes";
-  if (S.tab === "organize") return shell(organizeTab());
-  if (S.tab === "research") return shell(researchTab());
-  if (S.tab === "writing") return shell(writingTab());
-  if (S.tab === "care") return shell(careTab());
-  if (S.tab === "career") return shell(careerTab());
-  if (S.tab === "crypto") return shell(cryptoTab());
-  if (S.tab === "money") return shell(moneyTab());
-  if (S.tab === "creator") return shell(creatorTab());
-  if (S.tab === "fitness") return shell(fitnessTab());
-  if (S.tab === "home") return shell(homeTab());
-  if (S.tab === "software") return shell(softwareTab());
-  if (S.tab === "trips") return shell(tripsTab());
+  const kits: Partial<Record<Tab, () => string>> = { study: studyTab, work: workTab, organize: organizeTab, research: researchTab, writing: writingTab, care: careTab, career: careerTab, crypto: cryptoTab, money: moneyTab, creator: creatorTab, fitness: fitnessTab, home: homeTab, software: softwareTab, trips: tripsTab };
+  if (S.tab !== "study" && S.tab !== "work" && !featureOn(S.tab)) S.tab = "notes";
+  const kit = kits[S.tab];
+  if (kit) return shell(withBand(S.tab, kit()));
+  bandShown = "";
   if (S.tab === "chat") return shell(`<div class="workspace m-${S.mobilePane} ${S.sideOpen ? "" : "no-side"} ${S.asideOpen ? "" : "no-aside"}"><nav id="side" class="side" aria-label="Files">${side()}</nav>${chatHtml()}<aside id="aside" class="aside" aria-label="Sources">${chatAside()}</aside></div>`);
   return shell(`<div class="workspace m-${S.mobilePane} ${S.sideOpen ? "" : "no-side"} ${S.asideOpen ? "" : "no-aside"}"><nav id="side" class="side" aria-label="Files">${side()}</nav>${panesHtml()}<aside id="aside" class="aside" aria-label="Links">${aside()}</aside></div>`);
 }
