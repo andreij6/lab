@@ -607,6 +607,9 @@ let skySeen = { channel: "", last: -1n, loaded: false };
 let skyGraph: { notes?: unknown; idx?: unknown; g?: ReturnType<typeof graphData> } = {};
 function skySync() {
   const dark = S.theme.mode === "dark", accent = getComputedStyle(document.body).getPropertyValue("--accent").trim();
+  // the landing page: the community's sky behind everything
+  const landingSky = document.querySelector<HTMLCanvasElement>("canvas[data-landing-sky]");
+  if (landingSky) { attachSky(landingSky, { mode: "chat", key: "general", online: [], dark, accent }); return; }
   document.querySelectorAll<HTMLCanvasElement>("canvas[data-kit-band]").forEach((k) => paintBand(k, k.dataset.kitBand!, dark, accent));
   // an open notebook with nothing open: its notes as stars, its links as lines
   const notesSky = document.querySelector<HTMLCanvasElement>("canvas[data-notes-sky]");
@@ -996,20 +999,21 @@ function moreMenu(el: HTMLElement) {
 }
 /** Where a page sits in the app: back to the open notebook and to the list (desktop; phones use the ⋯ menu). */
 /** The appearance can be changed on the notebook, chat and board pages only. */
-const themeAllowed = () => !!S.community || !!S.board || !!S.town || (!!S.notebook && !S.market && !S.admin && !S.shared);
+const themeAllowed = () => !S.identity || !!S.community || !!S.board || !!S.town || (!!S.notebook && !S.market && !S.admin && !S.shared);
 const themeBtn = () => S.mobile ? moreBtn() : `${S.community ? "" : `<a class="btn btn-ghost" href="#/community" data-action="nav" title="Community chat">${icon("users")}<span class="lbl">Community</span></a>`}${S.board || !flag("board") ? "" : `<a class="btn btn-ghost" href="#/board" data-action="nav" title="Posts and discussion">${icon("pin")}<span class="lbl">Board</span></a>`}${S.market || !flag("market") ? "" : `<a class="btn btn-ghost" href="#/market" data-action="nav" title="Notebooks for sale">${icon("tag")}<span class="lbl">Market</span></a>`}${flag("town") && !S.town ? `<a class="btn btn-ghost" href="#/town" data-action="nav" title="Lab as a small town: who is writing, who is talking">${icon("town")}<span class="lbl">Town</span></a>` : ""}${S.isAdmin ? `<a class="btn btn-ghost" href="#/admin" data-action="nav" title="Reports and ideas">${icon("bug")}<span class="lbl">Admin</span></a>` : ""}<button type="button" class="btn btn-ghost icon-btn" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button>${themeAllowed() ? `<button type="button" class="btn btn-ghost icon-btn" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon(S.theme.mode === "dark" ? "moon" : "sun")}</button>` : ""}`;
 const account = () => `<footer class="account">${icon("shield")}<span>Signed in as <code class="principal" title="${S.principal}">${shortPrincipal(S.principal)}</code></span><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="copy-principal">${S.copied === "principal" ? "Copied" : "Copy principal"}</button><button type="button" class="btn btn-ghost" data-action="sign-out">Sign out</button></span></footer>`;
 
 function landing(): string {
   const msg = S.signin.busy ? `<span class="muted small">Signing in with ${devMode ? "a local development identity" : "Internet Identity"}…</span>` : S.signin.error ? `<span class="error small" role="alert">Sign-in failed: ${esc(S.signin.error)}.</span>` : `<span class="muted small">${devMode ? "Local network: a browser-held development key. Add ?ii for Internet Identity." : "Internet Identity. No email, no password, nothing to leak."}</span>`;
   return `<div class="page">
-    <header class="topbar">${brand()}<span class="right"><span class="kicker">On the Internet Computer</span>${themeBtn()}</span></header>
+    <canvas class="landing-sky" data-landing-sky aria-hidden="true"></canvas>
+    <header class="topbar">${brand()}<span class="right"><span class="kicker">On the Internet Computer</span>${S.mobile ? moreBtn() : `<button type="button" class="btn btn-ghost icon-btn" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="btn btn-ghost icon-btn" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon(S.theme.mode === "dark" ? "moon" : "sun")}</button>`}</span></header>
     <section class="hero">
       <h1>Organize your thoughts. Get feedback. Build a knowledge base.</h1>
-      <p class="lede">A notebook is a folder of markdown files: <code>[[links]]</code>, backlinks, tags, a knowledge graph. Here every notebook is its own canister on the Internet Computer. You sign in with Internet Identity, you are its controller, and you keep it running with cycles. Nobody else can read it, not even the registry that created it.</p>
+      <p class="lede">A notebook is a folder of markdown files: links between notes, backlinks, tags, a knowledge graph. Here every notebook is its own canister on the Internet Computer. You sign in with Internet Identity, you are its controller, and you keep it running with cycles. Nobody else can read it, not even the registry that created it.</p>
       <div class="features">
         <div class="feature">${icon("notebook")}<b>One canister per notebook</b><p>Spawned for you, controlled by you. Download it as a zip any time; it is yours on-chain.</p></div>
-        <div class="feature">${icon("graph")}<b>Links that think</b><p>[[Wiki links]], backlinks with context, tags, search and a force-directed graph of how your notes connect.</p></div>
+        <div class="feature">${icon("graph")}<b>Links that think</b><p>Links between notes, backlinks with context, tags, search and a force-directed graph of how your notes connect.</p></div>
         <div class="feature">${icon("bolt")}<b>Keep it running</b><p>See the cycles left, send ICP from any wallet or top up in one click. Links are rewritten when you rename.</p></div>
       </div>
       <div class="cta"><button type="button" class="btn btn-primary btn-lg" data-action="sign-in" ${S.signin.busy ? "disabled" : ""}>${S.signin.busy ? "Signing in…" : S.signin.error ? "Retry sign in" : "Sign in"} ${icon("out")}</button>${msg}</div>
@@ -3046,7 +3050,7 @@ async function homeAction(action: string, el: HTMLElement) {
  *  desktop) and the top bar, the same frame as a notebook. */
 function pageShell(crumb: string, body: string, bare = false): string {
   const right = S.mobile ? moreBtn() : S.identity ? "" : `<button type="button" class="btn btn-primary" data-action="sign-in">Sign in</button>`;
-  return `<div class="shell ${S.mobile ? "is-mobile" : ""}">${S.identity ? ribbonHtml() : ""}<div class="shell-main"><header class="wsbar">${brand()}<span class="crumb">${crumb}</span><span class="right">${right}</span></header>${bare ? `<section class="main">${body}</section>` : `<section class="main" style="overflow:auto"><div class="page wide">${body}</div></section>`}</div></div>`;
+  return `<div class="shell ${S.mobile ? "is-mobile" : ""} ${S.identity ? "" : "single"}">${S.identity ? ribbonHtml() : ""}<div class="shell-main"><header class="wsbar">${brand()}<span class="crumb">${crumb}</span><span class="right">${right}</span></header>${bare ? `<section class="main">${body}</section>` : `<section class="main" style="overflow:auto"><div class="page wide">${body}</div></section>`}</div></div>`;
 }
 // --- the town: Lab's activity as a small isometric town (registry town.rs, town.ts)
 
