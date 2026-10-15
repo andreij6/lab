@@ -749,3 +749,11 @@ body .wsbar, body .topbar { padding-right: 50px; } /* keep the corner clear for 
 .model .t-premium { background: color-mix(in srgb, #f5c542 28%, transparent); color: #b8860b; } .model .t-plus { background: color-mix(in srgb, #a78bfa 28%, transparent); color: #7c5cd6; }
 .model .t-everyday { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent-2); } .model .t-low { background: var(--bg-3); }
 .model b { font-size: .86rem; }
+/* under the chat's input: what it asks and which model, like a status line */
+.compose-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 6px 0; }
+.model-pick { padding: 3px 6px 3px 10px; gap: 6px; font-size: .82rem; }
+.model-pick .tier { font: 700 .62rem var(--mono); letter-spacing: .04em; text-transform: uppercase; padding: 1px 5px; border-radius: 4px; background: var(--bg-3); color: var(--fg-2); }
+.model-pick .t-premium { background: color-mix(in srgb, #f5c542 28%, transparent); color: #b8860b; } .model-pick .t-plus { background: color-mix(in srgb, #a78bfa 28%, transparent); color: #7c5cd6; } .model-pick .t-everyday { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent-2); }
+.model-pick .ico { width: 14px; height: 14px; }
+/* a copilot card needs air before what follows it */
+.card.copilot { margin-bottom: 18px; }

@@ -4385,7 +4385,8 @@ function chatHtml(): string {
   return `<section class="main chat ${empty ? "chat-quiet" : ""}" data-chat>
     ${empty ? `<canvas class="notes-sky" data-notes-sky aria-hidden="true"></canvas>` : ""}
     <div class="chat-log">${msgs}${S.chat.busy ? `<div class="msg notes"><div class="bubble muted thinking"><span class="spin"></span>${esc(S.chat.stage || "Reading your notes…")}</div></div>` : ""}</div>
-    <form class="composer" data-form="chat"><div class="compose-box"><textarea name="chatq" rows="1" placeholder="Ask your notes…" title="↵ to send, ⇧↵ for a new line" aria-label="Ask your notes">${esc(S.chat.input)}</textarea><button type="submit" class="btn btn-ghost icon-btn send-btn" title="Send" aria-label="Send" ${S.chat.busy ? "disabled" : ""}>${icon("send")}</button></div></form>
+    <form class="composer" data-form="chat"><div class="compose-box"><textarea name="chatq" rows="1" placeholder="Ask your notes…" title="↵ to send, ⇧↵ for a new line" aria-label="Ask your notes">${esc(S.chat.input)}</textarea><button type="submit" class="btn btn-ghost icon-btn send-btn" title="Send" aria-label="Send" ${S.chat.busy ? "disabled" : ""}>${icon("send")}</button></div>
+      <div class="compose-foot"><span class="small muted">Asks ${chatFolders().size} of ${[...new Set([...chatFolders(), ...S.chat.excluded])].length} folders · ↵ to send</span><button type="button" class="btn btn-ghost model-pick" data-action="copilot-model" title="${LLM_LOCAL ? "Locally your Ollama answers whichever you pick." : esc(chatModel().note)}">${esc(chatModel().name)}<span class="tier t-${chatModel().tier.toLowerCase()}">${chatModel().tier}</span>${chatModel().paid ? `<span class="small muted">0.1 TC</span>` : ""}${icon("down")}</button></div></form>
   </section>`;
 }
 function chatAside(): string {
