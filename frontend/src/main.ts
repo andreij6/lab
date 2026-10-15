@@ -3100,6 +3100,7 @@ function townPage(): string {
     <span><i class="lg lg-lit"></i>Lit windows (at night, in the dark theme): edited this week. Chimney smoke: edited today.</span>
     <span><i class="lg lg-person"></i>A person: someone in the community chat right now, at their channel's stall in the Square.</span>
     <span><i class="lg lg-build"></i>Scaffolding and a crane: a notebook made in the last three days. A red lamp by the door: a notebook with under 30 days of cycles left.</span>
+    <span><i class="lg lg-person"></i>The station: visitors on the platform signed in this month but have no notebook yet; the train comes and goes.</span>
     <span><i class="lg lg-water"></i>The water tower: the cycles every notebook holds, its level how many days they last at today's burn; the drip is the burn.</span>
     <span><i class="lg lg-civic"></i>The notebook works makes every notebook (smoke when it has today); the school's yard holds this week's newcomers; the chapel's bell rings while a fundraiser is open. Then the town hall, the Square, the board's pavilion${off.has("market") ? "" : ", the market hall"}, the park and the trailhead.</span>
     <span class="small muted">Every lit window is someone writing in their own notebook. Nobody can see inside.</span></div>` : "";
@@ -3140,8 +3141,8 @@ function townTip(tg: TownTarget): string {
     case "school": return `<b>The school</b>${line(d.newcomers7d ? `${d.newcomers7d} newcomer${d.newcomers7d === 1 ? "" : "s"} joined the community this week` : "No newcomers this week yet")}${go(S.identity ? "Click to say hello in #help" : "Sign in to join")}`;
     case "chapel": return d.off.includes("fundraisers") ? `<b>The chapel</b>${line("Fundraisers are switched off: the bell is still.")}` : `<b>The chapel</b>${line(d.fundraisersOpen ? `${d.fundraisersOpen} fundraiser${d.fundraisersOpen === 1 ? "" : "s"} open: the bell is ringing` : "No fundraiser open")}${line(`${icp(BigInt(d.raisedE8s))} ICP given to keep notebooks running`)}`;
     case "tower": { const n = townCounts(d); return `<b>The water tower</b>${line(`${cyclesText(d.cycles)} of cycles held by ${d.notebooks} notebook${d.notebooks === 1 ? "" : "s"}`)}${line(`${cyclesText(d.burnPerDay)} burned a day${n.days !== undefined ? `: about ${n.days} days at this rate` : ""}`)}${line("Each notebook pays its own way; top yours up in Manage")}`; }
-    case "camp": return `<b>The campground</b>${line(d.campers ? `${d.campers} ${d.campers === 1 ? "person has" : "people have"} signed in this month without a notebook yet: they camp here until they build` : "Nobody camping: everyone who signed in has a notebook")}`;
-    case "tent": return tg.mine ? `<b>Your tent</b>${line("You signed in but have no notebook yet. Make one and your home goes up in town.")}${go("Click to make a notebook")}` : `<b>A tent</b>${line("Someone who signed in and hasn't made a notebook yet")}`;
+    case "station": return `<b>The station</b>${line(d.campers ? `${d.campers} visitor${d.campers === 1 ? "" : "s"} on the platform: signed in this month, no notebook yet` : "The platform is empty: everyone who signed in has a notebook")}${line("The people online in chat walk into town from here.")}`;
+    case "visitor": return tg.mine ? `<b>You, on the platform</b>${line("You signed in but have no notebook yet. Make one and your home goes up in town.")}${go("Click to make a notebook")}` : `<b>A visitor</b>${line("Someone who signed in and hasn't made a notebook yet")}`;
     case "lake": return `<b>The lake</b>${line("The river runs from it off the edge of the island.")}`;
     case "landmark": { const l = tg.landmark; return `<b>${esc(l.title)}</b>${line(esc(l.blurb))}${go(`Click to open ${esc(new URL(l.url).host)}`)}`; }
     case "district": { const dd = tg.district; return `<b>${esc(dd.name)}</b>${line(esc(dd.blurb))}${line(`${dd.landmarks.length} landmarks, room for more`)}`; }
@@ -3160,7 +3161,7 @@ function townOpen(tg: TownTarget) {
     case "board": if (!S.town.data?.off.includes("board")) { if (S.identity) location.hash = "#/board"; else signin(); } return;
     case "market": if (S.identity) location.hash = "#/market"; else signin(); return;
     case "factory": location.hash = "#/"; return;
-    case "tent": if (tg.mine) location.hash = "#/"; return;
+    case "visitor": if (tg.mine) location.hash = "#/"; return;
     // another app: a new tab, never handing it this page
     case "landmark": window.open(tg.landmark.url, "_blank", "noopener,noreferrer"); return;
     case "school": { if (!S.identity) return signin(); store("nb-chat-channel", "help"); location.hash = "#/community"; return; }

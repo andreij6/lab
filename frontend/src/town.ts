@@ -22,16 +22,16 @@ export type Target =
   | { kind: "house"; house: TownHouse; mine: boolean; building: boolean } | { kind: "plot" } | { kind: "hall" } | { kind: "stall"; channel: TownChan }
   | { kind: "fountain" } | { kind: "board" } | { kind: "market" } | { kind: "factory" } | { kind: "school" } | { kind: "chapel" } | { kind: "tower" }
   | { kind: "park" } | { kind: "trail" } | { kind: "lake" } | { kind: "walker"; channel: string; me: boolean }
-  | { kind: "landmark"; landmark: Landmark } | { kind: "district"; district: District } | { kind: "camp" } | { kind: "tent"; mine: boolean };
-type Kind = "tent" | "campfire" | "bank" | "exchange" | "capitol" | "statue" | "launchpad" | "office" | "sign" | "house" | "plot" | "garden" | "tree" | "pine" | "poplar" | "bush" | "rock" | "hall" | "stall" | "fountain" | "gazebo" | "market" | "crate" | "factory" | "school" | "chapel" | "tower" | "bench" | "lantern" | "bridge" | "reeds";
+  | { kind: "landmark"; landmark: Landmark } | { kind: "district"; district: District } | { kind: "station" } | { kind: "visitor"; mine: boolean };
+type Kind = "station" | "canopy" | "portal" | "trestle" | "news" | "datacentre" | "credentials" | "bank" | "exchange" | "capitol" | "statue" | "launchpad" | "office" | "sign" | "house" | "plot" | "garden" | "tree" | "pine" | "poplar" | "bush" | "rock" | "hall" | "stall" | "fountain" | "gazebo" | "market" | "crate" | "factory" | "school" | "chapel" | "tower" | "bench" | "lantern" | "bridge" | "reeds";
 export type Obj = { k: Kind; x: number; y: number; w: number; d: number; s: number; tg?: Target; h?: TownHouse; face?: "x" | "y" | ""; ch?: TownChan; mine?: boolean; building?: boolean };
-/** Ground cells: nothing (beyond the shore), land, water, road, a bridge over water. */
+/** Ground cells: nothing (beyond the shore), land, water, road, a bridge over water, railway. */
 // ---------------------------------------------------------------- districts and landmarks
 
 /** A place in the town for something beyond Lab: it links out. `at` is [x, y, w, d] in tiles from
  *  the corner of its district block (a block is 6×6 tiles). `office` is the plain building for
  *  anything new: give it a `color` and it needs no drawing code of its own. */
-export type Landmark = { id: string; kind: "bank" | "exchange" | "capitol" | "statue" | "launchpad" | "office"; title: string; blurb: string; url: string; block: [number, number]; at: [number, number, number, number]; color?: string };
+export type Landmark = { id: string; kind: "bank" | "exchange" | "capitol" | "statue" | "launchpad" | "news" | "datacentre" | "credentials" | "office"; title: string; blurb: string; url: string; block: [number, number]; at: [number, number, number, number]; color?: string };
 /** A district: blocks set aside (homes are never built there) for landmarks of a kind; the room
  *  left over is for the next ones. */
 export type District = { id: string; name: string; blurb: string; blocks: [number, number][]; landmarks: Landmark[] };
@@ -46,10 +46,19 @@ export const DISTRICTS: District[] = [
   },
   {
     // behind the school, on the left
-    id: "icp", name: "The ICP quarter", blurb: "The Internet Computer's government, and the people who built it.", blocks: [[-2, -1]],
+    id: "icp", name: "The ICP quarter", blurb: "The Internet Computer's government, its news, and the people who built it.", blocks: [[-2, -1], [-2, 0]],
     landmarks: [
       { id: "nns", kind: "capitol", title: "The NNS", blurb: "The Network Nervous System: the Internet Computer's government, where ICP neurons vote on every proposal.", url: "https://nns.internetcomputer.org/", block: [-2, -1], at: [0.2, 0.2, 5.6, 2.6] },
+      { id: "dfinity-news", kind: "news", title: "DFINITY on X", blurb: "The news station: what's new on the Internet Computer, from the DFINITY Foundation's account on X.", url: "https://x.com/dfinity", block: [-2, 0], at: [0.4, 0.4, 3.2, 2.0] },
       { id: "dominic", kind: "statue", title: "Dominic Williams", blurb: "Founder and chief scientist of DFINITY, who set out to build the Internet Computer.", url: "https://x.com/dominic_w", block: [-2, -1], at: [1.5, 3, 3, 2.9] },
+    ],
+  },
+  {
+    // by the station, where visitors arrive
+    id: "embassies", name: "Embassy row", blurb: "Countries and global programmes building on the Internet Computer.", blocks: [[0, 2]],
+    landmarks: [
+      { id: "pakistan", kind: "datacentre", title: "The Pakistan Subnet", blurb: "In February 2026 the Pakistan Digital Authority and the DFINITY Foundation agreed to build a Pakistan Subnet: a sovereign cloud on the Internet Computer for national apps and AI.", url: "https://internetcomputer.org/news/media-releases/pakistan-digital-authority-dfinity-partnership-announcement/", block: [0, 2], at: [0.3, 0.4, 3.4, 2.0] },
+      { id: "undp", kind: "credentials", title: "UNDP · Universal Trusted Credentials", blurb: "UNDP and the DFINITY Foundation build Universal Trusted Credentials on the Internet Computer, so small businesses can prove who they are and get financing, starting with a pilot in Cambodia.", url: "https://www.undp.org/policy-centre/singapore/press-releases/undp-partners-dfinity-foundation-enhance-financial-inclusion-msmes", block: [0, 2], at: [0.6, 3.2, 3.0, 2.5] },
     ],
   },
   {
@@ -69,10 +78,12 @@ export function homeBlock(b: number): [number, number] {
   return homeBlocks[b];
 }
 
-export const VOID = 0, LAND = 1, WATER = 2, ROAD = 3, BRIDGE = 4;
+export const VOID = 0, LAND = 1, WATER = 2, ROAD = 3, BRIDGE = 4, RAIL = 5;
 export type Plan = {
   R: number; lo: number; hi: number; n: number; cells: Uint8Array; objs: Obj[]; water: number[][]; paving: number[][];
   stalls: Obj[]; gate: [number, number]; loop: [number, number][]; yard: [number, number, number, number]; lake: [number, number];
+  /** the railway along the front of the island: its row, where it comes out of and goes into the hills, where the train stops */
+  rail: { y: number; x0: number; x1: number; stop: number }; platform: [number, number][];
 };
 export const cellAt = (p: Plan, x: number, y: number) => (x < p.lo || y < p.lo || x > p.hi || y > p.hi ? VOID : p.cells[(y - p.lo) * p.n + (x - p.lo)]);
 
@@ -152,6 +163,15 @@ export function layoutTown(t: TownData): Plan {
     for (const k of [x > 0 ? j - 1 : -1, x < n - 1 ? j + 1 : -1, y > 0 ? j - n : -1, y < n - 1 ? j + n : -1]) if (k >= 0 && !cells[k] && !sea[k]) { sea[k] = 1; stack.push(k); }
   }
   for (let j = 0; j < n * n; j++) if (!cells[j] && !sea[j]) cells[j] = LAND;
+  // the railway runs across the front of the island, the station by the town gate
+  const TY = thi + 5;
+  for (let x = -1; x <= 16; x++) for (let y = thi + 1; y <= TY + 2; y++) if (get(x, y) === VOID) set(x, y, LAND);
+  let rx0 = 7, rx1 = 7;
+  while (get(rx0 - 1, TY) !== VOID && rx0 - 1 > lo + 1) rx0--;
+  while (get(rx1 + 1, TY) !== VOID && rx1 + 1 < hi - 1) rx1++;
+  const trestle: number[] = [];
+  for (let x = rx0; x <= rx1; x++) { if (get(x, TY) === WATER) trestle.push(x); else set(x, TY, RAIL); }
+  for (let y = thi + 1; y <= TY - 3; y++) set(7, y, ROAD);
   // the road out of town to the west, over the river on a bridge
   for (let x = tlo - 1; x >= lo; x--) { const v = get(x, 7); if (v === VOID) break; set(x, 7, v === WATER ? BRIDGE : ROAD); }
   // the streets: around every block of the town
@@ -260,33 +280,25 @@ export function layoutTown(t: TownData): Plan {
     if (!onPath && h01(`tr${x},${y}`) < 0.75) tree(x + 0.5, y + 0.5, `tr${x},${y}`, h01(`tp${x},${y}`) < 0.7 ? "pine" : "tree");
   }
   for (const [x, y] of loop) put({ k: "lantern", x: x - 0.1, y: y - 0.1, w: 0.2, d: 0.2, s: 0, tg: { kind: "trail" } });
-  // the campground between the lake and the town: a tent for each person who signed in this month
-  // but has no notebook yet (yours first), around a fire
-  const camp = new Set<string>(), dry = (x: number, y: number) => get(x, y) === LAND && !inBlock.has(`${x},${y}`);
-  // the fire: the dry ground nearest a spot on the lake's town side
-  const want = [tlo - 2.5, lake[1] + 5.5];
-  let fire: [number, number] = [tlo - 2.5, lake[1] + 5.5], best = Infinity;
-  for (let x = tlo - 9; x < tlo; x++) for (let y = lake[1] - 4; y <= lake[1] + 12; y++) { const dd = Math.hypot(x + 0.5 - want[0], y + 0.5 - want[1]); if (dry(x, y) && [[1, 0], [-1, 0], [0, 1], [0, -1]].every(([a, b]) => dry(x + a, y + b)) && dd < best) { best = dd; fire = [x + 0.5, y + 0.5]; } }
-  const spots: [number, number][] = [];
-  for (let x = Math.floor(fire[0]) - 7; x <= fire[0] + 7; x++) for (let y = Math.floor(fire[1]) - 7; y <= fire[1] + 7; y++) if (dry(x, y) && x < tlo && (x + y) % 2 === 0 && Math.hypot(x + 0.5 - fire[0], y + 0.5 - fire[1]) > 1.2) spots.push([x, y]);
-  spots.sort((a, b) => Math.hypot(a[0] - fire[0], a[1] - fire[1]) - Math.hypot(b[0] - fire[0], b[1] - fire[1]) || a[0] - b[0] || a[1] - b[1]);
-  for (let x = Math.floor(fire[0]) - 1; x <= fire[0] + 1; x++) for (let y = Math.floor(fire[1]) - 1; y <= fire[1] + 1; y++) camp.add(`${x},${y}`);
-  if (best < Infinity) {
-    put({ k: "campfire", x: fire[0] - 0.25, y: fire[1] - 0.25, w: 0.5, d: 0.5, s: 0, tg: { kind: "camp" } });
-    spots.slice(0, Math.min(24, t.campers)).forEach(([x, y], i) => {
-      camp.add(`${x},${y}`);
-      const mine = !!t.meCamping && i === 0;
-      put({ k: "tent", x: x + 0.15, y: y + 0.2, w: 0.75, d: 0.6, s: hashOf(`tent${x},${y}`), mine, tg: { kind: "tent", mine } });
-    });
-  }
-  // the country: woods that thin toward the shore, reeds by the water, the bridge
+  // the station: a platform along the track where visitors wait (people who signed in this month and
+  // have no notebook yet; yours first), a station house, tunnel mouths at both ends, a trestle over the river
+  const camp = new Set<string>();
+  for (let x = 0; x <= 15; x++) for (let y = TY - 3; y <= TY - 1; y++) camp.add(`${x},${y}`);
+  paving.push([0.6, TY - 1, 14, 0.9]);
+  put({ k: "station", x: 8.4, y: TY - 3, w: 4.2, d: 1.7, s: 0, tg: { kind: "station" } });
+  put({ k: "canopy", x: 1.2, y: TY - 1, w: 5.6, d: 0.9, s: 0, tg: { kind: "station" } });
+  for (const x of [rx0, rx1]) put({ k: "portal", x: x - 0.1, y: TY - 0.6, w: 1.2, d: 1.6, s: x === rx0 ? 0 : 1 });
+  for (const x of trestle) put({ k: "trestle", x, y: TY, w: 1, d: 1, s: 0 });
+  const platform: [number, number][] = [];
+  for (let i = 0; i < 24; i++) platform.push([1 + ((i * 0.585) % 13.6), TY - 0.45 - (i % 2) * 0.3]);
+  // the country: woods that thin toward the shore  // the country: woods that thin toward the shore, reeds by the water, the bridge
   for (let x = lo; x <= hi; x++) for (let y = lo; y <= hi; y++) {
     const v = get(x, y);
     if (v === BRIDGE) { put({ k: "bridge", x, y, w: 1, d: 1, s: 0 }); continue; }
     if (v !== LAND || inBlock.has(`${x},${y}`) || camp.has(`${x},${y}`)) continue;
     const near = [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([a, b]) => get(x + a, y + b));
     if (near.includes(WATER)) { if (h01(`rd${x},${y}`) < 0.35) put({ k: "reeds", x: x + 0.3, y: y + 0.3, w: 0.4, d: 0.4, s: hashOf(`rd${x},${y}`) }); continue; }
-    if (near.includes(ROAD) || near.includes(BRIDGE)) continue;
+    if (near.includes(ROAD) || near.includes(BRIDGE) || near.includes(RAIL)) continue;
     const coast = near.includes(VOID) ? 0.12 : 0;
     if (h01(`f${x},${y}`) < 0.5 - coast) tree(x + 0.5, y + 0.5, `f${x},${y}`);
   }
@@ -296,7 +308,7 @@ export function layoutTown(t: TownData): Plan {
   while (get(7, gy + 1) === ROAD) gy++;
   // painter's order: back to front by the middle of each footprint
   objs.sort((a, b) => a.x + a.w / 2 + a.y + a.d / 2 - (b.x + b.w / 2 + b.y + b.d / 2) || a.x - b.x);
-  return { R, lo, hi, n, cells, objs, water, paving, stalls, gate: [7.5, gy + 0.5], loop, yard: [-5.6, 4.2, 4.4, 2.2], lake };
+  return { R, lo, hi, n, cells, objs, water, paving, stalls, gate: [7.5, gy + 0.5], loop, yard: [-5.6, 4.2, 4.4, 2.2], lake, rail: { y: TY, x0: rx0, x1: rx1, stop: 8.2 }, platform };
 }
 
 // ---------------------------------------------------------------- drawing
@@ -338,7 +350,7 @@ const S = {
   hits: [] as Hit[], hover: undefined as Target | undefined,
   raf: 0, last: 0, t0: performance.now(), still: still(), ro: undefined as ResizeObserver | undefined,
   drag: undefined as { x: number; y: number; cx: number; cy: number; moved: boolean } | undefined, pts: new Map<number, [number, number]>(), pinch: 0,
-  tapped: undefined as Target | undefined, pinched: false, warned: false, flakes: [] as [number, number, number][],
+  tapped: undefined as Target | undefined, pinched: false, warned: false, visitorTg: [] as Target[], flakes: [] as [number, number, number][],
 };
 
 let ctx!: CanvasRenderingContext2D;
@@ -481,6 +493,49 @@ function drawHouse(o: Obj, t: number) {
   }
   if (o.mine) mineMark(o, top, t);
   hit([P(x, y, 0), P(x + w, y, 0), P(x + w, y + d, 0), P(x, y + d, 0), P(x + w / 2, y + d / 2, top)], o.tg);
+}
+/** A two-stage rocket in the Falcon 9 manner, drawn upward from (0, 0): white and slender, black
+ *  landing legs folded at its foot, grid fins and a black interstage, a second stage, a fairing. */
+function falcon(t: number, firing: boolean, night: boolean) {
+  const r = 3.6, white = "#fbfbfa", shadeR = "rgba(0,0,0,.09)", black = "#23262e";
+  if (firing) {
+    const fl = 22 + Math.sin(t * 40) * 4;
+    poly([[-4.5, 0], [4.5, 0], [2.5, fl * 0.7], [0, fl + 10], [-2.5, fl * 0.7]], "#ffb347", false);
+    poly([[-2.6, 0], [2.6, 0], [0, fl]], "#fff3c4", false);
+    ctx.fillStyle = "rgba(255,255,255,.85)"; for (let i = 1; i <= 3; i++) { const yy = i * fl * 0.24; ctx.beginPath(); ctx.moveTo(0, yy - 1.6); ctx.lineTo(1.2, yy); ctx.lineTo(0, yy + 1.6); ctx.lineTo(-1.2, yy); ctx.fill(); }
+  }
+  // the first stage, its engines and folded legs
+  poly([[-r, 0], [r, 0], [r, -54], [-r, -54]], white);
+  poly([[r * 0.35, 0], [r, 0], [r, -54], [r * 0.35, -54]], shadeR, false);
+  poly([[-r, 0], [r, 0], [r, -3], [-r, -3]], black);
+  ctx.fillStyle = night ? "#555a66" : "#8a8f99"; for (const ex of [-2.2, 0, 2.2]) { ctx.beginPath(); ctx.ellipse(ex, 1.2, 1.1, 0.7, 0, 0, 6.283); ctx.fill(); }
+  for (const side of [-1, 1]) poly([[side * r, -2], [side * (r + 1.2), -4], [side * (r + 0.6), -15], [side * r, -15]], black);
+  ctx.save(); ctx.font = "800 4px Inter, system-ui, sans-serif"; ctx.fillStyle = "#3a3f4a"; ctx.translate(-0.6, -20); ctx.rotate(-Math.PI / 2); ctx.fillText("SOON", 0, 0); ctx.restore();
+  // grid fins and the interstage
+  for (const side of [-1, 1]) poly([[side * r, -49], [side * (r + 2.4), -49.6], [side * (r + 2.4), -52], [side * r, -51.6]], black);
+  poly([[-r, -54], [r, -54], [r, -60], [-r, -60]], black);
+  // the second stage and the fairing
+  poly([[-r, -60], [r, -60], [r, -72], [-r, -72]], white);
+  poly([[r * 0.35, -60], [r, -60], [r, -72], [r * 0.35, -72]], shadeR, false);
+  ctx.beginPath(); ctx.moveTo(-r - 0.6, -72); ctx.lineTo(r + 0.6, -72); ctx.lineTo(r + 0.6, -80); ctx.quadraticCurveTo(r + 0.4, -88, 0, -92); ctx.quadraticCurveTo(-r - 0.4, -88, -r - 0.6, -80); ctx.closePath();
+  ctx.fillStyle = white; ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, -72); ctx.lineTo(0, -91); ctx.save(); ctx.globalAlpha = 0.35; ctx.stroke(); ctx.restore();
+  poly([[-r, 0], [r, 0], [r, -72], [-r, -72]], undefined);
+}
+/** A flag on a pole: Pakistan's (green, a white band at the hoist, a crescent and star), or plain sky blue. */
+function flag(x: number, y: number, h: number, kind: "pk" | "blue", t: number) {
+  const [px, py] = P(x, y), top = py - h, wave = S.still ? 0 : Math.sin(t * 3 + x) * 1.2;
+  ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px, top - 2); ctx.stroke();
+  const fw = 15, fh = 10, q: [number, number][] = [[px, top], [px + fw, top + wave], [px + fw, top + fh + wave], [px, top + fh]];
+  if (kind === "pk") {
+    poly([[px, top], [px + fw * 0.25, top + wave * 0.25], [px + fw * 0.25, top + fh + wave * 0.25], [px, top + fh]], "#ffffff", false);
+    poly([[px + fw * 0.25, top + wave * 0.25], [px + fw, top + wave], [px + fw, top + fh + wave], [px + fw * 0.25, top + fh + wave * 0.25]], "#01411c", false);
+    const cx = px + fw * 0.62, cy = top + fh / 2 + wave * 0.6;
+    ctx.fillStyle = "#ffffff"; ctx.beginPath(); ctx.arc(cx, cy, 3, 0, 6.283); ctx.fill();
+    ctx.fillStyle = "#01411c"; ctx.beginPath(); ctx.arc(cx + 1.1, cy - 0.6, 2.5, 0, 6.283); ctx.fill();
+    ctx.fillStyle = "#ffffff"; ctx.beginPath(); ctx.arc(cx + 2.4, cy - 1.4, 0.9, 0, 6.283); ctx.fill();
+  } else poly(q, "#5b92e5", false);
+  poly(q, undefined);
 }
 /** A pennant and "You" above your house. */
 function mineMark(o: Obj, top: number, t: number) {
@@ -774,29 +829,100 @@ function drawObj(o: Obj, t: number) {
       ctx.beginPath(); ctx.ellipse(sx + 2.5, sy, 4, 2, 0, 0, 6.283); ctx.fillStyle = p.water; ctx.fill(); ctx.stroke();
       return hit([[sx - rx - 7, yt - 22], [sx + rx + 7, sy + 4]], o.tg);
     }
-    case "tent": {
-      // someone who signed in and has no notebook yet: a tent, its door toward the fire
-      const { x, y, w, d } = o, r = rng(o.s), c = o.mine ? acc() : ["#f2b8c6", "#b9dcc2", "#b8cfee", "#f3dea0", "#d4c6ef", "#f2c27e"][Math.floor(r() * 6)];
-      const col = o.mine ? c : night ? toHex(S.pal.roofs[Math.floor(r() * 5)]) : c, ridge0 = P(x, y + d / 2, 9), ridge1 = P(x + w, y + d / 2, 9);
-      poly([P(x, y, 0), P(x + w, y, 0), ridge1, ridge0], shade(toHex(col.startsWith("#") ? col : "#b8cfee"), 0.15));
-      poly([P(x, y + d, 0), P(x + w, y + d, 0), ridge1, ridge0], col);
-      poly([P(x + w, y, 0), P(x + w, y + d, 0), ridge1], shade(toHex(col.startsWith("#") ? col : "#b8cfee"), 0.08));
-      poly([P(x + w, y + d * 0.28, 0), P(x + w, y + d * 0.72, 0), P(x + w, y + d / 2, 6.5)], night ? "#2a2416" : "#5a4a3a");
-      if (o.mine) { const [px, py] = ridge0; label("You", (px + ridge1[0]) / 2, py - 10, acc()); }
-      return hit([P(x, y, 0), P(x + w, y + d, 0), P(x, y + d, 0), P(x + w, y, 0), [ridge0[0], ridge0[1] - 4]], o.tg);
+    case "station": {
+      // the station house: brick, a clock tower in the middle, tall arched windows onto the platform
+      const { x, y, w, d } = o, h = 13, brick = night ? "#6e5248" : "#e7c9b4", roof = night ? "#3c4252" : "#7d8597";
+      box(x, y, w, d, h, brick, shade(toHex(brick), 0.1));
+      for (let i = 0; i < 6; i++) { if (i === 2 || i === 3) continue; onFace("y", x, y, w, d, 0.25 + i * 0.66, 0.6 + i * 0.66, 3, 10, night ? p.lit : p.win); }
+      onFace("y", x, y, w, d, w / 2 - 0.35, w / 2 + 0.35, 0, 8, shade(toHex(brick), 0.3));
+      poly([P(x, y, h), P(x + w, y, h), P(x + w, y + d / 2, h + 6), P(x, y + d / 2, h + 6)], shade(toHex(roof), 0.1));
+      poly([P(x, y + d, h), P(x + w, y + d, h), P(x + w, y + d / 2, h + 6), P(x, y + d / 2, h + 6)], roof);
+      poly([P(x + w, y, h), P(x + w, y + d, h), P(x + w, y + d / 2, h + 6)], shade(toHex(brick), 0.1));
+      const tx = x + w / 2 - 0.4, ty = y + d / 2 - 0.4;
+      box(tx, ty, 0.8, 0.8, 12, brick, shade(toHex(brick), 0.1), undefined, h + 2);
+      const ap = P(tx + 0.4, ty + 0.4, h + 22); poly([P(tx, ty + 0.8, h + 14), P(tx + 0.8, ty + 0.8, h + 14), ap], roof); poly([P(tx + 0.8, ty, h + 14), P(tx + 0.8, ty + 0.8, h + 14), ap], shade(toHex(roof), 0.1));
+      const [cx, cy] = P(tx + 0.4, ty + 0.8, h + 9); ctx.beginPath(); ctx.ellipse(cx, cy, 3.4, 2.8, 0, 0, 6.283); ctx.fillStyle = "#ffffff"; ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx, cy - 2); ctx.moveTo(cx, cy); ctx.lineTo(cx + 1.5, cy + 0.6); ctx.stroke();
+      return hit([P(x, y, 0), P(x + w, y + d, 0), P(x, y + d, 0), P(x + w, y, 0), ap], o.tg);
     }
-    case "campfire": {
-      // the campground's fire: logs and a flicker (lit when someone is camping), glowing at night
-      const [fx, fy] = P(o.x + o.w / 2, o.y + o.d / 2), lit = data.campers > 0;
-      for (let i = 0; i < 6; i++) { const a = (i / 6) * 6.283; ctx.beginPath(); ctx.ellipse(fx + Math.cos(a) * 7, fy + Math.sin(a) * 3.5, 2, 1.4, 0, 0, 6.283); ctx.fillStyle = night ? "#5a6070" : "#c9ced8"; ctx.fill(); ctx.stroke(); }
-      ctx.save(); ctx.strokeStyle = night ? "#6a5040" : "#8a6a4a"; ctx.lineWidth = line * 2.2; ctx.beginPath(); ctx.moveTo(fx - 4, fy + 1); ctx.lineTo(fx + 4, fy - 1); ctx.moveTo(fx - 3, fy - 1.5); ctx.lineTo(fx + 3, fy + 1.5); ctx.stroke(); ctx.restore();
-      if (lit) {
-        if (night) { const g = ctx.createRadialGradient(fx, fy - 4, 0, fx, fy - 4, 34); g.addColorStop(0, "rgba(255,170,80,.42)"); g.addColorStop(1, "rgba(255,170,80,0)"); ctx.fillStyle = g; ctx.fillRect(fx - 34, fy - 38, 68, 68); }
-        const fl = S.still ? 0 : Math.sin(t * 13) * 1.2 + Math.sin(t * 7.3) * 0.8;
-        poly([[fx - 3.5, fy], [fx + 3.5, fy], [fx + fl * 0.5, fy - 9 - fl]], "#ff9a3c", false);
-        poly([[fx - 1.8, fy], [fx + 1.8, fy], [fx - fl * 0.4, fy - 5.5 - fl * 0.5]], "#ffe08a", false);
+    case "canopy": {
+      // the platform canopy: a flat roof on posts
+      const { x, y, w, d } = o, roof = night ? "#3c4252" : "#9aa3b5";
+      ctx.beginPath(); for (let i = 0; i <= 4; i++) { const u = x + 0.15 + (i * (w - 0.3)) / 4, a = P(u, y + d * 0.5, 0), b = P(u, y + d * 0.5, 11); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); } ctx.stroke();
+      box(x, y - 0.1, w, d + 0.2, 1.5, shade(toHex(roof), 0.05), shade(toHex(roof), 0.15), roof, 11);
+      return;
+    }
+    case "portal": {
+      // where the railway goes into the hills: a grassy mound with a dark arch
+      const [mx, my] = P(o.x + o.w / 2, o.y + o.d / 2), hill = toHex(p.pine);
+      ctx.beginPath(); ctx.ellipse(mx, my - 4, 26, 15, 0, Math.PI, 0); ctx.lineTo(mx + 26, my + 2); ctx.lineTo(mx - 26, my + 2); ctx.closePath(); ctx.fillStyle = hill; ctx.fill(); ctx.stroke();
+      const [ax, ay] = P(o.x + (o.s ? 0.2 : o.w - 0.2), o.y + 0.6);
+      ctx.beginPath(); ctx.ellipse(ax, ay - 2, 7, 9, 0, Math.PI, 0); ctx.lineTo(ax + 7, ay + 3); ctx.lineTo(ax - 7, ay + 3); ctx.closePath(); ctx.fillStyle = night ? "#0c0f16" : "#3a3f4a"; ctx.fill();
+      ctx.save(); ctx.strokeStyle = night ? "#8a93a8" : "#c9ced8"; ctx.lineWidth = line * 2; ctx.beginPath(); ctx.ellipse(ax, ay - 2, 8, 10, 0, Math.PI, 0); ctx.stroke(); ctx.restore();
+      return;
+    }
+    case "trestle": {
+      // the railway over the river: timber trestle legs under the track
+      const { x, y } = o, wood = night ? "#6a5a4a" : "#b9976f";
+      ctx.save(); ctx.strokeStyle = wood; ctx.lineWidth = line * 1.6; ctx.beginPath();
+      for (const u of [0.2, 0.8]) for (const v of [0.2, 0.8]) { const a = P(x + u, y + v, -6), b = P(x + u, y + v, 2); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); }
+      ctx.stroke(); ctx.restore();
+      box(x, y + 0.1, 1, 0.8, 1.2, wood, shade(toHex(wood), 0.12), shade(toHex(wood), -0.06), 0.8);
+      ctx.save(); ctx.strokeStyle = night ? "#9aa3b5" : "#6a7080"; ctx.lineWidth = line * 1.1; ctx.beginPath();
+      for (const v of [0.35, 0.65]) { const a = P(x, y + v, 2.2), b = P(x + 1, y + v, 2.2); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); }
+      ctx.stroke(); ctx.restore();
+      return;
+    }
+    case "news": {
+      // the news station: a studio with a big screen, a satellite dish, a lattice mast with a blinking light
+      const { x, y, w, d } = o, h = 15, wall = night ? "#4f566a" : "#f3f4f7";
+      box(x, y, w, d, h, wall, shade(toHex(wall), 0.08), shade(toHex(wall), 0.04));
+      onFace("y", x, y, w, d, 0.2, w - 0.2, 5, 13, "#1d2230");
+      // a headline crawling across the screen
+      const [s0x, s0y] = P(x + 0.3, y + d, 9), [s1x, s1y] = P(x + w - 0.3, y + d, 9);
+      ctx.save(); ctx.beginPath(); const q = [P(x + 0.2, y + d, 5), P(x + w - 0.2, y + d, 5), P(x + w - 0.2, y + d, 13), P(x + 0.2, y + d, 13)]; ctx.moveTo(q[0][0], q[0][1]); q.forEach((pt) => ctx.lineTo(pt[0], pt[1])); ctx.closePath(); ctx.clip();
+      const ang = Math.atan2(s1y - s0y, s1x - s0x), len = Math.hypot(s1x - s0x, s1y - s0y), text = "Internet Computer news  ·  follow @dfinity on X  ·  ";
+      ctx.translate(s0x, s0y); ctx.rotate(ang); ctx.font = "700 5.5px Inter, system-ui, sans-serif"; ctx.fillStyle = "#29abe2";
+      const tw = ctx.measureText(text).width, off = S.still ? 0 : (t * 14) % tw;
+      for (let k = -1; k < 3; k++) ctx.fillText(text, k * tw - off, 2);
+      ctx.restore();
+      onFace("y", x, y, w, d, w - 0.75, w - 0.3, 0, 4, shade(toHex(wall), 0.3));
+      for (let i = 0; i < 3; i++) onFace("x", x, y, w, d, 0.3 + i * 0.6, 0.55 + i * 0.6, 6, 11, night ? p.lit : p.win);
+      // the dish on the roof
+      const [dx, dy] = P(x + w * 0.3, y + d * 0.4, h + 3);
+      ctx.beginPath(); ctx.moveTo(dx, dy + 3); ctx.lineTo(dx, dy - 1); ctx.stroke();
+      ctx.save(); ctx.translate(dx, dy - 4); ctx.rotate(-0.6); ctx.beginPath(); ctx.ellipse(0, 0, 7, 4, 0, 0, 6.283); ctx.fillStyle = p.wall; ctx.fill(); ctx.stroke(); ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -6); ctx.stroke(); ctx.restore();
+      // the mast
+      const [mx, my] = P(x + w * 0.8, y + d * 0.3, h), top = my - 44;
+      ctx.save(); ctx.strokeStyle = night ? "#c96456" : "#d9604c"; ctx.lineWidth = line;
+      ctx.beginPath(); ctx.moveTo(mx - 3, my); ctx.lineTo(mx, top); ctx.lineTo(mx + 3, my); for (let z = my; z > top + 4; z -= 6) { const f = (my - z) / (my - top), half = 3 * (1 - f); ctx.moveTo(mx - half, z); ctx.lineTo(mx + half * 0.8, z - 6); } ctx.stroke(); ctx.restore();
+      const on = S.still || Math.sin(t * 2.5) > 0; ctx.fillStyle = on ? "#f0504a" : "#5a2a28"; ctx.beginPath(); ctx.arc(mx, top - 1.5, 1.8, 0, 6.283); ctx.fill();
+      if (on && night) { const g = ctx.createRadialGradient(mx, top, 0, mx, top, 10); g.addColorStop(0, "rgba(240,80,74,.5)"); g.addColorStop(1, "rgba(240,80,74,0)"); ctx.fillStyle = g; ctx.fillRect(mx - 10, top - 10, 20, 20); }
+      return hit([P(x, y, 0), P(x + w, y + d, 0), P(x, y + d, 0), P(x + w, y, 0), [mx, top - 4]], o.tg);
+    }
+    case "datacentre": {
+      // the Pakistan Subnet: a sovereign data centre, rows of server lights, cooling fans, the flag of Pakistan
+      const { x, y, w, d } = o, h = 10, wall = night ? "#4a5164" : "#e9ecf1";
+      box(x, y, w, d, h, wall, shade(toHex(wall), 0.08), shade(toHex(wall), 0.03));
+      for (let r = 0; r < 2; r++) for (let i = 0; i < 9; i++) { const u = 0.2 + i * ((w - 0.4) / 9), on = S.still || Math.sin(t * (2 + (i % 3)) + i * 1.3 + r) > -0.3; onFace("y", x, y, w, d, u, u + 0.18, 2.5 + r * 3.5, 4.5 + r * 3.5, on ? "#34d399" : "#14532d", false); }
+      for (let i = 0; i < 3; i++) { const [fx, fy] = P(x + 0.6 + i * 1.1, y + d / 2, h + 1.6); box(x + 0.25 + i * 1.1, y + d / 2 - 0.35, 0.7, 0.7, 1.6, shade(toHex(wall), 0.1), shade(toHex(wall), 0.18), shade(toHex(wall), 0.05), h); ctx.beginPath(); ctx.ellipse(fx, fy, 4.2, 2.2, 0, 0, 6.283); ctx.fillStyle = night ? "#2a3040" : "#c9ced8"; ctx.fill(); ctx.stroke(); }
+      flag(x + w + 0.25, y + d + 0.15, 30, "pk", t);
+      return hit([P(x, y, 0), P(x + w, y + d, 0), P(x, y + d, 0), P(x + w, y, 0), P(x + w + 0.25, y + d + 0.15, 40)], o.tg);
+    }
+    case "credentials": {
+      // UNDP's Universal Trusted Credentials: an office with a sky-blue flag, small businesses in front of it
+      const { x, y, w, d } = o, h = 12, wall = night ? "#53607a" : "#f4f8fc", blue = "#5b92e5";
+      box(x, y, w, d * 0.6, h, wall, shade(toHex(wall), 0.08), shade(toHex(wall), 0.03));
+      for (let i = 0; i < 4; i++) onFace("y", x, y, w, d * 0.6, 0.3 + i * 0.6, 0.55 + i * 0.6, 4, 9, night ? p.lit : "#cfe0f5");
+      onFace("y", x, y, w, d * 0.6, w / 2 - 0.25, w / 2 + 0.25, 0, 6, blue);
+      // three little shops with awnings: the businesses credentials help
+      for (let i = 0; i < 3; i++) {
+        const sx = x + 0.1 + i * (w / 3), sy = y + d * 0.68, sw = w / 3 - 0.2, cols = ["#f472b6", "#34d399", "#fbbf24"];
+        box(sx, sy, sw, 0.5, 5, p.wall, p.wallR, undefined);
+        poly([P(sx, sy + 0.55, 5), P(sx + sw, sy + 0.55, 5), P(sx + sw, sy + 0.3, 7.5), P(sx, sy + 0.3, 7.5)], cols[i]);
       }
-      return hit([[fx - 10, fy - 12], [fx + 10, fy + 5]], o.tg);
+      flag(x - 0.25, y + d * 0.6, 28, "blue", t);
+      return hit([P(x, y, 0), P(x + w, y + d, 0), P(x, y + d, 0), P(x + w, y, 0), P(x, y, h + 6)], o.tg);
     }
     case "bridge": {
       const { x, y } = o, wood = night ? "#6a5a4a" : "#d2b48c";
@@ -907,7 +1033,7 @@ function drawObj(o: Obj, t: number) {
       ctx.beginPath(); ctx.ellipse(...P(cx, cy, 2.5), 16, 8, 0, 0, 6.283); ctx.fillStyle = night ? "#2f3442" : "#c3c7cf"; ctx.fill(); ctx.stroke();
       for (const [u, v] of [[x + 0.1, y + d - 1.4], [x + 0.1, y + d - 0.4]]) { const [tx, ty] = P(u + 0.4, v + 0.4, 6); ctx.beginPath(); ctx.arc(tx, ty, 6.5, 0, 6.283); ctx.fillStyle = p.wall; ctx.fill(); ctx.stroke(); }
       // the gantry
-      const gx = cx - 1.6, gy = cy - 1.6, gh = 66;
+      const gx = cx - 1.6, gy = cy - 1.6, gh = 92;
       ctx.save(); ctx.strokeStyle = night ? "#c96456" : "#d9604c"; ctx.lineWidth = line * 1.2;
       const g0 = P(gx, gy, 2.5), g1 = P(gx + 0.6, gy, 2.5), g2 = P(gx, gy + 0.6, 2.5);
       ctx.beginPath();
@@ -915,25 +1041,20 @@ function drawObj(o: Obj, t: number) {
       for (let z = 0; z < gh; z += 8) { ctx.moveTo(g0[0], g0[1] - z); ctx.lineTo(g1[0], g1[1] - z - 8); ctx.moveTo(g0[0], g0[1] - z); ctx.lineTo(g2[0], g2[1] - z - 8); }
       ctx.stroke(); ctx.restore();
       // the rocket: on the pad, then up in fire and smoke every couple of minutes
-      const cyc = S.still ? 0 : (t + 25) % 120, rising = cyc > 100 && cyc < 112, gone = cyc >= 112;
-      const lift = rising ? (cyc - 100) ** 2 * 5 : 0, [rx, ry0] = P(cx, cy, 3), ry = ry0 - lift;
-      if (!rising && !gone) { const [ax, ay] = P(gx + 0.3, gy + 0.3, 46); ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(rx - 4, ry - 46); ctx.stroke(); }
+      const cyc = S.still ? 0 : (t + 25) % 120, rising = cyc > 100 && cyc < 113, gone = cyc >= 113;
+      const lift = rising ? (cyc - 100) ** 2 * 4.2 : 0, [rx, ry0] = P(cx, cy, 3), ry = ry0 - lift, tilt = rising ? Math.min(0.35, lift / 2400) : 0;
+      // the strongback's arms hold it until launch
+      if (!rising && !gone) { ctx.save(); ctx.strokeStyle = night ? "#c96456" : "#d9604c"; ctx.lineWidth = line * 1.4; for (const z of [40, 66]) { const [ax, ay] = P(gx + 0.3, gy + 0.3, z); ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(rx - 3.6, ry - z + 6); ctx.stroke(); } ctx.restore(); }
       if (rising || (cyc > 96 && !gone)) {
-        for (let i = 0; i < 8; i++) { const u = ((t * 0.7 + i / 8) % 1); ctx.fillStyle = `rgba(${night ? "200,205,220" : "235,236,240"},${0.75 * (1 - u)})`; ctx.beginPath(); ctx.arc(rx + (i - 3.5) * 6 * (0.4 + u), ry0 + 2 - u * 6, 4 + u * 9, 0, 6.283); ctx.fill(); }
+        for (let i = 0; i < 12; i++) { const u = ((t * 0.6 + i / 12) % 1); ctx.fillStyle = `rgba(${night ? "200,205,220" : "238,239,243"},${0.8 * (1 - u)})`; ctx.beginPath(); ctx.arc(rx + (i - 5.5) * 5 * (0.5 + u * 1.4), ry0 + 3 - u * 10, 4 + u * 12, 0, 6.283); ctx.fill(); }
       }
       if (!gone) {
-        ctx.save(); ctx.globalAlpha = rising ? Math.max(0, 1 - lift / 900) : 1;
-        if (rising) { const fl = 10 + Math.sin(t * 40) * 3; poly([[rx - 4, ry], [rx + 4, ry], [rx, ry + fl + 8]], "#ffb347", false); poly([[rx - 2, ry], [rx + 2, ry], [rx, ry + fl]], "#fff3c4", false); }
-        poly([[rx - 9, ry - 2], [rx - 5, ry - 12], [rx - 5, ry - 2]], "#e07a6a"); poly([[rx + 9, ry - 2], [rx + 5, ry - 12], [rx + 5, ry - 2]], "#c96456");
-        poly([[rx - 5, ry], [rx + 5, ry], [rx + 5, ry - 40], [rx - 5, ry - 40]], "#fbfbfa");
-        ICP.forEach((c, i) => poly([[rx - 5, ry - 18 - i * 1.6], [rx + 5, ry - 18 - i * 1.6], [rx + 5, ry - 19.6 - i * 1.6], [rx - 5, ry - 19.6 - i * 1.6]], c, false));
-        poly([[rx + 1.5, ry], [rx + 5, ry], [rx + 5, ry - 40], [rx + 1.5, ry - 40]], "rgba(0,0,0,.07)", false);
-        poly([[rx - 5, ry], [rx + 5, ry], [rx + 5, ry - 40], [rx - 5, ry - 40]], undefined);
-        poly([[rx - 5, ry - 40], [rx + 5, ry - 40], [rx, ry - 54]], "#e07a6a");
-        ctx.beginPath(); ctx.arc(rx, ry - 30, 2, 0, 6.283); ctx.fillStyle = night ? "#9cc8f0" : "#8cc3e3"; ctx.fill(); ctx.stroke();
+        ctx.save(); ctx.globalAlpha = rising ? Math.max(0, 1 - lift / 1100) : 1;
+        ctx.translate(rx + lift * tilt * 0.6, ry); ctx.rotate(tilt);
+        falcon(t, rising, night);
         ctx.restore();
       }
-      return hit([P(x, y, 0), P(x + w, y + d, 0), P(x, y + d, 0), P(x + w, y, 0), [rx, ry0 - 70]], o.tg);
+      return hit([P(x, y, 0), P(x + w, y + d, 0), P(x, y + d, 0), P(x + w, y, 0), [rx, ry0 - 96]], o.tg);
     }
     case "office": {
       // a plain building for whatever comes next: glass on the front, a banner in its colour
@@ -966,12 +1087,12 @@ function drawObj(o: Obj, t: number) {
 
 /** The island's ground as paths (built once per plan): land, roads, water, the shore, the cliff
  *  faces we can see, and where the river spills over the edge. */
-type Ground = { plan: Plan; land: Path2D; road: Path2D; water: Path2D; shore: Path2D; coast: Path2D; sideL: Path2D; sideR: Path2D; falls: [number, number, "x" | "y"][]; ripples: [number, number, number][] };
+type Ground = { plan: Plan; land: Path2D; rail: Path2D; road: Path2D; water: Path2D; shore: Path2D; coast: Path2D; sideL: Path2D; sideR: Path2D; falls: [number, number, "x" | "y"][]; ripples: [number, number, number][] };
 let groundCache: Ground | undefined;
 const CLIFF = 8;
 function ground(pl: Plan): Ground {
   if (groundCache?.plan === pl) return groundCache;
-  const g: Ground = { plan: pl, land: new Path2D(), road: new Path2D(), water: new Path2D(), shore: new Path2D(), coast: new Path2D(), sideL: new Path2D(), sideR: new Path2D(), falls: [], ripples: [] };
+  const g: Ground = { plan: pl, land: new Path2D(), rail: new Path2D(), road: new Path2D(), water: new Path2D(), shore: new Path2D(), coast: new Path2D(), sideL: new Path2D(), sideR: new Path2D(), falls: [], ripples: [] };
   const tile = (path: Path2D, x: number, y: number) => { const q = flat(x, y, 1, 1); path.moveTo(q[0][0], q[0][1]); for (let i = 1; i < 4; i++) path.lineTo(q[i][0], q[i][1]); path.closePath(); };
   const edge = (path: Path2D, a: [number, number], b: [number, number]) => { path.moveTo(a[0], a[1]); path.lineTo(b[0], b[1]); };
   for (let y = pl.lo; y <= pl.hi; y++) for (let x = pl.lo; x <= pl.hi; x++) {
@@ -980,6 +1101,7 @@ function ground(pl: Plan): Ground {
     tile(g.land, x, y);
     const wet = v === WATER || v === BRIDGE;
     if (v === ROAD) tile(g.road, x, y);
+    if (v === RAIL) tile(g.rail, x, y);
     if (wet) { tile(g.water, x, y); if (h01(`rp${x},${y}`) < 0.12) g.ripples.push([x + 0.5, y + 0.5, h01(`rq${x},${y}`) * 6]); }
     const n = [[0, -1], [1, 0], [0, 1], [-1, 0]].map(([dx, dy]) => cellAt(pl, x + dx, y + dy));
     const corners: [number, number][] = [P(x, y), P(x + 1, y), P(x + 1, y + 1), P(x, y + 1)];
@@ -1016,6 +1138,14 @@ function drawGround(t: number) {
   for (const [x, y, w, d] of pl.paving) poly(flat(x, y, w, d), p.pave, false);
   ctx.fillStyle = wat; ctx.fill(g.water);
   ctx.save(); ctx.strokeStyle = night ? "#4a5a70" : "#a9c6d6"; ctx.lineWidth = line; ctx.stroke(g.shore); ctx.restore();
+  // the railway: ballast, sleepers, two rails
+  const rl = pl.rail;
+  ctx.fillStyle = night ? "#3a3a40" : "#d6d2c8"; ctx.fill(g.rail);
+  ctx.save(); ctx.strokeStyle = night ? "#5a4a3c" : "#a88a6a"; ctx.lineWidth = line * 1.4; ctx.beginPath();
+  for (let u = rl.x0; u <= rl.x1 + 1; u += 0.34) { const a = P(u, rl.y + 0.18, 1), b = P(u, rl.y + 0.82, 1); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); }
+  ctx.stroke(); ctx.strokeStyle = night ? "#9aa3b5" : "#6a7080"; ctx.lineWidth = line * 1.1; ctx.beginPath();
+  for (const v of [0.35, 0.65]) { const a = P(rl.x0, rl.y + v, 2), b = P(rl.x1 + 1, rl.y + v, 2); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); }
+  ctx.stroke(); ctx.restore();
   // ripples on open water; cracks in the ice
   ctx.save(); ctx.strokeStyle = frozen ? (night ? "rgba(200,215,235,.35)" : "rgba(255,255,255,.9)") : night ? "rgba(170,200,230,.35)" : "rgba(255,255,255,.75)"; ctx.lineWidth = line * 0.8;
   for (const [x, y, ph] of g.ripples) {
@@ -1120,6 +1250,19 @@ function frame(now: number) {
     const hop = S.still ? 0 : Math.max(0, Math.sin(t * 5 + i * 2)) * 3;
     live.push({ k: x + y, draw: () => drawPerson(x, y, S.pal.person[(i + 2) % 5], t, false, 0.72, hop) });
   }
+  // visitors wait on the platform (yours first); the train comes in, stops, goes on
+  const rl = S.plan.rail;
+  S.plan.platform.slice(0, Math.min(24, S.data!.campers)).forEach(([x, y], i) => {
+    const mine = !!S.data!.meCamping && i === 0, wob = S.still ? 0 : Math.sin(t * 0.7 + i) * 0.08;
+    live.push({ k: x + y, draw: () => {
+      drawPerson(x + wob, y, mine ? acc() : S.pal.person[(i + 1) % 5], t, false);
+      const [px, py] = P(x + wob, y);
+      if (mine) label("You", px, py - 18, acc());
+      hit([[px - 4, py - 12], [px + 4, py + 2]], (S.visitorTg[i] ??= { kind: "visitor", mine }));
+    } });
+  });
+  const tx = trainAt(t, rl);
+  if (tx !== undefined) live.push({ k: tx + rl.y + 0.5, draw: () => drawTrain(tx, rl) });
   for (const hk of S.hikers) { const [x, y] = loopAt(hk.u); live.push({ k: x + y, draw: () => drawPerson(x, y, S.pal.person[hk.c], t, true) }); }
   live.sort((a, b) => a.k - b.k);
   let li = 0;
@@ -1132,12 +1275,48 @@ function frame(now: number) {
     try { drawObj(o, t); } catch (e) { if (!S.warned) { S.warned = true; console.warn("town: could not draw", o.k, e); } }
   }
   while (li < live.length) live[li++].draw();
+  if (!S.still) birds(t);
   // speech bubbles over the stalls, at the channel's pace (sped up), and a cloud when it rained lately
   if (!S.still) bubbles(t);
   if (S.data!.lastRain && Date.now() - S.data!.lastRain < 3600e3 && !S.still) rainCloud(t);
   if (S.hover && S.o.mode === "full") outlineHover();
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   if (!S.still) weather(dt);
+}
+/** Where the train's front is (tiles along the track), or undefined while it's away: a minute and a half
+ *  round, in from the left, a stop at the platform, out to the right. */
+function trainAt(t: number, rl: Plan["rail"]): number | undefined {
+  const c = S.still ? 30 : (t + 8) % 90, run = rl.stop - rl.x0 + 5, ease = (u: number) => u * u * (3 - 2 * u);
+  if (c < 14) return rl.x0 - 5 + run * (1 - (1 - ease(c / 14)) ** 1.5);
+  if (c < 36) return rl.stop;
+  if (c < 52) return rl.stop + (rl.x1 + 6 - rl.stop) * ((c - 36) / 16) ** 2;
+  return undefined;
+}
+/** A locomotive and two coaches heading right; the parts inside the tunnels are not drawn. */
+function drawTrain(front: number, rl: Plan["rail"]) {
+  const night = S.o!.dark, y = rl.y + 0.18, d = 0.64, loco = acc(), coach = night ? "#5a6276" : "#f4f1ea", roof = night ? "#3c4252" : "#9aa3b5";
+  const cars: [number, number, boolean][] = [[front - 1.9, 1.9, true], [front - 3.7, 1.7, false], [front - 5.5, 1.7, false]];
+  for (const [x, len, isLoco] of [...cars].reverse()) {
+    if (x < rl.x0 + 0.3 || x + len > rl.x1 + 0.7) continue;
+    box(x, y, len, d, 9, isLoco ? loco : coach, shade(toHex(isLoco ? (loco.startsWith("#") ? loco : "#6d7cff") : coach), 0.1), roof, 1.5);
+    if (isLoco) { box(x + len - 0.5, y, 0.5, d, 3, shade(toHex(loco.startsWith("#") ? loco : "#6d7cff"), 0.15), shade(toHex(loco.startsWith("#") ? loco : "#6d7cff"), 0.25), undefined, 10.5); onFace("x", x, y, len, d, 0.15, d - 0.15, 6, 9, night ? S.pal.lit : S.pal.win); }
+    else for (let i = 0; i < 4; i++) onFace("y", x, y, len, d, 0.15 + i * 0.4, 0.4 + i * 0.4, 5.5, 8.5, night ? S.pal.lit : S.pal.win);
+    for (const u of [0.25, len - 0.25]) { const [wx, wy] = P(x + u, y + d, 1.5); ctx.beginPath(); ctx.arc(wx, wy, 1.4, 0, 6.283); ctx.fillStyle = "#2a2d36"; ctx.fill(); }
+  }
+}
+/** A few birds in loose flocks, flapping across the sky (decoration only). */
+function birds(t: number) {
+  const pl = S.plan!, span = pl.hi - pl.lo;
+  ctx.save(); ctx.strokeStyle = S.o!.dark ? "rgba(210,220,240,.55)" : "rgba(60,66,80,.55)"; ctx.lineWidth = line * 1.1;
+  for (let f = 0; f < 3; f++) {
+    const u = ((t * (0.012 + f * 0.003) + f * 0.37) % 1), bx = pl.lo + u * span * 1.3 - span * 0.15, by = pl.lo + span * (0.25 + f * 0.25) + Math.sin(t * 0.2 + f) * 3;
+    for (let i = 0; i < 4 + f; i++) {
+      const ox = -i * 0.9 + Math.sin(i * 2.3) * 0.4, oy = (i % 2 ? 1 : -1) * i * 0.5, [sx, sy] = P(bx + ox, by + oy, 110 + f * 18 + Math.sin(t + i) * 3);
+      const flap = Math.sin(t * 8 + i * 1.7 + f) * 2.2;
+      ctx.beginPath(); ctx.moveTo(sx - 4, sy - flap); ctx.quadraticCurveTo(sx - 2, sy - 1, sx, sy + 0.5); ctx.quadraticCurveTo(sx + 2, sy - 1, sx + 4, sy - flap); ctx.stroke();
+    }
+  }
+  ctx.restore();
 }
 function bubbles(t: number) {
   const pl = S.plan!;

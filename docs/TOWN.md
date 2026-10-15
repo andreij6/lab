@@ -37,7 +37,8 @@ the rest of the Internet Computer. Homes skip them (`homeBlock` is the spiral wi
 | District | Blocks | Landmarks |
 |---|---|---|
 | The financial district (right, by the park) | (2,0), (2,1) | OISY Wallet (a bank), ICPSwap (an exchange) |
-| The ICP quarter (left) | (−2,−1) | The NNS (a capitol), Dominic Williams (a statue) |
+| The ICP quarter (left) | (−2,−1), (−2,0) | The NNS (a capitol), Dominic Williams (a statue), DFINITY on X (a news station) |
+| Embassy row (front, by the station) | (0,2) | The Pakistan Subnet (a data centre), UNDP · Universal Trusted Credentials (an office and small shops) |
 | The spaceport (front left, by the lake) | (−2,2) | SOON launchpad (a rocket that launches every two minutes) |
 
 To add a landmark, add an entry to its district: an id, a `kind`, a title, a blurb, a URL, its block and `at`
@@ -50,9 +51,11 @@ the back of the island through the lake and off the front edge in a waterfall, a
 Streets are drawn around the civic centre, all of ring 2, and the residential blocks up to the last one lived in, so
 the town grows block by block.
 
-**The campground**, between the lake and the town: a tent for each person who signed in within 30 days and owns no
-notebook (≤24; yours first, marked "You"), around a fire lit while anyone camps. The app calls the registry's
-`visit()` on sign-in (recorded at most hourly, in MemoryId 39; new visitors stop being recorded at 100,000).
+**The station**, across the front of the island: a railway between two tunnel mouths (a trestle over the river), a
+platform where visitors wait (people who signed in within 30 days and own no notebook, ≤24; yours first, marked
+"You"), a station house, and a train that comes in every 90 seconds, stops and goes on. The street from the town gate
+runs to it, so walkers come in from the station. The app calls the registry's `visit()` on sign-in (recorded at most
+hourly, in MemoryId 39; new visitors stop being recorded at 100,000).
 
 **Life**: people online in chat walk from the town gate to their channel's stall (yours in the accent colour; they
 never come out of houses, so chat is never tied to a home); newcomers play in the schoolyard; hikers walk the trail;

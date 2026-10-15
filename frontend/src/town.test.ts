@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { blockAt, cellAt, DISTRICTS, homeBlock, layoutTown, project, season, unproject, BRIDGE, LAND, ROAD, VOID, WATER, type TownData, type TownHouse } from "./town.ts";
+import { blockAt, cellAt, DISTRICTS, homeBlock, layoutTown, project, season, unproject, BRIDGE, LAND, RAIL, ROAD, VOID, WATER, type TownData, type TownHouse } from "./town.ts";
 
 const town = (houses: TownHouse[], more: Partial<TownData> = {}): TownData => ({ at: 1, houses, people: houses.length, homes: houses.length, maxShown: 600, quiet: 0, channels: [{ name: "general", online: 2, messages24h: 5 }], postTopics: [], postsLive: 0, posts24h: 0, listings: 3, rains24h: 0, hikers: 0, off: [], building: [], notebooks: houses.length, spawned24h: 0, spawned7d: 0, newcomers7d: 0, cycles: 0, burnPerDay: 0, fundraisersOpen: 0, raisedE8s: 0, campers: 0, meCamping: false, ...more });
 const house = (lot: number): TownHouse => ({ lot, storeys: 1, size: lot % 4, lit: lot % 3 });
@@ -83,21 +83,25 @@ test("town: districts hold their landmarks, and homes are never built there", ()
   const held = new Set(DISTRICTS.flatMap((d) => d.blocks.map((b) => b.join())));
   for (let b = 0; b < 40; b++) assert.ok(!held.has(homeBlock(b).join()), `home block ${b}`);
   const ids = pl.objs.flatMap((o) => (o.tg?.kind === "landmark" ? [o.tg.landmark.id] : []));
-  assert.deepEqual(ids.sort(), ["dominic", "icpswap", "nns", "oisy", "soon"]);
+  assert.deepEqual(ids.sort(), ["dfinity-news", "dominic", "icpswap", "nns", "oisy", "pakistan", "soon", "undp"]);
   for (const o of pl.objs.filter((o) => o.k === "house")) assert.ok(!held.has([Math.floor((o.x - 1) / 7), Math.floor((o.y - 1) / 7)].join()), `a home in a district at ${o.x},${o.y}`);
   // every district is named on a sign
   assert.deepEqual(new Set(pl.objs.filter((o) => o.k === "sign" && o.s === 1).map((o) => (o.tg as { district: { id: string } }).district.id)), new Set(DISTRICTS.map((d) => d.id)));
   for (const d of DISTRICTS) for (const l of d.landmarks) assert.ok(d.blocks.some((b) => b.join() === l.block.join()), `${l.id} sits in its district`);
 });
 
-test("town: people without a notebook camp by the lake, yours first", () => {
-  const pl = layoutTown(town([house(1)], { campers: 5, meCamping: true }));
-  const tents = pl.objs.filter((o) => o.k === "tent");
-  assert.equal(tents.length, 5);
-  assert.equal(tents.filter((o) => o.mine).length, 1);
-  assert.ok(pl.objs.some((o) => o.k === "campfire"));
-  for (const o of tents) assert.equal(cellAt(pl, Math.floor(o.x), Math.floor(o.y)), LAND);
-  assert.equal(layoutTown(town([house(1)], { campers: 99 })).objs.filter((o) => o.k === "tent").length, 24);
+test("town: a railway across the front of the island, a station by the town gate", () => {
+  const pl = layoutTown(town([house(1)]));
+  const { y, x0, x1, stop } = pl.rail;
+  assert.ok(x1 - x0 > 20 && stop > x0 && stop < x1);
+  for (let x = x0; x <= x1; x++) assert.ok([RAIL, WATER].includes(cellAt(pl, x, y)), `track at ${x}`);
+  assert.ok(pl.objs.some((o) => o.k === "trestle"), "a trestle where it crosses the river");
+  assert.ok(pl.objs.some((o) => o.k === "station") && pl.objs.filter((o) => o.k === "portal").length === 2);
+  // the street from the gate reaches the station, and walkers start there
+  assert.equal(cellAt(pl, 7, y - 3), ROAD);
+  assert.ok(pl.gate[1] > 21);
+  assert.ok(!pl.objs.some((o) => ["tree", "pine", "poplar", "bush"].includes(o.k) && Math.floor(o.y + o.d / 2) === y), "no trees on the track");
+  assert.equal(pl.platform.length, 24);
 });
 
 test("town: the districts are spread out, not side by side", () => {
