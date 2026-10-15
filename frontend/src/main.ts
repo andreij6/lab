@@ -53,7 +53,7 @@ import { THEMES, applyTheme, loadThemeState, saveThemeState, type ThemeState } f
 import { zip } from "./zip";
 import { addLink, addTag, suggest, type Suggestion } from "./garden";
 import type { Usage as NbUsage } from "./bindings/notebook";
-import { attachTown, season, townCamera, type Target as TownTarget, type TownData } from "./town";
+import { DISTRICTS, attachTown, season, townCamera, type Target as TownTarget, type TownData } from "./town";
 
 // ---------- the cycles minting canister: today's ICP price in cycles ----------
 
@@ -274,6 +274,8 @@ const S = {
   usage: undefined as NbUsage | undefined,
 
   town: undefined as { data?: TownData; legend: boolean; hudOpen?: boolean } | undefined,
+  /** buildings that went up in the town since it was last looked at: a dot on its icon */
+  townNews: 0,
   /** the landing page's town: null when it is switched off or did not load */
   landingTown: undefined as TownData | null | undefined,
   settings: parseSettings(undefined) as Settings,
@@ -940,7 +942,7 @@ function routeSheet(el: HTMLElement) {
   const nbId = S.notebook?.canister.toText();
   const inNb = !!S.notebook && !S.community && !S.board && !S.market && !S.admin && !S.town;
   type R = { label: string; icon: string; on: boolean; go: () => void; sub?: boolean; hidden?: boolean };
-  const tab = (t: Tab, label: string, ic: string): R => ({ label, icon: ic, sub: true, hidden: !featureOn(t), on: inNb && S.tab === t, go: () => { const i = document.createElement("i"); i.dataset.tab = t; if (!inNb) { S.community = undefined; S.board = undefined; S.market = undefined; S.admin = undefined; location.hash = `#/notebook/${nbId}`; } void onAction("tab", i, new MouseEvent("click")); } });
+  const tab = (t: Tab, label: string, ic: string): R => ({ label, icon: ic, sub: true, hidden: !featureOn(t), on: inNb && S.tab === t, go: () => { const i = document.createElement("i"); i.dataset.tab = t; if (!inNb) { S.community = undefined; S.board = undefined; S.market = undefined; S.admin = undefined; S.town = undefined; clearInterval(townTimer); location.hash = `#/notebook/${nbId}`; } void onAction("tab", i, new MouseEvent("click")); } });
   const routes: R[] = !S.identity ? [
     { label: "Lab", icon: "list", on: !S.town, go: () => { location.hash = "#/"; } },
     ...(flag("town") ? [{ label: "Town", icon: "town", on: !!S.town, go: () => { location.hash = "#/town"; } } as R] : []),
@@ -1116,7 +1118,7 @@ function ribbonHtml(i?: Info, low = false): string {
   const badge: Partial<Record<Tab, string>> = { study: dueTotal() ? `<i class="rb-count">${dueTotal()}</i>` : "", work: overdueCount() ? `<i class="rb-count danger">${overdueCount()}</i>` : "", trips: tripLate ? `<i class="rb-dot"></i>` : "" };
   return `<nav class="ribbon" aria-label="Sections">
       <div class="rb-group">${rb("notes", "Notes", "file")}${S.notebook ? FEATURES.map((f) => rb(f.id, tip[f.id] ?? f.label, f.icon, badge[f.id] ?? "")).join("") : ""}</div>
-      <div class="rb-group bottom">${rb("manage", `Manage${i ? ` · ${tc(i.cycles)}` : ""}`, "cog", low ? `<i class="rb-dot"></i>` : "")}<a class="rb ${S.community ? "on" : ""}" href="#/community" data-action="nav" title="Community${S.mentions ? ` · ${S.mentions} new mention${S.mentions === 1 ? "" : "s"}` : ""}" aria-label="Community">${icon("users")}${S.mentions ? `<i class="rb-badge">${S.mentions > 9 ? "9+" : S.mentions}</i>` : ""}</a>${flag("board") ? `<a class="rb ${S.board ? "on" : ""}" href="#/board" data-action="nav" title="Board: posts and discussion" aria-label="Board">${icon("pin")}</a>` : ""}${flag("town") ? `<a class="rb ${S.town ? "on" : ""}" href="#/town" data-action="nav" title="Town: Lab right now" aria-label="Town">${icon("town")}</a>` : ""}${flag("market") ? `<a class="rb ${S.market ? "on" : ""}" href="#/market" data-action="nav" title="Notebook market" aria-label="Notebook market">${icon("tag")}</a>` : ""}${S.isAdmin ? `<a class="rb ${S.admin ? "on" : ""}" href="#/admin" data-action="nav" title="Reports and ideas" aria-label="Reports and ideas">${icon("bug")}</a>` : ""}<button type="button" class="rb" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="rb" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button><button type="button" class="rb" data-action="sign-out" title="Sign out" aria-label="Sign out">${icon("out")}</button></div>
+      <div class="rb-group bottom">${rb("manage", `Manage${i ? ` · ${tc(i.cycles)}` : ""}`, "cog", low ? `<i class="rb-dot"></i>` : "")}<a class="rb ${S.community ? "on" : ""}" href="#/community" data-action="nav" title="Community${S.mentions ? ` · ${S.mentions} new mention${S.mentions === 1 ? "" : "s"}` : ""}" aria-label="Community">${icon("users")}${S.mentions ? `<i class="rb-badge">${S.mentions > 9 ? "9+" : S.mentions}</i>` : ""}</a>${flag("board") ? `<a class="rb ${S.board ? "on" : ""}" href="#/board" data-action="nav" title="Board: posts and discussion" aria-label="Board">${icon("pin")}</a>` : ""}${flag("town") ? `<a class="rb ${S.town ? "on" : ""}" href="#/town" data-action="nav" title="Town: Lab right now${S.townNews ? ` · ${S.townNews} new building${S.townNews === 1 ? "" : "s"}` : ""}" aria-label="Town">${icon("town")}${S.townNews ? `<i class="rb-dot" title="New buildings in town"></i>` : ""}</a>` : ""}${flag("market") ? `<a class="rb ${S.market ? "on" : ""}" href="#/market" data-action="nav" title="Notebook market" aria-label="Notebook market">${icon("tag")}</a>` : ""}${S.isAdmin ? `<a class="rb ${S.admin ? "on" : ""}" href="#/admin" data-action="nav" title="Reports and ideas" aria-label="Reports and ideas">${icon("bug")}</a>` : ""}<button type="button" class="rb" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="rb" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button><button type="button" class="rb" data-action="sign-out" title="Sign out" aria-label="Sign out">${icon("out")}</button></div>
     </nav>`;
 }
 function shellBody(body: string, i: Info | undefined, low: boolean, alert: string, mobileNav: string): string {
@@ -3075,6 +3077,7 @@ async function loadTown() {
     const d = await fetchTown();
     if (S.town !== t) return;
     if (!d) { if (!t.data) { toast("The town is closed right now.", "info"); location.hash = "#/"; } return; }
+    markTownSeen(d);
     const same = !!t.data && JSON.stringify(d) === JSON.stringify(t.data);
     t.data = d;
     // the canvas keeps focus and its tooltip when only the numbers moved: hand it the new data
@@ -3090,6 +3093,28 @@ async function loadTown() {
   clearInterval(townTimer);
   // a minute is plenty: the houses are counted every few hours, the squares live
   townTimer = window.setInterval(() => { if (!document.hidden && S.town === t) void pull(); }, 60_000);
+}
+/** What the town looked like when it was last looked at, to spot new buildings since. */
+type TownSeen = { homes: number; building: number[]; sponsors: string[]; landmarks: number };
+const townSeenNow = (d: TownData): TownSeen => ({ homes: d.homes, building: d.building, sponsors: d.sponsors.map((x) => x.name), landmarks: DISTRICTS.reduce((a, x) => a + x.landmarks.length, 0) });
+function markTownSeen(d: TownData) { store("nb-town-seen", JSON.stringify(townSeenNow(d))); S.townNews = 0; }
+/** New homes going up, sponsors' buildings or landmarks since the last look (none on the very first look). */
+function townNews(d: TownData): number {
+  let seen: TownSeen | undefined;
+  try { seen = JSON.parse(store("nb-town-seen") ?? "null") ?? undefined; } catch { /* nothing kept */ }
+  if (!seen) { store("nb-town-seen", JSON.stringify(townSeenNow(d))); return 0; }
+  const now = townSeenNow(d);
+  return now.building.filter((l) => !seen!.building.includes(l)).length + now.sponsors.filter((n) => !seen!.sponsors.includes(n)).length + Math.max(0, now.landmarks - seen.landmarks) + Math.max(0, now.homes - seen.homes);
+}
+let townNewsTimer = 0;
+/** Look at the town now and then so its icon can say when something new went up. */
+async function checkTownNews() {
+  if (!S.identity || !flag("town")) return;
+  const d = await fetchTown();
+  if (!d) return;
+  const n = S.town ? 0 : townNews(d);
+  if (n !== S.townNews) { S.townNews = n; render(); }
+  if (!townNewsTimer) townNewsTimer = window.setInterval(() => { if (!document.hidden) void checkTownNews(); }, 5 * 60_000);
 }
 let landingTownAsked = false;
 function loadLandingTown() {
@@ -4909,6 +4934,7 @@ async function loadNotebooks() {
     if (!REGISTRY) throw new Error("The registry canister ID is missing from this deployment");
     registry().is_admin().then((v) => { if (v !== S.isAdmin) { S.isAdmin = v; render(); } }).catch(() => {});
     registry().flags().then((f) => { S.flags = f; render(); }).catch(() => {});
+    void checkTownNews();
     // say hello once a load, so the town can count people who signed in without a notebook yet
     if (!visited) { visited = true; void registry().visit().catch(() => {}); }
     registry().price().then((p) => { S.price = p; }).catch(() => {});
@@ -7206,11 +7232,11 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
     case "noop": return;
     case "ribbon-tab": {
       const tab = el.dataset.tab as Tab;
-      if (S.notebook && !S.community && !S.board && !S.market && !S.admin) return onAction("tab", el, ev!);
+      if (S.notebook && !S.community && !S.board && !S.market && !S.admin && !S.town) return onAction("tab", el, ev!);
       const id = S.notebook?.canister.toText() ?? store("nb-last")?.match(/notebook\/([a-z0-9-]+)/)?.[1] ?? S.notebooks?.[0]?.canister.toText();
       if (!id) { location.hash = "#/"; return; }
       S.tab = tab;
-      S.community = undefined; clearInterval(chatTimer); S.board = undefined; S.market = undefined; S.admin = undefined;
+      S.community = undefined; clearInterval(chatTimer); S.board = undefined; S.market = undefined; S.admin = undefined; S.town = undefined; clearInterval(townTimer);
       const same = S.notebook?.canister.toText() === id;
       location.hash = `#/notebook/${id}`;
       if (same) render();
