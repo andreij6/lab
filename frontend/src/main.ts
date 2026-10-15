@@ -8498,6 +8498,17 @@ document.addEventListener("focusout", (ev) => {
 document.addEventListener("dblclick", (ev) => {
   const md = (ev.target as HTMLElement).closest<HTMLElement>(".md-cell:not(.editing)");
   if (md && !(ev.target as HTMLElement).closest("a, button")) { void onAction("nb-edit-md", md, ev as MouseEvent); return; }
+  // a double click on a note in reading mode opens it for editing (not on a link, a button, a task box or selected text)
+  const prev = (ev.target as HTMLElement).closest<HTMLElement>(".editor-panes.view-preview .preview");
+  if (prev && !S.mobile && !(ev.target as HTMLElement).closest("a, button, input, select, textarea, details, summary") && !getSelection()?.toString()) {
+    const pid = prev.closest<HTMLElement>(".pane[data-pane]")?.dataset.pane;
+    const p = pane(pid ? Number(pid) : undefined);
+    if (isAgentPath(p.active ?? "")) return;
+    p.view = "edit";
+    render();
+    const host = document.querySelector<HTMLElement>(`.cm-host[data-cm="${CSS.escape(p.active ?? "")}"]`);
+    for (const [h, ed] of editors) if (h === host) { ed.focus(); break; }
+  }
 });
 document.addEventListener("focusin", (ev) => {
   const ta = ev.target as HTMLElement;
