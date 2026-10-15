@@ -338,9 +338,7 @@ const S = {
   hits: [] as Hit[], hover: undefined as Target | undefined,
   raf: 0, last: 0, t0: performance.now(), still: still(), ro: undefined as ResizeObserver | undefined,
   drag: undefined as { x: number; y: number; cx: number; cy: number; moved: boolean } | undefined, pts: new Map<number, [number, number]>(), pinch: 0,
-  tapped: undefined as Target | undefined, pinched: false, warned: false,
-  /** drawing a chunk's image: still, and simpler when far out */
-  lod: false, caching: false, housesSeen: undefined as TownHouse[] | undefined, vis: [] as Chunk[], cached: false, dataSeen: undefined as TownData | undefined, look: "", flakes: [] as [number, number, number][],
+  tapped: undefined as Target | undefined, pinched: false, warned: false, flakes: [] as [number, number, number][],
 };
 
 let ctx!: CanvasRenderingContext2D;
@@ -429,13 +427,13 @@ function drawHouse(o: Obj, t: number) {
   const p = S.pal, hv = o.h!, r = rng(o.s), night = S.o!.dark;
   const { x, y, w, d } = o;
   if (o.building && hv.storeys <= 1) { drawSite(o, t); if (o.mine) mineMark(o, 30, t); return hit([P(x, y, 0), P(x + w, y + d, 0), P(x, y + d, 0), P(x + w, y, 0), P(x, y, 58)], o.tg); }
-  const { h, roofC, shape, chim, rh } = houseLook(o);
+  const h = 6 + hv.storeys * 8, roofC = toHex(p.roofs[Math.floor(r() * 5)]), shape = Math.floor(r() * 3), chim = r() < 0.6;
   const wallL = p.wall, wallR = p.wallR;
   if (o.mine) { ctx.save(); ctx.strokeStyle = acc(); ctx.lineWidth = line * 1.6; }
   box(x, y, w, d, h, wallL, wallR);
-  // windows: lit at night when the house was edited this week (too small to see far out)
+  // windows: lit at night when the house was edited this week
   const lit = night && hv.lit >= 1, winC = lit ? p.lit : p.win;
-  for (let s = 0; s < (S.lod ? 0 : hv.storeys); s++) {
+  for (let s = 0; s < hv.storeys; s++) {
     const z0 = 4 + s * 8, z1 = z0 + 4;
     const nl = Math.max(1, Math.round(w / 0.55)), nr = Math.max(1, Math.round(d / 0.55));
     for (let i = 0; i < nl; i++) { const u = (i + 0.5) * (w / nl); if (s === 0 && o.face === "y" && i === Math.floor(nl / 2)) continue; onFace("y", x, y, w, d, u - 0.11, u + 0.11, z0, z1, winC); }
@@ -446,7 +444,7 @@ function drawHouse(o: Obj, t: number) {
   if (lit) { const [cx, cy] = P(x + w / 2, y + d, h / 2); const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, 26); g.addColorStop(0, "rgba(255,210,130,.18)"); g.addColorStop(1, "rgba(255,210,130,0)"); ctx.fillStyle = g; ctx.fillRect(cx - 26, cy - 26, 52, 52); }
   let top = h;
   {
-    const dark2 = shade(roofC, 0.12);
+    const rh = 6 + Math.min(w, d) * 5, dark2 = shade(roofC, 0.12);
     if (shape === 0) { // gable, ridge along x
       poly([P(x, y, h), P(x + w, y, h), P(x + w, y + d / 2, h + rh), P(x, y + d / 2, h + rh)], dark2);
       poly([P(x, y + d, h), P(x + w, y + d, h), P(x + w, y + d / 2, h + rh), P(x, y + d / 2, h + rh)], roofC);
@@ -463,7 +461,14 @@ function drawHouse(o: Obj, t: number) {
     if (chim) box(x + w * 0.25, y + d * 0.2, 0.18, 0.18, rh * 0.75 + 3, shade(roofC, 0.3), shade(roofC, 0.4), shade(roofC, 0.2), h);
     top = h + rh;
     // smoke when it was edited today
-    if (!S.still) houseSmoke(o, t);
+    if (chim && hv.lit === 2 && !S.still) {
+      const [cx, cy] = P(x + w * 0.34, y + d * 0.29, h + rh * 0.75 + 3);
+      for (let i = 0; i < 4; i++) {
+        const u = ((t * 0.35 + i / 4 + (o.s % 97) / 97) % 1);
+        ctx.fillStyle = night ? `rgba(200,210,230,${0.35 * (1 - u)})` : `rgba(150,158,170,${0.35 * (1 - u)})`;
+        ctx.beginPath(); ctx.arc(cx + Math.sin(u * 6 + i) * 3 + u * 6, cy - u * 22, 1.5 + u * 3, 0, 6.283); ctx.fill();
+      }
+    }
   }
   if (o.mine) ctx.restore();
   // a new notebook: another storey going up
@@ -496,12 +501,6 @@ function label(text: string, x: number, y: number, color: string) {
 function drawTree(o: Obj) {
   const p = S.pal, [bx, by] = P(o.x + o.w / 2, o.y + o.d / 2), r = rng(o.s), sc = 0.8 + r() * 0.45, winter = S.sea.name === "winter";
   const leaf = p.leaf[Math.floor(r() * p.leaf.length)], dark = shade(toHex(leaf), 0.14), light = shade(toHex(leaf), -0.12);
-  // far out: one plain shape a tree
-  if (S.lod) {
-    if (o.k === "pine") poly([[bx - 7 * sc, by - 3], [bx + 7 * sc, by - 3], [bx, by - 24 * sc]], toHex(p.pine));
-    else { ctx.beginPath(); ctx.ellipse(bx, by - (o.k === "poplar" ? 14 : 11) * sc, (o.k === "poplar" ? 4.5 : 7) * sc, (o.k === "poplar" ? 11 : 7.5) * sc, 0, 0, 6.283); ctx.fillStyle = leaf; ctx.fill(); ctx.stroke(); }
-    return;
-  }
   ctx.fillStyle = "rgba(0,0,0,.07)"; ctx.beginPath(); ctx.ellipse(bx + 2, by, 7 * sc, 3.2 * sc, 0, 0, 6.283); ctx.fill();
   const trunk = (hgt: number) => { ctx.save(); ctx.strokeStyle = p.trunk; ctx.lineWidth = line * 1.6; ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx, by - hgt); ctx.stroke(); ctx.restore(); };
   /** An ellipse canopy with its shading, outlined once. */
@@ -965,168 +964,74 @@ function drawObj(o: Obj, t: number) {
   }
 }
 
-// ---------------------------------------------------------------- chunks
-//
-// The island is cut into chunks of 14×14 tiles (two blocks, so no block, pond or paving crosses one).
-// Each chunk keeps its own ground paths, its objects in painter's order and where they can be hit.
-// Close up (zoom ≥ 1) the visible chunks are drawn directly every frame, animated. Further out each
-// chunk is drawn once into an image at a few fixed zooms and reused (a town of 20,000 homes is far too
-// much to draw 30 times a second), with only the lively buildings, smoke and people drawn on top live.
-
-const CH = 14, CLIFF = 8, TOP = 120, BOT = 18, ZDIRECT = 1;
-/** Drawn live over the cached chunks: the few things that move. */
-const LIVE: ReadonlySet<Kind> = new Set<Kind>(["fountain", "factory", "launchpad", "hall", "chapel", "tower", "exchange", "campfire"]);
-type Chunk = {
-  key: string; x0: number; y0: number; L: number; T: number; W: number; H: number; objs: number[];
-  land: Path2D; road: Path2D; water: Path2D; shore: Path2D; coast: Path2D; sideL: Path2D; sideR: Path2D; any: boolean;
-  falls: [number, number, "x" | "y"][]; ripples: [number, number, number][]; paving: number[][]; ponds: number[][]; loop: boolean;
-  hits: Hit[]; images: Map<number, HTMLCanvasElement>; used: number;
-};
-let chunkSet: { plan: Plan; list: Chunk[] } | undefined;
-const chunkOf = (x: number, y: number) => `${Math.floor(x / CH)},${Math.floor(y / CH)}`;
-function chunks(pl: Plan): Chunk[] {
-  if (chunkSet?.plan === pl) return chunkSet.list;
-  const by = new Map<string, Chunk>();
-  const get = (x: number, y: number) => {
-    const key = chunkOf(x, y);
-    let c = by.get(key);
-    if (!c) {
-      const x0 = Math.floor(x / CH) * CH, y0 = Math.floor(y / CH) * CH, L = P(x0, y0 + CH)[0], T = P(x0, y0)[1] - TOP;
-      c = { key, x0, y0, L, T, W: P(x0 + CH, y0)[0] - L, H: P(x0 + CH, y0 + CH)[1] + BOT - T, objs: [], land: new Path2D(), road: new Path2D(), water: new Path2D(), shore: new Path2D(), coast: new Path2D(), sideL: new Path2D(), sideR: new Path2D(), any: false, falls: [], ripples: [], paving: [], ponds: [], loop: false, hits: [], images: new Map(), used: 0 };
-      by.set(key, c);
-    }
-    return c;
-  };
+/** The island's ground as paths (built once per plan): land, roads, water, the shore, the cliff
+ *  faces we can see, and where the river spills over the edge. */
+type Ground = { plan: Plan; land: Path2D; road: Path2D; water: Path2D; shore: Path2D; coast: Path2D; sideL: Path2D; sideR: Path2D; falls: [number, number, "x" | "y"][]; ripples: [number, number, number][] };
+let groundCache: Ground | undefined;
+const CLIFF = 8;
+function ground(pl: Plan): Ground {
+  if (groundCache?.plan === pl) return groundCache;
+  const g: Ground = { plan: pl, land: new Path2D(), road: new Path2D(), water: new Path2D(), shore: new Path2D(), coast: new Path2D(), sideL: new Path2D(), sideR: new Path2D(), falls: [], ripples: [] };
   const tile = (path: Path2D, x: number, y: number) => { const q = flat(x, y, 1, 1); path.moveTo(q[0][0], q[0][1]); for (let i = 1; i < 4; i++) path.lineTo(q[i][0], q[i][1]); path.closePath(); };
-  const quad = (path: Path2D, q: [number, number][]) => { path.moveTo(q[0][0], q[0][1]); for (let i = 1; i < q.length; i++) path.lineTo(q[i][0], q[i][1]); path.closePath(); };
+  const edge = (path: Path2D, a: [number, number], b: [number, number]) => { path.moveTo(a[0], a[1]); path.lineTo(b[0], b[1]); };
   for (let y = pl.lo; y <= pl.hi; y++) for (let x = pl.lo; x <= pl.hi; x++) {
     const v = cellAt(pl, x, y);
     if (v === VOID) continue;
-    const c = get(x, y), wet = v === WATER || v === BRIDGE;
-    c.any = true;
-    tile(c.land, x, y);
-    if (v === ROAD) tile(c.road, x, y);
-    if (wet) { tile(c.water, x, y); if (h01(`rp${x},${y}`) < 0.12) c.ripples.push([x + 0.5, y + 0.5, h01(`rq${x},${y}`) * 6]); }
+    tile(g.land, x, y);
+    const wet = v === WATER || v === BRIDGE;
+    if (v === ROAD) tile(g.road, x, y);
+    if (wet) { tile(g.water, x, y); if (h01(`rp${x},${y}`) < 0.12) g.ripples.push([x + 0.5, y + 0.5, h01(`rq${x},${y}`) * 6]); }
     const n = [[0, -1], [1, 0], [0, 1], [-1, 0]].map(([dx, dy]) => cellAt(pl, x + dx, y + dy));
     const corners: [number, number][] = [P(x, y), P(x + 1, y), P(x + 1, y + 1), P(x, y + 1)];
     n.forEach((nv, i) => {
       const a = corners[i], b = corners[(i + 1) % 4];
-      const path = nv === VOID ? c.coast : wet !== (nv === WATER || nv === BRIDGE) ? c.shore : undefined;
-      if (path) { path.moveTo(a[0], a[1]); path.lineTo(b[0], b[1]); }
+      if (nv === VOID) edge(g.coast, a, b);
+      else if (wet !== (nv === WATER || nv === BRIDGE)) edge(g.shore, a, b);
     });
     // the cliff faces toward us: below the +y and +x edges where the island ends
-    if (n[2] === VOID) { if (wet) c.falls.push([x, y, "y"]); else quad(c.sideL, [P(x, y + 1), P(x + 1, y + 1), P(x + 1, y + 1, -CLIFF), P(x, y + 1, -CLIFF)]); }
-    if (n[1] === VOID) { if (wet) c.falls.push([x, y, "x"]); else quad(c.sideR, [P(x + 1, y), P(x + 1, y + 1), P(x + 1, y + 1, -CLIFF), P(x + 1, y, -CLIFF)]); }
+    if (n[2] === VOID) { const q: [number, number][] = [P(x, y + 1), P(x + 1, y + 1), P(x + 1, y + 1, -CLIFF), P(x, y + 1, -CLIFF)]; if (wet) g.falls.push([x, y, "y"]); else { g.sideL.moveTo(q[0][0], q[0][1]); q.slice(1).forEach((p) => g.sideL.lineTo(p[0], p[1])); g.sideL.closePath(); } }
+    if (n[1] === VOID) { const q: [number, number][] = [P(x + 1, y), P(x + 1, y + 1), P(x + 1, y + 1, -CLIFF), P(x + 1, y, -CLIFF)]; if (wet) g.falls.push([x, y, "x"]); else { g.sideR.moveTo(q[0][0], q[0][1]); q.slice(1).forEach((p) => g.sideR.lineTo(p[0], p[1])); g.sideR.closePath(); } }
   }
-  pl.objs.forEach((o, i) => get(o.x + o.w / 2, o.y + o.d / 2).objs.push(i));
-  for (const r of pl.paving) get(r[0] + r[2] / 2, r[1] + r[3] / 2).paving.push(r);
-  for (const r of pl.water) get(r[0] + r[2] / 2, r[1] + r[3] / 2).ponds.push(r);
-  get(pl.loop[0][0] + 1, pl.loop[0][1] + 1).loop = true;
-  // back to front
-  const list = [...by.values()].sort((a, b) => a.x0 + a.y0 - (b.x0 + b.y0) || a.x0 - b.x0);
-  chunkSet = { plan: pl, list };
-  return list;
+  return (groundCache = g);
 }
-/** A chunk's ground: its cliffs, land with a faint grid, streets, paving, water, ponds, the trail. */
-function drawChunkGround(c: Chunk, t: number) {
-  const pl = S.plan!, p = S.pal, night = S.o!.dark, frozen = S.sea.name === "winter";
+/** The ground: the island's cliffs, land with a faint grid, the streets, paving, the lake and river. */
+function drawGround(t: number) {
+  const pl = S.plan!, p = S.pal, g = ground(pl), night = S.o!.dark, frozen = S.sea.name === "winter";
   const edgeC = p.edge.startsWith("#") ? p.edge : "#dcdfe4";
-  ctx.fillStyle = edgeC; ctx.fill(c.sideL); ctx.stroke(c.sideL);
-  ctx.fillStyle = shade(edgeC, 0.08); ctx.fill(c.sideR); ctx.stroke(c.sideR);
+  ctx.fillStyle = edgeC; ctx.fill(g.sideL); ctx.stroke(g.sideL);
+  ctx.fillStyle = shade(edgeC, 0.08); ctx.fill(g.sideR); ctx.stroke(g.sideR);
   // where the river leaves the island: a waterfall
   const wat = frozen ? (night ? "#4a5a6e" : "#e2edf3") : p.water;
-  for (const [x, y, f] of c.falls) {
+  for (const [x, y, f] of g.falls) {
     const q: [number, number][] = f === "y" ? [P(x, y + 1), P(x + 1, y + 1), P(x + 1, y + 1, -CLIFF - 6), P(x, y + 1, -CLIFF - 6)] : [P(x + 1, y), P(x + 1, y + 1), P(x + 1, y + 1, -CLIFF - 6), P(x + 1, y, -CLIFF - 6)];
     poly(q, wat);
     if (!S.still && !frozen) { ctx.save(); ctx.strokeStyle = "rgba(255,255,255,.7)"; for (let i = 0; i < 3; i++) { const u = (t * 1.2 + i / 3) % 1, a = q[0], b = q[1], m = [(a[0] + b[0]) / 2 + (i - 1) * 4, (a[1] + b[1]) / 2]; ctx.beginPath(); ctx.moveTo(m[0], m[1] + u * (CLIFF + 2)); ctx.lineTo(m[0], m[1] + u * (CLIFF + 2) + 4); ctx.stroke(); } ctx.restore(); }
   }
-  ctx.fillStyle = p.ground; ctx.fill(c.land);
-  if (!S.lod) {
-    ctx.save(); ctx.clip(c.land); ctx.lineWidth = line * 0.7; ctx.strokeStyle = p.grid; ctx.beginPath();
-    for (let i = 0; i <= CH; i++) { let a = P(c.x0 + i, c.y0), b = P(c.x0 + i, c.y0 + CH); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); a = P(c.x0, c.y0 + i); b = P(c.x0 + CH, c.y0 + i); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); }
-    ctx.stroke(); ctx.restore();
-  }
-  ctx.fillStyle = p.road; ctx.fill(c.road);
-  for (const [x, y, w, d] of c.paving) poly(flat(x, y, w, d), p.pave, false);
-  ctx.fillStyle = wat; ctx.fill(c.water);
-  ctx.save(); ctx.strokeStyle = night ? "#4a5a70" : "#a9c6d6"; ctx.lineWidth = line; ctx.stroke(c.shore); ctx.restore();
+  ctx.fillStyle = p.ground; ctx.fill(g.land);
+  ctx.save(); ctx.clip(g.land); ctx.lineWidth = line * 0.7; ctx.strokeStyle = p.grid;
+  ctx.beginPath();
+  for (let i = pl.lo; i <= pl.hi + 1; i++) { let a = P(i, pl.lo), b = P(i, pl.hi + 1); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); a = P(pl.lo, i); b = P(pl.hi + 1, i); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); }
+  ctx.stroke(); ctx.restore();
+  ctx.fillStyle = p.road; ctx.fill(g.road);
+  for (const [x, y, w, d] of pl.paving) poly(flat(x, y, w, d), p.pave, false);
+  ctx.fillStyle = wat; ctx.fill(g.water);
+  ctx.save(); ctx.strokeStyle = night ? "#4a5a70" : "#a9c6d6"; ctx.lineWidth = line; ctx.stroke(g.shore); ctx.restore();
   // ripples on open water; cracks in the ice
-  if (!S.lod) {
-    ctx.save(); ctx.strokeStyle = frozen ? (night ? "rgba(200,215,235,.35)" : "rgba(255,255,255,.9)") : night ? "rgba(170,200,230,.35)" : "rgba(255,255,255,.75)"; ctx.lineWidth = line * 0.8;
-    for (const [x, y, ph] of c.ripples) {
-      const [sx, sy] = P(x, y);
-      if (frozen) { ctx.beginPath(); ctx.moveTo(sx - 5, sy - 1); ctx.lineTo(sx, sy + 1); ctx.lineTo(sx + 4, sy - 2); ctx.stroke(); continue; }
-      const u = S.still ? 0.5 : (t * 0.25 + ph) % 1;
-      ctx.globalAlpha = Math.sin(u * Math.PI); ctx.beginPath(); ctx.ellipse(sx, sy, 3 + u * 6, (3 + u * 6) / 2, 0, Math.PI * 1.1, Math.PI * 1.9); ctx.stroke();
-    }
-    ctx.restore();
+  ctx.save(); ctx.strokeStyle = frozen ? (night ? "rgba(200,215,235,.35)" : "rgba(255,255,255,.9)") : night ? "rgba(170,200,230,.35)" : "rgba(255,255,255,.75)"; ctx.lineWidth = line * 0.8;
+  for (const [x, y, ph] of g.ripples) {
+    const [sx, sy] = P(x, y);
+    if (frozen) { ctx.beginPath(); ctx.moveTo(sx - 5, sy - 1); ctx.lineTo(sx, sy + 1); ctx.lineTo(sx + 4, sy - 2); ctx.stroke(); continue; }
+    const u = S.still ? 0.5 : (t * 0.25 + ph) % 1;
+    ctx.globalAlpha = Math.sin(u * Math.PI); ctx.beginPath(); ctx.ellipse(sx, sy, 3 + u * 6, (3 + u * 6) / 2, 0, Math.PI * 1.1, Math.PI * 1.9); ctx.stroke();
   }
-  ctx.save(); ctx.strokeStyle = night ? "#4a5a70" : "#b9cfdb"; ctx.lineWidth = line * 0.8;
-  for (const [x, y, w, d] of c.ponds) { const [cx, cy] = P(x + w / 2, y + d / 2); ctx.beginPath(); ctx.ellipse(cx, cy, (w + d) * 7.6, (w + d) * 3.8, 0, 0, 6.283); ctx.fillStyle = wat; ctx.fill(); ctx.stroke(); }
   ctx.restore();
-  if (c.loop) {
-    ctx.save(); ctx.strokeStyle = night ? "#3a4252" : "#e3dccb"; ctx.lineWidth = 5; ctx.lineJoin = "round";
-    ctx.beginPath(); pl.loop.forEach(([x, y], i) => { const [sx, sy] = P(x, y); i ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy); }); ctx.closePath(); ctx.stroke(); ctx.restore();
-  }
-  ctx.save(); ctx.strokeStyle = p.line; ctx.globalAlpha = 0.55; ctx.stroke(c.coast); ctx.restore();
-}
-/** Draw one object, so that one that fails can't blank the rest of the town. */
-function drawSafe(o: Obj, t: number) {
-  try { drawObj(o, t); } catch (e) { if (!S.warned) { S.warned = true; console.warn("town: could not draw", o.k, e); } }
-}
-/** The zooms chunks are cached at: half an octave apart. */
-const bucket = (z: number) => Math.pow(2, Math.round(Math.log2(z) * 2) / 2);
-// ponytail: about 40 million pixels of chunk images (~160 MB) at most, least recently seen dropped first
-let pixelsHeld = 0, frameNo = 0;
-const MAX_PIXELS = 40e6;
-const pixels = (c: Chunk) => { let n = 0; for (const im of c.images.values()) n += im.width * im.height; return n; };
-/** A chunk drawn still into an image at zoom `zb` (its hits kept for picking). */
-function chunkImage(c: Chunk, zb: number): HTMLCanvasElement | undefined {
-  // sharp close up; far out, one pixel per pixel is plenty
-  const dpr = zb >= 0.7 ? Math.min(S.dpr, 1.5) : 1, cv = document.createElement("canvas");
-  cv.width = Math.max(1, Math.ceil(c.W * zb * dpr)); cv.height = Math.max(1, Math.ceil(c.H * zb * dpr));
-  const cx = cv.getContext("2d");
-  if (!cx) return undefined;
-  const keep = { ctx, line, still: S.still, lod: S.lod, hits: S.hits, caching: S.caching };
-  ctx = cx; S.still = true; S.lod = zb < 0.5; S.caching = true; S.hits = [];
-  line = 1.25 / Math.max(0.7, zb);
-  ctx.setTransform(zb * dpr, 0, 0, zb * dpr, -c.L * zb * dpr, -c.T * zb * dpr);
-  ctx.lineWidth = line; ctx.lineJoin = "round"; ctx.strokeStyle = S.pal.line;
-  drawChunkGround(c, 0);
-  for (const i of c.objs) { const o = S.plan!.objs[i]; if (!LIVE.has(o.k)) drawSafe(o, 0); }
-  c.hits = S.hits;
-  ({ ctx, line } = keep); S.still = keep.still; S.lod = keep.lod; S.hits = keep.hits; S.caching = keep.caching;
-  c.images.set(zb, cv);
-  pixelsHeld += cv.width * cv.height;
-  // keep memory bounded: drop the images of the chunks seen longest ago
-  if (pixelsHeld > MAX_PIXELS) {
-    const old = chunks(S.plan!).filter((k) => k.images.size && k.used < frameNo).sort((a, b) => a.used - b.used);
-    for (const k of old) { pixelsHeld -= pixels(k); k.images.clear(); if (pixelsHeld < MAX_PIXELS * 0.7) break; }
-  }
-  return cv;
-}
-/** Forget every cached image (the data, theme or season changed). */
-function dropImages() { if (chunkSet) for (const c of chunkSet.list) c.images.clear(); pixelsHeld = 0; }
-/** The chunks on screen, back to front. */
-function visibleChunks(): Chunk[] {
-  const { cam, w, h } = S, x0 = cam.x - w / 2 / cam.z, x1 = cam.x + w / 2 / cam.z, y0 = cam.y - h / 2 / cam.z, y1 = cam.y + h / 2 / cam.z;
-  return chunks(S.plan!).filter((c) => c.any || c.objs.length ? c.L < x1 && c.L + c.W > x0 && c.T < y1 && c.T + c.H > y0 : false);
-}
-/** A house's look from its lot: storey height, roof colour and shape, chimney, roof height. */
-function houseLook(o: Obj) {
-  const r = rng(o.s), hv = o.h!, h = 6 + hv.storeys * 8, roofC = toHex(S.pal.roofs[Math.floor(r() * 5)]), shape = Math.floor(r() * 3), chim = r() < 0.6, rh = 6 + Math.min(o.w, o.d) * 5;
-  return { h, roofC, shape, chim, rh };
-}
-/** Smoke from a chimney: a house edited today. */
-function houseSmoke(o: Obj, t: number) {
-  const { h, chim, rh } = houseLook(o);
-  if (!chim || o.h!.lit !== 2 || (o.building && o.h!.storeys <= 1)) return;
-  const night = S.o!.dark, [cx, cy] = P(o.x + o.w * 0.34, o.y + o.d * 0.29, h + rh * 0.75 + 3);
-  for (let i = 0; i < 4; i++) {
-    const u = ((t * 0.35 + i / 4 + (o.s % 97) / 97) % 1);
-    ctx.fillStyle = night ? `rgba(200,210,230,${0.35 * (1 - u)})` : `rgba(150,158,170,${0.35 * (1 - u)})`;
-    ctx.beginPath(); ctx.arc(cx + Math.sin(u * 6 + i) * 3 + u * 6, cy - u * 22, 1.5 + u * 3, 0, 6.283); ctx.fill();
-  }
+  ctx.save(); ctx.strokeStyle = night ? "#4a5a70" : "#b9cfdb"; ctx.lineWidth = line * 0.8;
+  for (const [x, y, w, d] of pl.water) { const [cx, cy] = P(x + w / 2, y + d / 2); ctx.beginPath(); ctx.ellipse(cx, cy, (w + d) * 7.6, (w + d) * 3.8, 0, 0, 6.283); ctx.fillStyle = wat; ctx.fill(); ctx.stroke(); }
+  ctx.restore();
+  // the trail loop through the grove
+  ctx.save(); ctx.strokeStyle = night ? "#3a4252" : "#e3dccb"; ctx.lineWidth = 5; ctx.lineJoin = "round";
+  ctx.beginPath(); pl.loop.forEach(([x, y], i) => { const [sx, sy] = P(x, y); i ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy); }); ctx.closePath(); ctx.stroke(); ctx.restore();
+  ctx.save(); ctx.strokeStyle = p.line; ctx.globalAlpha = 0.55; ctx.stroke(g.coast); ctx.restore();
 }
 
 // ---------------------------------------------------------------- life
@@ -1203,13 +1108,12 @@ function frame(now: number) {
   line = 1.25 / Math.max(0.7, cam.z);
   ctx.lineWidth = line; ctx.lineJoin = "round"; ctx.strokeStyle = S.pal.line;
   S.hits = [];
-  // a new look (data, theme, season, accent) means the cached chunks are stale
-  const look = `${S.o.dark}|${S.sea.name}|${S.accent.join()}`;
-  if (S.dataSeen !== S.data || S.look !== look) { dropImages(); S.dataSeen = S.data; S.look = look; }
-  const vis = (S.vis = visibleChunks()), cached = (S.cached = cam.z < ZDIRECT && S.o.mode === "full");
-  // people: in chat (walking to their stalls), newcomers in the schoolyard, hikers on the trail
+  drawGround(t);
+  // what's on screen, with a margin for tall things
+  const vx0 = cam.x - w / 2 / cam.z - 60, vx1 = cam.x + w / 2 / cam.z + 60, vy0 = cam.y - h / 2 / cam.z - 20, vy1 = cam.y + h / 2 / cam.z + 80;
   const live: { k: number; draw: () => void }[] = [];
   for (const wk of S.walkers) { const [x, y] = walkerAt(wk); live.push({ k: x + y, draw: () => { drawPerson(x, y, wk.me ? acc() : S.pal.person[wk.c], t, wk.state !== "stay"); const [px, py] = P(x, y); hit([[px - 4, py - 12], [px + 4, py + 2]], (wk.tg ??= { kind: "walker", channel: wk.ch, me: wk.me })); } }); }
+  // this week's newcomers play in the schoolyard
   const [yx, yy, yw, yd] = S.plan.yard;
   for (let i = 0; i < Math.min(12, S.data!.newcomers7d); i++) {
     const a = t * 0.4 + i * 1.7, x = yx + 0.3 + ((i * 0.37) % 1) * (yw - 0.6) + (S.still ? 0 : Math.sin(a) * 0.25), y = yy + 0.3 + ((i * 0.61) % 1) * (yd - 0.6) + (S.still ? 0 : Math.cos(a * 0.8) * 0.2);
@@ -1218,42 +1122,16 @@ function frame(now: number) {
   }
   for (const hk of S.hikers) { const [x, y] = loopAt(hk.u); live.push({ k: x + y, draw: () => drawPerson(x, y, S.pal.person[hk.c], t, true) }); }
   live.sort((a, b) => a.k - b.k);
-  if (!cached) {
-    // close up: the visible chunks' ground, then their objects back to front with the people among them
-    for (const c of vis) drawChunkGround(c, t);
-    const idx = vis.flatMap((c) => c.objs).sort((a, b) => a - b);
-    const objs = idx.map((i) => S.plan!.objs[i]);
-    const vx0 = cam.x - w / 2 / cam.z - 60, vx1 = cam.x + w / 2 / cam.z + 60, vy0 = cam.y - h / 2 / cam.z - 20, vy1 = cam.y + h / 2 / cam.z + 140;
-    for (const o of objs) {
-      const [sx, sy] = P(o.x + o.w / 2, o.y + o.d / 2);
-      if (sx < vx0 || sx > vx1 || sy < vy0 || sy > vy1) continue;
-      const k = o.x + o.w / 2 + o.y + o.d / 2;
-      while (live.length && live[0].k < k) live.shift()!.draw();
-      drawSafe(o, t);
-    }
-  } else {
-    // further out: each chunk's still image (made a few a frame, the rest borrowed from another zoom
-    // meanwhile), then what moves on top
-    const zb = bucket(cam.z), until = performance.now() + 14;
-    let pending = false;
-    frameNo++;
-    for (const c of vis) {
-      c.used = frameNo;
-      let img = c.images.get(zb);
-      let at = zb;
-      // make images for about 14 ms a frame; borrow another zoom's image for the rest meanwhile
-      if (!img && performance.now() < until) img = chunkImage(c, zb);
-      if (!img) for (const [z2, im] of c.images) { img = im; at = z2; break; }
-      if (img) ctx.drawImage(img, c.L, c.T, c.W, c.H);
-      if (at !== zb || !img) pending = true;
-    }
-    // still frames (reduced motion) only draw when asked: ask again until every chunk has its image
-    if (pending && S.still) requestAnimationFrame(() => frame(performance.now()));
-    const lively = vis.flatMap((c) => c.objs).sort((a, b) => a - b).map((i) => S.plan!.objs[i]);
-    for (const o of lively) if (LIVE.has(o.k)) drawSafe(o, t);
-    if (!S.still && cam.z >= 0.35) { let n = 0; for (const o of lively) if (o.k === "house" && o.h!.lit === 2 && n++ < 400) houseSmoke(o, t); }
+  let li = 0;
+  for (const o of S.plan.objs) {
+    const k = o.x + o.w / 2 + o.y + o.d / 2;
+    while (li < live.length && live[li].k < k) live[li++].draw();
+    const [sx, sy] = P(o.x + o.w / 2, o.y + o.d / 2);
+    if (sx < vx0 || sx > vx1 || sy < vy0 || sy > vy1) continue;
+    // one drawing that fails must not blank the rest of the town
+    try { drawObj(o, t); } catch (e) { if (!S.warned) { S.warned = true; console.warn("town: could not draw", o.k, e); } }
   }
-  for (const l of live) l.draw();
+  while (li < live.length) live[li++].draw();
   // speech bubbles over the stalls, at the channel's pace (sped up), and a cloud when it rained lately
   if (!S.still) bubbles(t);
   if (S.data!.lastRain && Date.now() - S.data!.lastRain < 3600e3 && !S.still) rainCloud(t);
@@ -1307,8 +1185,7 @@ function weather(dt: number) {
   }
 }
 function outlineHover() {
-  let h: Hit | undefined;
-  for (const list of hitLists()) if ((h = list.find((x) => x.tg === S.hover))) break;
+  const h = S.hits.find((x) => x.tg === S.hover);
   if (!h) return;
   ctx.save(); ctx.strokeStyle = rgba(S.accent, 0.8); ctx.setLineDash([4, 3]); ctx.lineWidth = line * 1.2;
   ctx.beginPath(); ctx.roundRect(h.x0 - 3, h.y0 - 3, h.x1 - h.x0 + 6, h.y1 - h.y0 + 6, 6); ctx.stroke(); ctx.restore();
@@ -1330,8 +1207,7 @@ function start() {
 // ---------------------------------------------------------------- the camera and input
 
 const worldBox = () => { const pl = S.plan!; const l = P(pl.lo, pl.hi + 1)[0], r = P(pl.hi + 1, pl.lo)[0], top = P(pl.lo, pl.lo)[1], bot = P(pl.hi + 1, pl.hi + 1)[1]; return { l, r, top, bot }; };
-let minZ = 0.22;
-const clampZ = (z: number) => Math.max(minZ, Math.min(2.5, z));
+const clampZ = (z: number) => Math.max(0.22, Math.min(2.5, z));
 function home() {
   const b = worldBox(), pl = S.plan!;
   if (S.o!.mode === "preview") {
@@ -1341,10 +1217,9 @@ function home() {
     S.cam = { x: cx, y: cy, z: clampZ(Math.min(S.w / 640, S.h / 300)) };
     return;
   }
-  // the whole island (a big one may zoom out further to fit)
-  const span = (pl.hi - pl.lo + 1) * TW, fit = Math.min(S.w / span, (S.h - 120) / (span / 2));
-  minZ = Math.min(0.22, fit);
-  S.fit = clampZ(fit * 1.25);
+  // the whole island
+  const span = (pl.hi - pl.lo + 1) * TW;
+  S.fit = clampZ(Math.min(S.w / span, (S.h - 120) / (span / 2)) * 1.25);
   S.cam = { x: (b.l + b.r) / 2, y: (b.top + b.bot) / 2, z: S.fit };
 }
 /** The camera from the toolbar: zoom, recentre, or fly to a lot. */
@@ -1368,11 +1243,9 @@ function size() {
   if (first || S.o?.mode === "preview") home();
   if (S.still) frame(performance.now());
 }
-/** Everything that can be hit, front first: what was drawn this frame, then the cached chunks. */
-function hitLists(): Hit[][] { return S.cached ? [S.hits, ...[...S.vis].reverse().map((c) => c.hits)] : [S.hits]; }
 function pick(e: PointerEvent | MouseEvent): Target | undefined {
   const b = S.canvas!.getBoundingClientRect(), mx = (e.clientX - b.left - S.w / 2) / S.cam.z + S.cam.x, my = (e.clientY - b.top - S.h / 2) / S.cam.z + S.cam.y;
-  for (const list of hitLists()) for (let i = list.length - 1; i >= 0; i--) { const h = list[i]; if (mx >= h.x0 && mx <= h.x1 && my >= h.y0 && my <= h.y1) return h.tg; }
+  for (let i = S.hits.length - 1; i >= 0; i--) { const h = S.hits[i]; if (mx >= h.x0 && mx <= h.x1 && my >= h.y0 && my <= h.y1) return h.tg; }
   return undefined;
 }
 function showTip(tg: Target | undefined, e?: { clientX: number; clientY: number }) {
@@ -1466,9 +1339,8 @@ export function attachTown(canvas: HTMLCanvasElement, o: TownOpts) {
   S.sea = season(new Date());
   S.pal = palette(o.dark, S.sea.name);
   S.accent = accentOf(o.accent);
-  // the houses array is handed over unchanged until the houses are counted again, so it is compared by identity
-  const sig = JSON.stringify([o.data.at, o.data.houses.length, o.data.mine, o.data.off, o.data.channels.map((c) => c.name), o.data.listings, o.data.spawned7d, o.data.building, o.data.campers, o.data.meCamping]);
-  if (sig !== S.sig || !S.plan || o.data.houses !== S.housesSeen) { S.plan = layoutTown(o.data); S.sig = sig; S.housesSeen = o.data.houses; }
+  const sig = JSON.stringify([o.data.houses, o.data.mine, o.data.off, o.data.channels.map((c) => c.name), o.data.listings, o.data.spawned7d, o.data.building]);
+  if (sig !== S.sig || !S.plan) { S.plan = layoutTown(o.data); S.sig = sig; }
   S.data = o.data;
   syncWalkers();
   size();

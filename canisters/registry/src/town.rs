@@ -29,9 +29,9 @@ pub struct TownChannel {
 }
 #[derive(CandidType, Deserialize, Clone, Debug)]
 pub struct Town {
-    /// when the houses were counted; 0 while the town is still waking up. The houses themselves come
-    /// from town_houses(), which only changes when this does.
+    /// when the houses were counted; 0 while the town is still waking up
     pub at: u64,
+    pub houses: Vec<TownHouse>,
     /// people who own a notebook
     pub people: u32,
     pub homes: u32,
@@ -73,7 +73,7 @@ pub struct Town {
 }
 
 const DAY_NS: u64 = 24 * HOUR_NS;
-const MAX_HOUSES: usize = 20_000;
+const MAX_HOUSES: usize = 600;
 const REFRESH_NS: u64 = 6 * HOUR_NS;
 const LOW_DAYS: u128 = 30;
 const BUILDING_NS: u64 = 3 * DAY_NS;
@@ -97,22 +97,7 @@ impl Drop for Busy {
         TOWN_BUSY.set(false);
     }
 }
-/// What the notebooks list says, counted every five minutes so a look at the town stays cheap however
-/// many notebooks there are.
-#[derive(Default)]
-struct Quick {
-    building: Vec<u32>,
-    notebooks: u32,
-    spawned_24h: u32,
-    spawned_7d: u32,
-    newcomers_7d: u32,
-    campers: u32,
-    /// owner -> their lot (their lowest token id - 1)
-    lots: std::collections::HashMap<Principal, u32>,
-    owners: std::collections::HashSet<Principal>,
-}
 thread_local! {
-    static QUICK: RefCell<Quick> = RefCell::new(Quick::default());
     /// principal -> when they last signed in (counted once an hour at most)
     static VISITORS: RefCell<StableBTreeMap<Principal, u64, Mem>> = RefCell::new(StableBTreeMap::init(MM.with_borrow(|m| m.get(MemoryId::new(39)))));
     static TOWN: RefCell<Counted> = RefCell::new(Counted::default());
@@ -195,7 +180,7 @@ pub async fn refresh_town() {
 /// Every notebook's cycles and what it burns a day while idle (the registry controls them all).
 async fn status_all(nbs: &[Notebook]) -> Vec<Option<(u128, u128)>> {
     let mut out = Vec::new();
-    for chunk in nbs.chunks(100) {
+    for chunk in nbs.chunks(50) {
         let calls = chunk.iter().map(|n| async move {
             let st = mgmt::canister_status(&mgmt::CanisterStatusArgs { canister_id: n.canister }).await.ok()?;
             Some((st.cycles.0.try_into().unwrap_or(u128::MAX), st.idle_cycles_burned_per_day.0.try_into().unwrap_or(0)))
@@ -203,40 +188,6 @@ async fn status_all(nbs: &[Notebook]) -> Vec<Option<(u128, u128)>> {
         out.extend(stats::join_all(calls.collect()).await);
     }
     out
-}
-/// Count what the notebooks list says: building sites, the factory's output, everyone's lot, campers.
-pub fn town_quick() {
-    let now = time();
-    let (day, week, soon) = (now.saturating_sub(DAY_NS), now.saturating_sub(7 * DAY_NS), now.saturating_sub(BUILDING_NS));
-    let mut q = Quick::default();
-    let mut new_owners = std::collections::BTreeSet::new();
-    NOTEBOOKS.with_borrow(|m| {
-        for e in m.iter() {
-            let n = e.value().0;
-            q.notebooks += 1;
-            q.owners.insert(n.owner);
-            q.spawned_24h += (n.created_at >= day) as u32;
-            q.spawned_7d += (n.created_at >= week) as u32;
-            if n.created_at >= soon {
-                new_owners.insert(n.owner);
-            }
-            if let Some(id) = ID_OF.with_borrow(|i| i.get(e.key())) {
-                let l = q.lots.entry(n.owner).or_insert((id - 1) as u32);
-                *l = (*l).min((id - 1) as u32);
-            }
-        }
-    });
-    q.building = new_owners.iter().filter_map(|o| q.lots.get(o).copied()).take(60).collect();
-    let month = now.saturating_sub(stats::ACTIVE_NS);
-    q.campers = VISITORS.with_borrow(|v| v.iter().filter(|e| e.value() >= month && !q.owners.contains(e.key())).count()) as u32;
-    q.newcomers_7d = MEMBERS.with_borrow(|m| m.iter().filter(|e| e.value().0.joined_at >= week).count()) as u32;
-    QUICK.with_borrow_mut(|x| *x = q);
-}
-/// Every house in town, by lot (they change when Town.at does).
-#[query]
-fn town_houses() -> Result<Vec<TownHouse>, String> {
-    require_flag("town")?;
-    Ok(TOWN.with_borrow(|t| t.houses.clone()))
 }
 /// From the hourly timer: count again when the houses are 6 hours old.
 pub async fn town_tick() {
@@ -271,6 +222,7 @@ fn town() -> Result<Town, String> {
     let now = time();
     let me = msg_caller();
     let since = now.saturating_sub(DAY_NS);
+    let mine = (me != Principal::anonymous()).then(|| NOTEBOOKS.with_borrow(|m| m.iter().filter(|e| e.value().0.owner == me).filter_map(|e| ID_OF.with_borrow(|i| i.get(e.key()))).min())).flatten().map(|id| (id - 1) as u32);
     // who is in which channel now
     let mut online: std::collections::HashMap<String, u32> = Default::default();
     let mut my_channel = None;
@@ -323,8 +275,34 @@ fn town() -> Result<Town, String> {
     // ponytail: scans every check-in; keep a running count if there are ever thousands
     let hikers = WATCHES.with_borrow(|w| w.iter().filter(|e| { let w = e.value().0; !w.closed && !watch_overdue(&w, now) }).count()).min(6) as u8;
     let off = ["board", "market", "rain", "fundraisers"].iter().filter(|f| !on(f)).map(|f| f.to_string()).collect();
-    let me_visited = me != Principal::anonymous() && VISITORS.with_borrow(|v| v.contains_key(&me));
-    Ok(QUICK.with_borrow(|q| TOWN.with_borrow(|t| Town { at: t.at, homes: t.homes, people: t.people, quiet: t.quiet, mine: q.lots.get(&me).copied(), my_channel, channels, post_topics, posts_live, posts_24h, listings, rains_24h, last_rain, hikers, off, building: q.building.clone(), notebooks: q.notebooks, spawned_24h: q.spawned_24h, spawned_7d: q.spawned_7d, newcomers_7d: q.newcomers_7d, cycles: Nat::from(t.cycles), burn_per_day: Nat::from(t.burn), campers: q.campers, me_camping: me_visited && !q.owners.contains(&me), fundraisers_open: t.fundraisers_open, raised_e8s: t.raised_e8s })))
+    // new notebooks: building sites on their owners' lots, and the factory's output
+    let (mut spawned_24h, mut spawned_7d, mut notebooks) = (0, 0, 0);
+    let mut new_owners = std::collections::BTreeSet::new();
+    let mut lowest: std::collections::BTreeMap<Principal, u64> = Default::default();
+    let mut owners = std::collections::HashSet::new();
+    NOTEBOOKS.with_borrow(|m| {
+        for e in m.iter() {
+            let n = e.value().0;
+            notebooks += 1;
+            owners.insert(n.owner);
+            spawned_24h += (n.created_at >= since) as u32;
+            spawned_7d += (n.created_at >= now.saturating_sub(7 * DAY_NS)) as u32;
+            if n.created_at >= now.saturating_sub(BUILDING_NS) {
+                new_owners.insert(n.owner);
+            }
+            if let Some(id) = ID_OF.with_borrow(|i| i.get(e.key())) {
+                let l = lowest.entry(n.owner).or_insert(id);
+                *l = (*l).min(id);
+            }
+        }
+    });
+    let building = new_owners.iter().filter_map(|o| lowest.get(o)).map(|id| (id - 1) as u32).take(30).collect();
+    let month = now.saturating_sub(stats::ACTIVE_NS);
+    let campers = VISITORS.with_borrow(|v| v.iter().filter(|e| e.value() >= month && !owners.contains(e.key())).count()) as u32;
+    let me_camping = me != Principal::anonymous() && !owners.contains(&me) && VISITORS.with_borrow(|v| v.contains_key(&me));
+    let week = now.saturating_sub(7 * DAY_NS);
+    let newcomers_7d = MEMBERS.with_borrow(|m| m.iter().filter(|e| e.value().0.joined_at >= week).count()) as u32;
+    Ok(TOWN.with_borrow(|t| Town { at: t.at, homes: t.homes, houses: t.houses.clone(), people: t.people, quiet: t.quiet, mine, my_channel, channels, post_topics, posts_live, posts_24h, listings, rains_24h, last_rain, hikers, off, building, notebooks, spawned_24h, spawned_7d, newcomers_7d, cycles: Nat::from(t.cycles), burn_per_day: Nat::from(t.burn), campers, me_camping, fundraisers_open: t.fundraisers_open, raised_e8s: t.raised_e8s }))
 }
 
 #[cfg(test)]

@@ -53,9 +53,8 @@ pub async fn join_all<F: std::future::Future>(fs: Vec<F>) -> Vec<F::Output> {
 /// Every notebook's counts and last edit, None for those that did not answer.
 pub async fn usage_all(nbs: &[Notebook]) -> Vec<Option<Usage>> {
     let mut usage: Vec<Option<Usage>> = Vec::new();
-    // ponytail: 100 calls at a time to every notebook (20,000 notebooks: 200 rounds); keep running counts in
-    // the notebooks if that ever gets slow or dear
-    for chunk in nbs.chunks(100) {
+    // ponytail: 50 calls at a time to every notebook; sample or keep running counts past a few thousand
+    for chunk in nbs.chunks(50) {
         let calls = chunk.iter().map(|n| async move { Call::bounded_wait(n.canister, "usage").await.ok().and_then(|r| r.candid::<Usage>().ok()) });
         usage.extend(join_all(calls.collect()).await);
     }

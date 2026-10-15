@@ -19,7 +19,7 @@ use std::cell::RefCell;
 mod stats;
 mod town;
 use stats::AppStats;
-use town::{Town, TownHouse};
+use town::Town;
 
 const NOTEBOOK_WASM: &[u8] = include_bytes!("../../../target/notebook.wasm.gz");
 /// Cycles a new notebook starts with. The owner is a controller and tops it up from there.
@@ -288,9 +288,6 @@ fn start_timers() {
     });
     // the town's houses live on the heap: count them again soon after an upgrade
     ic_cdk_timers::set_timer(Duration::from_secs(10), town::refresh_town());
-    // and what the notebooks list says, every five minutes (and now)
-    ic_cdk_timers::set_timer(Duration::ZERO, async { town::town_quick() });
-    ic_cdk_timers::set_timer_interval(Duration::from_secs(300), || async { town::town_quick() });
 }
 
 // ---------------------------------------------------------------- charging for spawns
@@ -552,8 +549,6 @@ async fn spawn(name: String, payer: Option<Principal>) -> Result<Notebook, Strin
     let v = Notebook { canister: created.canister_id, name, owner, created_at: time(), emoji: None, description: None };
     NOTEBOOKS.with_borrow_mut(|m| m.insert(v.canister, C(v.clone())));
     mint_id(v.canister);
-    // its home goes up in town now, not at the next count
-    town::town_quick();
     Ok(v)
 }
 

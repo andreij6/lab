@@ -59,9 +59,9 @@ expect "the registry knows the town flag" 'name = "town"' icp canister call regi
 icp canister call registry set_flag '("town", true)' >/dev/null   # switching it on counts the houses now
 sleep 4
 expect "the owner's lot is theirs" "mine = opt" reg town '()' --query
-expect "their notebook was edited today: a lit house" "lit = 2" icp canister call registry town_houses '()' --query --identity anonymous
+expect "their notebook was edited today: a lit house" "lit = 2" reg town '()' --query
 expect "anonymous gets the town without a lot of its own" "mine = null" icp canister call registry town '()' --query --identity anonymous
-if { icp canister call registry town '()' --query --identity anonymous; icp canister call registry town_houses '()' --query --identity anonymous; } | grep -q 'principal "'; then echo "FAIL: the town names someone"; exit 1; else echo "  ok: the town names nobody"; PASS=$((PASS+1)); fi
+if icp canister call registry town '()' --query --identity anonymous | grep -q 'principal "'; then echo "FAIL: the town names someone"; exit 1; else echo "  ok: the town names nobody"; PASS=$((PASS+1)); fi
 icp canister call registry set_flag '("town", false)' >/dev/null
 expect "switched off, the town is closed" "switched off" icp canister call registry town '()' --query --identity anonymous
 icp canister call registry set_flag '("town", true)' >/dev/null

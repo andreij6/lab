@@ -233,7 +233,6 @@ type Result_22 = variant { Ok : Bug; Err : text };
 type Result_23 = variant { Ok : Flag; Err : text };
 type Result_24 = variant { Ok : SnapshotInfo; Err : text };
 type Result_25 = variant { Ok : Town; Err : text };
-type Result_26 = variant { Ok : vec TownHouse; Err : text };
 type Result_3 = variant { Ok : nat32; Err : text };
 type Result_4 = variant { Ok : Attestation; Err : text };
 type Result_5 = variant { Ok : vec Bug; Err : text };
@@ -266,8 +265,7 @@ type Token = record {
   symbol : text;
 };
 type Town = record {
-  // when the houses were counted; 0 while the town is still waking up. The houses themselves come
-  // from town_houses(), which only changes when this does.
+  // when the houses were counted; 0 while the town is still waking up
   at : nat64;
   // which of board, market, rain, fundraisers are switched off
   off : vec text;
@@ -302,6 +300,7 @@ type Town = record {
   spawned_24h : nat32;
   posts_24h : nat32;
   last_rain : opt nat64;
+  houses : vec TownHouse;
   // people who joined the community in the last week (the school)
   newcomers_7d : nat32;
   raised_e8s : nat64;
@@ -600,8 +599,6 @@ service : () -> {
   top_up_notebook : (principal, nat64, opt principal) -> (Result_10);
   // The town right now: the houses (counted every few hours) and the public spaces (live).
   town : () -> (Result_25) query;
-  // Every house in town, by lot (they change when Town.at does).
-  town_houses : () -> (Result_26) query;
   // Strips headers so every replica sees the same response.
   transform_github : (TransformArgs) -> (HttpRequestResult) query;
   // New (not deleted) messages in every channel after the id the caller last saw there, capped at
