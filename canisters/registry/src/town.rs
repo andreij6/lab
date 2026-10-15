@@ -61,6 +61,10 @@ pub struct Town {
     /// cycles every notebook holds, and what they burn a day between them (the water tower)
     pub cycles: Nat,
     pub burn_per_day: Nat,
+    /// people who signed in within 30 days and have no notebook yet: tents in the campground
+    pub campers: u32,
+    /// you are one of them
+    pub me_camping: bool,
     /// fundraisers in chat that are still open, and what they raised (the chapel)
     pub fundraisers_open: u32,
     pub raised_e8s: u64,
@@ -94,6 +98,8 @@ impl Drop for Busy {
     }
 }
 thread_local! {
+    /// principal -> when they last signed in (counted once an hour at most)
+    static VISITORS: RefCell<StableBTreeMap<Principal, u64, Mem>> = RefCell::new(StableBTreeMap::init(MM.with_borrow(|m| m.get(MemoryId::new(39)))));
     static TOWN: RefCell<Counted> = RefCell::new(Counted::default());
     static TOWN_BUSY: Cell<bool> = const { Cell::new(false) };
 }
@@ -190,6 +196,25 @@ pub async fn town_tick() {
     }
 }
 
+// ponytail: anyone can make identities for free, so new visitors stop being recorded at this many;
+// prune by last visit if a real crowd ever gets near it
+const MAX_VISITORS: u64 = 100_000;
+/// The app says hello when someone signs in, so the town can count people without a notebook yet.
+#[update]
+fn visit() {
+    let me = msg_caller();
+    if me == Principal::anonymous() {
+        return;
+    }
+    let now = time();
+    VISITORS.with_borrow_mut(|v| match v.get(&me) {
+        Some(at) if now.saturating_sub(at) < HOUR_NS => {}
+        Some(_) => { v.insert(me, now); }
+        None if v.len() < MAX_VISITORS => { v.insert(me, now); }
+        None => {}
+    });
+}
+
 /// The town right now: the houses (counted every few hours) and the public spaces (live).
 #[query]
 fn town() -> Result<Town, String> {
@@ -254,10 +279,12 @@ fn town() -> Result<Town, String> {
     let (mut spawned_24h, mut spawned_7d, mut notebooks) = (0, 0, 0);
     let mut new_owners = std::collections::BTreeSet::new();
     let mut lowest: std::collections::BTreeMap<Principal, u64> = Default::default();
+    let mut owners = std::collections::HashSet::new();
     NOTEBOOKS.with_borrow(|m| {
         for e in m.iter() {
             let n = e.value().0;
             notebooks += 1;
+            owners.insert(n.owner);
             spawned_24h += (n.created_at >= since) as u32;
             spawned_7d += (n.created_at >= now.saturating_sub(7 * DAY_NS)) as u32;
             if n.created_at >= now.saturating_sub(BUILDING_NS) {
@@ -270,9 +297,12 @@ fn town() -> Result<Town, String> {
         }
     });
     let building = new_owners.iter().filter_map(|o| lowest.get(o)).map(|id| (id - 1) as u32).take(30).collect();
+    let month = now.saturating_sub(stats::ACTIVE_NS);
+    let campers = VISITORS.with_borrow(|v| v.iter().filter(|e| e.value() >= month && !owners.contains(e.key())).count()) as u32;
+    let me_camping = me != Principal::anonymous() && !owners.contains(&me) && VISITORS.with_borrow(|v| v.contains_key(&me));
     let week = now.saturating_sub(7 * DAY_NS);
     let newcomers_7d = MEMBERS.with_borrow(|m| m.iter().filter(|e| e.value().0.joined_at >= week).count()) as u32;
-    Ok(TOWN.with_borrow(|t| Town { at: t.at, homes: t.homes, houses: t.houses.clone(), people: t.people, quiet: t.quiet, mine, my_channel, channels, post_topics, posts_live, posts_24h, listings, rains_24h, last_rain, hikers, off, building, notebooks, spawned_24h, spawned_7d, newcomers_7d, cycles: Nat::from(t.cycles), burn_per_day: Nat::from(t.burn), fundraisers_open: t.fundraisers_open, raised_e8s: t.raised_e8s }))
+    Ok(TOWN.with_borrow(|t| Town { at: t.at, homes: t.homes, houses: t.houses.clone(), people: t.people, quiet: t.quiet, mine, my_channel, channels, post_topics, posts_live, posts_24h, listings, rains_24h, last_rain, hikers, off, building, notebooks, spawned_24h, spawned_7d, newcomers_7d, cycles: Nat::from(t.cycles), burn_per_day: Nat::from(t.burn), campers, me_camping, fundraisers_open: t.fundraisers_open, raised_e8s: t.raised_e8s }))
 }
 
 #[cfg(test)]

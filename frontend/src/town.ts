@@ -16,13 +16,14 @@ export type TownData = {
   at: number; houses: TownHouse[]; people: number; homes: number; quiet: number; mine?: number; myChannel?: string;
   channels: TownChan[]; postTopics: string[]; postsLive: number; posts24h: number; listings: number; rains24h: number; lastRain?: number; hikers: number; off: string[];
   building: number[]; notebooks: number; spawned24h: number; spawned7d: number; newcomers7d: number; cycles: number; burnPerDay: number; fundraisersOpen: number; raisedE8s: number;
+  campers: number; meCamping: boolean;
 };
 export type Target =
   | { kind: "house"; house: TownHouse; mine: boolean; building: boolean } | { kind: "plot" } | { kind: "hall" } | { kind: "stall"; channel: TownChan }
   | { kind: "fountain" } | { kind: "board" } | { kind: "market" } | { kind: "factory" } | { kind: "school" } | { kind: "chapel" } | { kind: "tower" }
   | { kind: "park" } | { kind: "trail" } | { kind: "lake" } | { kind: "walker"; channel: string; me: boolean }
-  | { kind: "landmark"; landmark: Landmark } | { kind: "district"; district: District };
-type Kind = "bank" | "exchange" | "capitol" | "statue" | "launchpad" | "office" | "sign" | "house" | "plot" | "garden" | "tree" | "pine" | "poplar" | "bush" | "rock" | "hall" | "stall" | "fountain" | "gazebo" | "market" | "crate" | "factory" | "school" | "chapel" | "tower" | "bench" | "lantern" | "bridge" | "reeds";
+  | { kind: "landmark"; landmark: Landmark } | { kind: "district"; district: District } | { kind: "camp" } | { kind: "tent"; mine: boolean };
+type Kind = "tent" | "campfire" | "bank" | "exchange" | "capitol" | "statue" | "launchpad" | "office" | "sign" | "house" | "plot" | "garden" | "tree" | "pine" | "poplar" | "bush" | "rock" | "hall" | "stall" | "fountain" | "gazebo" | "market" | "crate" | "factory" | "school" | "chapel" | "tower" | "bench" | "lantern" | "bridge" | "reeds";
 export type Obj = { k: Kind; x: number; y: number; w: number; d: number; s: number; tg?: Target; h?: TownHouse; face?: "x" | "y" | ""; ch?: TownChan; mine?: boolean; building?: boolean };
 /** Ground cells: nothing (beyond the shore), land, water, road, a bridge over water. */
 // ---------------------------------------------------------------- districts and landmarks
@@ -36,23 +37,26 @@ export type Landmark = { id: string; kind: "bank" | "exchange" | "capitol" | "st
 export type District = { id: string; name: string; blurb: string; blocks: [number, number][]; landmarks: Landmark[] };
 export const DISTRICTS: District[] = [
   {
-    id: "finance", name: "The financial district", blurb: "Where money on the Internet Computer is kept and traded.", blocks: [[2, -1], [2, 0]],
+    // beside the park and the Square, on the right
+    id: "finance", name: "The financial district", blurb: "Where money on the Internet Computer is kept and traded.", blocks: [[2, 0], [2, 1]],
     landmarks: [
-      { id: "oisy", kind: "bank", title: "OISY Wallet", blurb: "The bank: a wallet for ICP, Bitcoin, Ethereum and more, and how every payment in Lab is made.", url: "https://oisy.com", block: [2, -1], at: [0.3, 3.4, 2.8, 2.3] },
-      { id: "icpswap", kind: "exchange", title: "ICPSwap", blurb: "The exchange: swap ICP and other tokens on the Internet Computer.", url: "https://www.icpswap.com", block: [2, -1], at: [3.2, 3.3, 2.6, 2.5] },
+      { id: "oisy", kind: "bank", title: "OISY Wallet", blurb: "The bank: a wallet for ICP, Bitcoin, Ethereum and more, and how every payment in Lab is made.", url: "https://oisy.com", block: [2, 0], at: [0.4, 3.4, 2.8, 2.3] },
+      { id: "icpswap", kind: "exchange", title: "ICPSwap", blurb: "The exchange: swap ICP and other tokens on the Internet Computer.", url: "https://www.icpswap.com", block: [2, 0], at: [3.2, 3.3, 2.6, 2.5] },
     ],
   },
   {
-    id: "icp", name: "The ICP quarter", blurb: "The Internet Computer's government, and the people who built it.", blocks: [[1, -2]],
+    // behind the school, on the left
+    id: "icp", name: "The ICP quarter", blurb: "The Internet Computer's government, and the people who built it.", blocks: [[-2, -1]],
     landmarks: [
-      { id: "nns", kind: "capitol", title: "The NNS", blurb: "The Network Nervous System: the Internet Computer's government, where ICP neurons vote on every proposal.", url: "https://nns.internetcomputer.org/", block: [1, -2], at: [0.2, 0.2, 5.6, 2.6] },
-      { id: "dominic", kind: "statue", title: "Dominic Williams", blurb: "Founder and chief scientist of DFINITY, who set out to build the Internet Computer.", url: "https://x.com/dominic_w", block: [1, -2], at: [1.5, 3, 3, 2.9] },
+      { id: "nns", kind: "capitol", title: "The NNS", blurb: "The Network Nervous System: the Internet Computer's government, where ICP neurons vote on every proposal.", url: "https://nns.internetcomputer.org/", block: [-2, -1], at: [0.2, 0.2, 5.6, 2.6] },
+      { id: "dominic", kind: "statue", title: "Dominic Williams", blurb: "Founder and chief scientist of DFINITY, who set out to build the Internet Computer.", url: "https://x.com/dominic_w", block: [-2, -1], at: [1.5, 3, 3, 2.9] },
     ],
   },
   {
-    id: "spaceport", name: "The spaceport", blurb: "Launchpads for what is next on the Internet Computer.", blocks: [[2, -2]],
+    // the front left corner, toward the lake
+    id: "spaceport", name: "The spaceport", blurb: "Launchpads for what is next on the Internet Computer.", blocks: [[-2, 2]],
     landmarks: [
-      { id: "soon", kind: "launchpad", title: "SOON launchpad", blurb: "A launchpad on the Internet Computer. Watch for the next launch.", url: "https://soonlaunchpad.fun/", block: [2, -2], at: [0.5, 0.5, 5, 5] },
+      { id: "soon", kind: "launchpad", title: "SOON launchpad", blurb: "A launchpad on the Internet Computer. Watch for the next launch.", url: "https://soonlaunchpad.fun/", block: [-2, 2], at: [0.5, 0.5, 5, 5] },
     ],
   },
 ];
@@ -190,16 +194,15 @@ export function layoutTown(t: TownData): Plan {
   for (const dist of DISTRICTS) {
     for (const [bx, by] of dist.blocks) paving.push([7 * bx + 1, 7 * by + 1, 6, 6]);
     for (const lm of dist.landmarks) { const [ox, oy, w, d] = lm.at; put({ k: lm.kind, x: 7 * lm.block[0] + 1 + ox, y: 7 * lm.block[1] + 1 + oy, w, d, s: hashOf(lm.id), tg: { kind: "landmark", landmark: lm } }); }
-    // every 3×3 corner of a district block nobody holds yet: grass, a tree, a sign saying it is free
-    // (the first carries the district's name, the next says there is room; the rest are just green)
-    let named = false, roomy = false;
+    // every 3×3 corner of a district block nobody holds yet: grass and a tree or two (the first one
+    // carries the district's name)
+    let named = false;
     for (const [bx, by] of dist.blocks) for (const [cx, cy] of [[0, 0], [3, 0], [0, 3], [3, 3]]) {
       const x0 = 7 * bx + 1 + cx, y0 = 7 * by + 1 + cy;
       const taken = dist.landmarks.some((lm) => { const [ox, oy, w, d] = lm.at, lx = 7 * lm.block[0] + 1 + ox, ly = 7 * lm.block[1] + 1 + oy; return lx < x0 + 3 && lx + w > x0 && ly < y0 + 3 && ly + d > y0; });
       if (taken) continue;
       tree(x0 + 0.7, y0 + 0.8, `ds${x0},${y0}`, "tree"); tree(x0 + 2.3, y0 + 0.6, `dt${x0},${y0}`, "bush");
-      if (!named || !roomy) put({ k: "sign", x: x0 + 1.3, y: y0 + 2.0, w: 0.3, d: 0.1, s: named ? 0 : 1, tg: { kind: "district", district: dist } });
-      if (named) roomy = true;
+      if (!named) put({ k: "sign", x: x0 + 1.3, y: y0 + 2.0, w: 0.3, d: 0.1, s: 1, tg: { kind: "district", district: dist } });
       named = true;
     }
     // a district with no room left: its name at the front corner of its first block
@@ -257,11 +260,30 @@ export function layoutTown(t: TownData): Plan {
     if (!onPath && h01(`tr${x},${y}`) < 0.75) tree(x + 0.5, y + 0.5, `tr${x},${y}`, h01(`tp${x},${y}`) < 0.7 ? "pine" : "tree");
   }
   for (const [x, y] of loop) put({ k: "lantern", x: x - 0.1, y: y - 0.1, w: 0.2, d: 0.2, s: 0, tg: { kind: "trail" } });
+  // the campground between the lake and the town: a tent for each person who signed in this month
+  // but has no notebook yet (yours first), around a fire
+  const camp = new Set<string>(), dry = (x: number, y: number) => get(x, y) === LAND && !inBlock.has(`${x},${y}`);
+  // the fire: the dry ground nearest a spot on the lake's town side
+  const want = [tlo - 2.5, lake[1] + 5.5];
+  let fire: [number, number] = [tlo - 2.5, lake[1] + 5.5], best = Infinity;
+  for (let x = tlo - 9; x < tlo; x++) for (let y = lake[1] - 4; y <= lake[1] + 12; y++) { const dd = Math.hypot(x + 0.5 - want[0], y + 0.5 - want[1]); if (dry(x, y) && [[1, 0], [-1, 0], [0, 1], [0, -1]].every(([a, b]) => dry(x + a, y + b)) && dd < best) { best = dd; fire = [x + 0.5, y + 0.5]; } }
+  const spots: [number, number][] = [];
+  for (let x = Math.floor(fire[0]) - 7; x <= fire[0] + 7; x++) for (let y = Math.floor(fire[1]) - 7; y <= fire[1] + 7; y++) if (dry(x, y) && x < tlo && (x + y) % 2 === 0 && Math.hypot(x + 0.5 - fire[0], y + 0.5 - fire[1]) > 1.2) spots.push([x, y]);
+  spots.sort((a, b) => Math.hypot(a[0] - fire[0], a[1] - fire[1]) - Math.hypot(b[0] - fire[0], b[1] - fire[1]) || a[0] - b[0] || a[1] - b[1]);
+  for (let x = Math.floor(fire[0]) - 1; x <= fire[0] + 1; x++) for (let y = Math.floor(fire[1]) - 1; y <= fire[1] + 1; y++) camp.add(`${x},${y}`);
+  if (best < Infinity) {
+    put({ k: "campfire", x: fire[0] - 0.25, y: fire[1] - 0.25, w: 0.5, d: 0.5, s: 0, tg: { kind: "camp" } });
+    spots.slice(0, Math.min(24, t.campers)).forEach(([x, y], i) => {
+      camp.add(`${x},${y}`);
+      const mine = !!t.meCamping && i === 0;
+      put({ k: "tent", x: x + 0.15, y: y + 0.2, w: 0.75, d: 0.6, s: hashOf(`tent${x},${y}`), mine, tg: { kind: "tent", mine } });
+    });
+  }
   // the country: woods that thin toward the shore, reeds by the water, the bridge
   for (let x = lo; x <= hi; x++) for (let y = lo; y <= hi; y++) {
     const v = get(x, y);
     if (v === BRIDGE) { put({ k: "bridge", x, y, w: 1, d: 1, s: 0 }); continue; }
-    if (v !== LAND || inBlock.has(`${x},${y}`)) continue;
+    if (v !== LAND || inBlock.has(`${x},${y}`) || camp.has(`${x},${y}`)) continue;
     const near = [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([a, b]) => get(x + a, y + b));
     if (near.includes(WATER)) { if (h01(`rd${x},${y}`) < 0.35) put({ k: "reeds", x: x + 0.3, y: y + 0.3, w: 0.4, d: 0.4, s: hashOf(`rd${x},${y}`) }); continue; }
     if (near.includes(ROAD) || near.includes(BRIDGE)) continue;
@@ -685,35 +707,96 @@ function drawObj(o: Obj, t: number) {
       return hit([P(x, y, 0), P(x + w, y + d + 1, 0), P(x, y + d + 1, 0), P(x + w, y, 0), [sp[0], sp[1] - 7]], o.tg);
     }
     case "tower": {
-      // the water tower: the cycles every notebook holds, its level the days they last at today's burn
-      const { x, y, w, d } = o, cx = x + w / 2, cy = y + d / 2, [sx, sy] = P(cx, cy), yb = sy - 26, yt = sy - 46, rx = 17, ry = 8;
-      const days = data.burnPerDay > 0 ? data.cycles / data.burnPerDay : data.cycles > 0 ? 365 : 0, level = Math.max(0.04, Math.min(1, days / 365));
-      ctx.save(); ctx.strokeStyle = p.line;
-      ctx.beginPath();
-      for (const [u, v] of [[0.15, 0.15], [w - 0.15, 0.15], [w - 0.15, d - 0.15], [0.15, d - 0.15]]) { const a = P(x + u, y + v), b = P(cx + (u - w / 2) * 0.6, cy + (v - d / 2) * 0.6, 26); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); }
-      { const a = P(x + 0.15, y + d - 0.15, 4), b = P(x + w - 0.15, y + d - 0.15, 18), c2 = P(x + w - 0.15, y + d - 0.15, 4), e = P(x + 0.15, y + d - 0.15, 18); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.moveTo(c2[0], c2[1]); ctx.lineTo(e[0], e[1]); }
+      // the water tower: the cycles every notebook holds. Splayed legs with cross braces, a ladder to a
+      // railed catwalk, a shaded tank with seams and an accent band, a sight glass whose level is the
+      // days the cycles last at today's burn (a year fills it), and the burn dripping from the riser.
+      const { x, y, w, d } = o, cx = x + w / 2, cy = y + d / 2, [sx, sy] = P(cx, cy);
+      const z0 = 34, z1 = 54, yb = sy - z0, yt = sy - z1, rx = 19, ry = 9.5;
+      const days = data.burnPerDay > 0 ? data.cycles / data.burnPerDay : data.cycles > 0 ? 365 : 0, level = Math.max(0.03, Math.min(1, days / 365));
+      const steel = night ? "#7d8aa6" : "#9aa6bd", tankL = night ? "#69758f" : "#f4f6fa", tankR = night ? "#4a546b" : "#c9d0dc";
+      // legs and braces
+      const feet: [number, number][] = [[x, y], [x + w, y], [x + w, y + d], [x, y + d]];
+      const top = (u: number, v: number): [number, number] => P(cx + (u - cx) * 0.42, cy + (v - cy) * 0.42, z0);
+      const at = (u: number, v: number, f: number): [number, number] => { const a = P(u, v), b = top(u, v); return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f]; };
+      ctx.save(); ctx.strokeStyle = steel; ctx.lineWidth = line * 1.5;
+      ctx.beginPath(); for (const [u, v] of feet) { const a = P(u, v), b = top(u, v); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); } ctx.stroke();
+      ctx.lineWidth = line * 0.8; ctx.beginPath();
+      for (const [i, j] of [[3, 2], [1, 2]]) for (const [f0, f1] of [[0.08, 0.5], [0.5, 0.92]]) {
+        const [a, b] = [feet[i], feet[j]], p0 = at(a[0], a[1], f0), p1 = at(b[0], b[1], f1), q0 = at(b[0], b[1], f0), q1 = at(a[0], a[1], f1);
+        ctx.moveTo(p0[0], p0[1]); ctx.lineTo(p1[0], p1[1]); ctx.moveTo(q0[0], q0[1]); ctx.lineTo(q1[0], q1[1]);
+        const m0 = at(a[0], a[1], f1), m1 = at(b[0], b[1], f1); ctx.moveTo(m0[0], m0[1]); ctx.lineTo(m1[0], m1[1]);
+      }
+      ctx.stroke();
+      // the riser down the middle, and the ladder up the front leg
+      ctx.lineWidth = line * 2.4; ctx.beginPath(); ctx.moveTo(sx, sy - 2); ctx.lineTo(sx, yb + ry); ctx.stroke();
+      const l0 = P(x + w * 0.62, y + d), l1 = top(x + w * 0.62, y + d);
+      ctx.lineWidth = line * 0.8; ctx.beginPath();
+      for (const off of [-1.6, 1.6]) { ctx.moveTo(l0[0] + off, l0[1]); ctx.lineTo(l1[0] + off, l1[1] + 4); }
+      for (let f = 0.06; f < 1; f += 0.09) { const px = l0[0] + (l1[0] - l0[0]) * f, py = l0[1] + (l1[1] + 4 - l0[1]) * f; ctx.moveTo(px - 1.6, py); ctx.lineTo(px + 1.6, py); }
       ctx.stroke(); ctx.restore();
+      // the catwalk's floor behind the tank
+      ctx.beginPath(); ctx.ellipse(sx, yb + 1, rx + 6, ry + 3, 0, Math.PI, 0); ctx.fillStyle = steel; ctx.fill(); ctx.stroke();
+      // the tank
       const body = () => { ctx.beginPath(); ctx.moveTo(sx - rx, yt); ctx.lineTo(sx - rx, yb); ctx.ellipse(sx, yb, rx, ry, 0, Math.PI, 0, true); ctx.lineTo(sx + rx, yt); ctx.closePath(); };
-      body(); ctx.fillStyle = p.wall; ctx.fill();
+      const g = ctx.createLinearGradient(sx - rx, 0, sx + rx, 0); g.addColorStop(0, tankL); g.addColorStop(0.55, tankL); g.addColorStop(1, tankR);
+      body(); ctx.fillStyle = g; ctx.fill();
       ctx.save(); body(); ctx.clip();
-      const wl = yb + ry - level * (yb + ry - yt);
-      ctx.fillStyle = rgba(hex(night ? "#4a7aa8" : "#8cc3e3"), 0.85); ctx.fillRect(sx - rx, wl, rx * 2, yb + ry - wl);
-      ctx.fillStyle = shade(p.wallR.startsWith("#") ? p.wallR : "#e9ebee", 0.05); ctx.fillRect(sx + rx * 0.35, yt, rx * 0.65, yb + ry - yt);
-      ctx.restore();
+      // the accent band, and the seams between the plates
+      const bandA = yb - 7, bandB = yb - 11;
+      ctx.beginPath(); ctx.ellipse(sx, bandA, rx, ry, 0, 0, Math.PI); ctx.lineTo(sx - rx, bandB); ctx.ellipse(sx, bandB, rx, ry, 0, Math.PI, 0, true); ctx.closePath(); ctx.fillStyle = rgba(S.accent, 0.85); ctx.fill();
+      ctx.strokeStyle = night ? "rgba(255,255,255,.12)" : "rgba(40,50,70,.12)"; ctx.lineWidth = line * 0.8; ctx.beginPath();
+      for (const a of [-1.1, -0.55, 0, 0.55, 1.1]) { const px = sx + Math.sin(a) * rx, py = Math.cos(a) * ry; ctx.moveTo(px, yt + py); ctx.lineTo(px, yb + py); }
+      ctx.stroke(); ctx.restore();
       body(); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(sx - rx, wl); ctx.lineTo(sx + rx, wl); ctx.strokeStyle = night ? "#9cc8f0" : "#4f8fbf"; ctx.stroke(); ctx.strokeStyle = p.line;
-      ctx.beginPath(); ctx.ellipse(sx, yt, rx, ry, 0, 0, 6.283); ctx.fillStyle = shade(p.wall.startsWith("#") ? p.wall : "#fdfdfc", 0.06); ctx.fill(); ctx.stroke();
-      poly([[sx - rx - 1, yt], [sx, yt - 13], [sx + rx + 1, yt]], p.roofs[2]);
-      ctx.beginPath(); ctx.ellipse(sx, yt, rx + 1, ry + 0.5, 0, 0, Math.PI); ctx.stroke();
-      if (night) { const on = S.still || Math.sin(t * 2) > 0; ctx.fillStyle = on ? "#f0504a" : "#5a2a28"; ctx.beginPath(); ctx.arc(sx, yt - 14, 1.6, 0, 6.283); ctx.fill(); }
-      // what the notebooks burn a day drips out of the pipe, faster when they burn more
-      const [px, py] = P(cx, cy, 3);
-      ctx.beginPath(); ctx.moveTo(sx, yb + ry); ctx.lineTo(px, py - 2); ctx.stroke();
+      // the sight glass: the level, at a glance
+      const gx = sx - rx * 0.42, gTop = yt + 4, gBot = yb + ry * 0.6, gl = gBot - (gBot - gTop) * level;
+      ctx.beginPath(); ctx.roundRect(gx - 2.6, gTop - 1, 5.2, gBot - gTop + 2, 2.6); ctx.fillStyle = night ? "#1d2333" : "#ffffff"; ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.roundRect(gx - 1.6, gl, 3.2, gBot - gl, 1.6); ctx.fillStyle = night ? "#5fb0ee" : "#3f9ad8"; ctx.fill();
+      if (night) { const gg = ctx.createRadialGradient(gx, gl, 0, gx, gl, 10); gg.addColorStop(0, "rgba(95,176,238,.45)"); gg.addColorStop(1, "rgba(95,176,238,0)"); ctx.fillStyle = gg; ctx.fillRect(gx - 10, gl - 10, 20, 20); }
+      ctx.save(); ctx.lineWidth = line * 0.7; ctx.beginPath(); for (let i = 1; i < 4; i++) { const yy = gBot - ((gBot - gTop) * i) / 4; ctx.moveTo(gx + 2.6, yy); ctx.lineTo(gx + 4.6, yy); } ctx.stroke(); ctx.restore();
+      // the catwalk's railing in front
+      ctx.save(); ctx.strokeStyle = steel; ctx.lineWidth = line;
+      ctx.beginPath(); ctx.ellipse(sx, yb + 1, rx + 6, ry + 3, 0, 0, Math.PI); ctx.stroke();
+      ctx.beginPath(); ctx.ellipse(sx, yb - 5, rx + 6, ry + 3, 0, 0, Math.PI); ctx.stroke();
+      ctx.beginPath(); for (let i = 0; i <= 8; i++) { const a = (i / 8) * Math.PI, px = sx + Math.cos(a) * (rx + 6), py = Math.sin(a) * (ry + 3); ctx.moveTo(px, yb + 1 + py); ctx.lineTo(px, yb - 5 + py); } ctx.stroke(); ctx.restore();
+      // the roof: a cone, a finial, a light for aircraft at night
+      ctx.beginPath(); ctx.ellipse(sx, yt, rx, ry, 0, 0, 6.283); ctx.fillStyle = tankR; ctx.fill(); ctx.stroke();
+      const rg = ctx.createLinearGradient(sx - rx, 0, sx + rx, 0); rg.addColorStop(0, toHex(p.roofs[2])); rg.addColorStop(1, shade(toHex(p.roofs[2]), 0.18));
+      ctx.beginPath(); ctx.moveTo(sx - rx - 2, yt); ctx.lineTo(sx, yt - 15); ctx.lineTo(sx + rx + 2, yt); ctx.ellipse(sx, yt, rx + 2, ry + 1, 0, 0, Math.PI); ctx.closePath(); ctx.fillStyle = rg; ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(sx, yt - 15); ctx.lineTo(sx, yt - 20); ctx.stroke();
+      const on = !night || S.still || Math.sin(t * 2) > 0;
+      ctx.fillStyle = night ? (on ? "#f0504a" : "#5a2a28") : steel; ctx.beginPath(); ctx.arc(sx, yt - 21, 1.8, 0, 6.283); ctx.fill(); ctx.stroke();
+      // what the notebooks burn a day drips from the riser, faster when they burn more
       if (!S.still && data.burnPerDay > 0) {
         const rate = Math.min(3, 0.6 + Math.log10(1 + data.burnPerDay / 1e9) * 0.6);
-        for (let i = 0; i < 3; i++) { const u = (t * rate + i / 3) % 1; ctx.fillStyle = night ? "rgba(140,190,235,.8)" : "rgba(80,140,190,.75)"; ctx.beginPath(); ctx.ellipse(px + 2, py - 2 + u * 7, 1.1, 1.6, 0, 0, 6.283); ctx.fill(); }
+        for (let i = 0; i < 3; i++) { const u = (t * rate + i / 3) % 1; ctx.fillStyle = night ? "rgba(140,190,235,.85)" : "rgba(63,154,216,.8)"; ctx.beginPath(); ctx.ellipse(sx + 2.5, sy - 6 + u * 6, 1.1, 1.6, 0, 0, 6.283); ctx.fill(); }
       }
-      return hit([[sx - rx - 2, yt - 14], [sx + rx + 2, sy + 4]], o.tg);
+      ctx.beginPath(); ctx.ellipse(sx + 2.5, sy, 4, 2, 0, 0, 6.283); ctx.fillStyle = p.water; ctx.fill(); ctx.stroke();
+      return hit([[sx - rx - 7, yt - 22], [sx + rx + 7, sy + 4]], o.tg);
+    }
+    case "tent": {
+      // someone who signed in and has no notebook yet: a tent, its door toward the fire
+      const { x, y, w, d } = o, r = rng(o.s), c = o.mine ? acc() : ["#f2b8c6", "#b9dcc2", "#b8cfee", "#f3dea0", "#d4c6ef", "#f2c27e"][Math.floor(r() * 6)];
+      const col = o.mine ? c : night ? toHex(S.pal.roofs[Math.floor(r() * 5)]) : c, ridge0 = P(x, y + d / 2, 9), ridge1 = P(x + w, y + d / 2, 9);
+      poly([P(x, y, 0), P(x + w, y, 0), ridge1, ridge0], shade(toHex(col.startsWith("#") ? col : "#b8cfee"), 0.15));
+      poly([P(x, y + d, 0), P(x + w, y + d, 0), ridge1, ridge0], col);
+      poly([P(x + w, y, 0), P(x + w, y + d, 0), ridge1], shade(toHex(col.startsWith("#") ? col : "#b8cfee"), 0.08));
+      poly([P(x + w, y + d * 0.28, 0), P(x + w, y + d * 0.72, 0), P(x + w, y + d / 2, 6.5)], night ? "#2a2416" : "#5a4a3a");
+      if (o.mine) { const [px, py] = ridge0; label("You", (px + ridge1[0]) / 2, py - 10, acc()); }
+      return hit([P(x, y, 0), P(x + w, y + d, 0), P(x, y + d, 0), P(x + w, y, 0), [ridge0[0], ridge0[1] - 4]], o.tg);
+    }
+    case "campfire": {
+      // the campground's fire: logs and a flicker (lit when someone is camping), glowing at night
+      const [fx, fy] = P(o.x + o.w / 2, o.y + o.d / 2), lit = data.campers > 0;
+      for (let i = 0; i < 6; i++) { const a = (i / 6) * 6.283; ctx.beginPath(); ctx.ellipse(fx + Math.cos(a) * 7, fy + Math.sin(a) * 3.5, 2, 1.4, 0, 0, 6.283); ctx.fillStyle = night ? "#5a6070" : "#c9ced8"; ctx.fill(); ctx.stroke(); }
+      ctx.save(); ctx.strokeStyle = night ? "#6a5040" : "#8a6a4a"; ctx.lineWidth = line * 2.2; ctx.beginPath(); ctx.moveTo(fx - 4, fy + 1); ctx.lineTo(fx + 4, fy - 1); ctx.moveTo(fx - 3, fy - 1.5); ctx.lineTo(fx + 3, fy + 1.5); ctx.stroke(); ctx.restore();
+      if (lit) {
+        if (night) { const g = ctx.createRadialGradient(fx, fy - 4, 0, fx, fy - 4, 34); g.addColorStop(0, "rgba(255,170,80,.42)"); g.addColorStop(1, "rgba(255,170,80,0)"); ctx.fillStyle = g; ctx.fillRect(fx - 34, fy - 38, 68, 68); }
+        const fl = S.still ? 0 : Math.sin(t * 13) * 1.2 + Math.sin(t * 7.3) * 0.8;
+        poly([[fx - 3.5, fy], [fx + 3.5, fy], [fx + fl * 0.5, fy - 9 - fl]], "#ff9a3c", false);
+        poly([[fx - 1.8, fy], [fx + 1.8, fy], [fx - fl * 0.4, fy - 5.5 - fl * 0.5]], "#ffe08a", false);
+      }
+      return hit([[fx - 10, fy - 12], [fx + 10, fy + 5]], o.tg);
     }
     case "bridge": {
       const { x, y } = o, wood = night ? "#6a5a4a" : "#d2b48c";

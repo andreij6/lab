@@ -31,14 +31,14 @@ days) get no house; the town hall counts their plots.
 | Front right | Park, pond and the water tower | cycles all notebooks hold and burn a day; level = days left / 365 |
 | Front left | Trailhead grove, a hiker per trip out on time | open, on-time check-ins (≤6) |
 
-**Districts** (`DISTRICTS` in `town.ts`): blocks set aside, next to the market, for landmarks that link out to the
-rest of the Internet Computer. Homes skip them (`homeBlock` is the spiral without them), so they never move.
+**Districts** (`DISTRICTS` in `town.ts`): blocks set aside, spread through the town, for landmarks that link out to
+the rest of the Internet Computer. Homes skip them (`homeBlock` is the spiral without them), so they never move.
 
 | District | Blocks | Landmarks |
 |---|---|---|
-| The financial district | (2,−1), (2,0) | OISY Wallet (a bank), ICPSwap (an exchange) |
-| The ICP quarter | (1,−2) | The NNS (a capitol), Dominic Williams (a statue) |
-| The spaceport | (2,−2) | SOON launchpad (a rocket that launches every two minutes) |
+| The financial district (right, by the park) | (2,0), (2,1) | OISY Wallet (a bank), ICPSwap (an exchange) |
+| The ICP quarter (left) | (−2,−1) | The NNS (a capitol), Dominic Williams (a statue) |
+| The spaceport (front left, by the lake) | (−2,2) | SOON launchpad (a rocket that launches every two minutes) |
 
 To add a landmark, add an entry to its district: an id, a `kind`, a title, a blurb, a URL, its block and `at`
 ([x, y, w, d] in tiles from the block's corner). The `office` kind is a plain building in the landmark's `color`, so
@@ -49,6 +49,10 @@ them, or homes there would move.
 the back of the island through the lake and off the front edge in a waterfall, a road out of town over a bridge).
 Streets are drawn around the civic centre, all of ring 2, and the residential blocks up to the last one lived in, so
 the town grows block by block.
+
+**The campground**, between the lake and the town: a tent for each person who signed in within 30 days and owns no
+notebook (≤24; yours first, marked "You"), around a fire lit while anyone camps. The app calls the registry's
+`visit()` on sign-in (recorded at most hourly, in MemoryId 39; new visitors stop being recorded at 100,000).
 
 **Life**: people online in chat walk from the town gate to their channel's stall (yours in the accent colour; they
 never come out of houses, so chat is never tied to a home); newcomers play in the schoolyard; hikers walk the trail;

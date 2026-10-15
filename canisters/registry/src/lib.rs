@@ -1279,7 +1279,7 @@ thread_local! {
     /// the wallet a person pays from when it is not their sign-in principal (their OISY account)
     static WALLETS: RefCell<StableBTreeMap<Principal, Principal, Mem>> = RefCell::new(StableBTreeMap::init(MM.with_borrow(|m| m.get(MemoryId::new(32)))));
     static NEXT_WATCH: RefCell<ic_stable_structures::StableCell<u64, Mem>> = RefCell::new(ic_stable_structures::StableCell::init(MM.with_borrow(|m| m.get(MemoryId::new(31))), 1));
-    // MemoryIds 33-38 are retired (a journal that never shipped): leave them unused, start new maps at 39
+    // MemoryIds 33-38 are retired (a journal that never shipped): leave them unused. 39: town.rs VISITORS; start new maps at 40
 }
 
 // --- trip check-ins: leave a plan with someone; they are alerted when a check-in or the return is missed

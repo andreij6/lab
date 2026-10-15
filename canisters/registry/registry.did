@@ -279,6 +279,8 @@ type Town = record {
   // people who own a notebook
   people : nat32;
   listings : nat32;
+  // you are one of them
+  me_camping : bool;
   // your lot (signed in, owning a notebook); no house there means your notebooks are quiet
   mine : opt nat32;
   // trips out right now that are on time, at most 6
@@ -302,6 +304,8 @@ type Town = record {
   // people who joined the community in the last week (the school)
   newcomers_7d : nat32;
   raised_e8s : nat64;
+  // people who signed in within 30 days and have no notebook yet: tents in the campground
+  campers : nat32;
 };
 type TownChannel = record { messages_24h : nat32; name : text; online : nat32 };
 type TownHouse = record {
@@ -606,6 +610,8 @@ service : () -> {
   update_bug : (nat64, BugStatus, text) -> (Result_22);
   // Upgrade every notebook to the wasm embedded in this registry (controller only).
   upgrade_notebooks : () -> (Result_3);
+  // The app says hello when someone signs in, so the town can count people without a notebook yet.
+  visit : () -> ();
   vote : (text, nat64, nat32) -> (Result_8);
   vote_comment : (nat64, nat64, int8) -> (Result_9);
   // `dir` is 1, -1 or 0 to clear. One vote per member, changeable.

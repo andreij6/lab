@@ -3019,7 +3019,7 @@ const townData = (t: Town): TownData => ({
   at: Number(t.at / 1_000_000n), houses: t.houses.map((h) => ({ lot: h.lot, storeys: h.storeys, size: h.size, lit: h.lit, low: h.low })), people: t.people, homes: t.homes, quiet: t.quiet,
   mine: t.mine, myChannel: t.my_channel, channels: t.channels.map((c) => ({ name: c.name, online: c.online, messages24h: c.messages_24h })), postTopics: t.post_topics, postsLive: t.posts_live,
   posts24h: t.posts_24h, listings: t.listings, rains24h: t.rains_24h, lastRain: t.last_rain === undefined ? undefined : Number(t.last_rain / 1_000_000n), hikers: t.hikers, off: t.off,
-  building: [...t.building], notebooks: t.notebooks, spawned24h: t.spawned_24h, spawned7d: t.spawned_7d, newcomers7d: t.newcomers_7d, cycles: Number(t.cycles), burnPerDay: Number(t.burn_per_day), fundraisersOpen: t.fundraisers_open, raisedE8s: Number(t.raised_e8s),
+  building: [...t.building], notebooks: t.notebooks, spawned24h: t.spawned_24h, spawned7d: t.spawned_7d, newcomers7d: t.newcomers_7d, cycles: Number(t.cycles), burnPerDay: Number(t.burn_per_day), fundraisersOpen: t.fundraisers_open, raisedE8s: Number(t.raised_e8s), campers: t.campers, meCamping: t.me_camping,
 });
 const fetchTown = () => registry().town().then((r) => (r.__kind__ === "Ok" ? demoTown(townData(r.Ok)) : null)).catch(() => null);
 /** Local development with ?town-demo: a busier town than a test network has, to judge the look. */
@@ -3028,7 +3028,7 @@ function demoTown(d: TownData): TownData {
   const houses = Array.from({ length: 90 }, (_, i) => ({ lot: i * 2 + (i % 3), storeys: 1 + (i % 3), size: (i * 7) % 4, lit: (i * 5) % 3, low: i % 13 === 0 }));
   const mine = d.houses.find((h) => h.lot === d.mine);
   return { ...d, houses: [...houses.filter((h) => h.lot !== d.mine), ...(mine ? [mine] : [])].sort((a, b) => a.lot - b.lot), homes: 82, people: 95, channels: d.channels.map((c, i) => ({ ...c, online: (i * 3) % 5, messages24h: c.messages24h + i * 12 })), postTopics: ["general", "study", "crypto", "help", "careers"], postsLive: 5, rains24h: 1, lastRain: Date.now() - 600e3, hikers: 3, listings: 4, off: [],
-    building: [33, 61, 120, 181], notebooks: 140, spawned24h: 2, spawned7d: 6, newcomers7d: 7, cycles: 412e12, burnPerDay: 1.9e12, fundraisersOpen: 2, raisedE8s: 3_450_000_000 };
+    building: [33, 61, 120, 181], notebooks: 140, spawned24h: 2, spawned7d: 6, newcomers7d: 7, cycles: 412e12, burnPerDay: 1.9e12, fundraisersOpen: 2, raisedE8s: 3_450_000_000, campers: 9 };
 }
 let townTimer = 0;
 async function loadTown() {
@@ -3137,6 +3137,8 @@ function townTip(tg: TownTarget): string {
     case "school": return `<b>The school</b>${line(d.newcomers7d ? `${d.newcomers7d} newcomer${d.newcomers7d === 1 ? "" : "s"} joined the community this week` : "No newcomers this week yet")}${go(S.identity ? "Click to say hello in #help" : "Sign in to join")}`;
     case "chapel": return d.off.includes("fundraisers") ? `<b>The chapel</b>${line("Fundraisers are switched off: the bell is still.")}` : `<b>The chapel</b>${line(d.fundraisersOpen ? `${d.fundraisersOpen} fundraiser${d.fundraisersOpen === 1 ? "" : "s"} open: the bell is ringing` : "No fundraiser open")}${line(`${icp(BigInt(d.raisedE8s))} ICP given to keep notebooks running`)}`;
     case "tower": { const n = townCounts(d); return `<b>The water tower</b>${line(`${cyclesText(d.cycles)} of cycles held by ${d.notebooks} notebook${d.notebooks === 1 ? "" : "s"}`)}${line(`${cyclesText(d.burnPerDay)} burned a day${n.days !== undefined ? `: about ${n.days} days at this rate` : ""}`)}${line("Each notebook pays its own way; top yours up in Manage")}`; }
+    case "camp": return `<b>The campground</b>${line(d.campers ? `${d.campers} ${d.campers === 1 ? "person has" : "people have"} signed in this month without a notebook yet: they camp here until they build` : "Nobody camping: everyone who signed in has a notebook")}`;
+    case "tent": return tg.mine ? `<b>Your tent</b>${line("You signed in but have no notebook yet. Make one and your home goes up in town.")}${go("Click to make a notebook")}` : `<b>A tent</b>${line("Someone who signed in and hasn't made a notebook yet")}`;
     case "lake": return `<b>The lake</b>${line("The river runs from it off the edge of the island.")}`;
     case "landmark": { const l = tg.landmark; return `<b>${esc(l.title)}</b>${line(esc(l.blurb))}${go(`Click to open ${esc(new URL(l.url).host)}`)}`; }
     case "district": { const dd = tg.district; return `<b>${esc(dd.name)}</b>${line(esc(dd.blurb))}${line(`${dd.landmarks.length} landmarks, room for more`)}`; }
@@ -3155,6 +3157,7 @@ function townOpen(tg: TownTarget) {
     case "board": if (!S.town.data?.off.includes("board")) { if (S.identity) location.hash = "#/board"; else signin(); } return;
     case "market": if (S.identity) location.hash = "#/market"; else signin(); return;
     case "factory": location.hash = "#/"; return;
+    case "tent": if (tg.mine) location.hash = "#/"; return;
     // another app: a new tab, never handing it this page
     case "landmark": window.open(tg.landmark.url, "_blank", "noopener,noreferrer"); return;
     case "school": { if (!S.identity) return signin(); store("nb-chat-channel", "help"); location.hash = "#/community"; return; }
@@ -4658,11 +4661,14 @@ async function signOut() {
   render();
 }
 
+let visited = false;
 async function loadNotebooks() {
   try {
     if (!REGISTRY) throw new Error("The registry canister ID is missing from this deployment");
     registry().is_admin().then((v) => { if (v !== S.isAdmin) { S.isAdmin = v; render(); } }).catch(() => {});
     registry().flags().then((f) => { S.flags = f; render(); }).catch(() => {});
+    // say hello once a load, so the town can count people who signed in without a notebook yet
+    if (!visited) { visited = true; void registry().visit().catch(() => {}); }
     registry().price().then((p) => { S.price = p; }).catch(() => {});
     registry().tokens().then((t) => { S.tokens = t; }).catch(() => {});
     S.notebooks = await registry().my_notebooks();
