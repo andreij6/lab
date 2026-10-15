@@ -460,6 +460,7 @@ const ICONS: Record<string, string> = {
   house: '<path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/>',
   award: '<circle cx="12" cy="9" r="6"/><path d="M8.5 13.9 7 22l5-3 5 3-1.5-8.1"/>',
   town: '<path d="M3 20v-8l5-4 5 4v8"/><path d="M13 20V9l4-3 4 3v11"/><path d="M2 20h20"/><path d="M7 20v-3h2v3"/>',
+  sprout: '<path d="M12 21v-9"/><path d="M12 12c0-3.5 2.5-6 6-6 0 3.5-2.5 6-6 6z"/><path d="M12 15c0-3-2-5-5-5 0 3 2 5 5 5z"/><path d="M7 21h10"/>',
   user: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/>',
   compass: '<circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/>',
   heart: '<path d="M12 20s-7.5-4.6-9.2-9.3A4.8 4.8 0 0 1 12 6.6a4.8 4.8 0 0 1 9.2 4.1C19.5 15.4 12 20 12 20z"/>',
@@ -4766,8 +4767,8 @@ function chatHtml(): string {
   return `<section class="main chat ${empty ? "chat-quiet" : ""}" data-chat>
     ${empty ? `<canvas class="notes-sky" data-notes-sky aria-hidden="true"></canvas>` : ""}
     <div class="chat-log">${S.chat.garden && !S.chat.messages.length ? "" : msgs}${gardenBubble()}${S.chat.busy ? `<div class="msg notes"><div class="bubble muted thinking"><span class="spin"></span>${esc(S.chat.stage || "Reading your notes…")}</div></div>` : ""}</div>
-    <form class="composer" data-form="chat"><div class="compose-box"><textarea name="chatq" rows="1" placeholder="Ask your notes…" title="↵ to send, ⇧↵ for a new line" aria-label="Ask your notes">${esc(S.chat.input)}</textarea><button type="submit" class="btn btn-ghost icon-btn send-btn" title="Send" aria-label="Send" ${S.chat.busy ? "disabled" : ""}>${icon("send")}</button></div>
-      <div class="compose-foot"><span class="small muted">Asks ${chatFolders().size} of ${[...new Set([...chatFolders(), ...S.chat.excluded])].length} folders · ↵ to send</span><button type="button" class="btn btn-ghost ${S.chat.garden ? "on" : ""}" data-action="garden-run" title="The gardener: links your notes could use, notes that belong together, tags to add">${icon("graph")}<span class="small lbl">Gardener</span></button><button type="button" class="btn btn-ghost model-pick" data-action="copilot-model" title="${LLM_LOCAL ? "Locally your Ollama answers whichever you pick." : esc(chatModel().note)}">${esc(chatModel().name)}<span class="tier t-${chatModel().tier.toLowerCase()}">${chatModel().tier}</span><span class="small muted">${chatModel().paid ? "≈0.11 TC" : "0.001 TC"}</span>${icon("down")}</button></div></form>
+    <form class="composer" data-form="chat"><div class="compose-box"><button type="button" class="btn btn-ghost icon-btn" data-action="notes-plus" title="Tools: the Gardener, and more to come" aria-label="Tools">${icon("plus")}</button><textarea name="chatq" rows="1" placeholder="Ask your notes…" title="↵ to send, ⇧↵ for a new line" aria-label="Ask your notes">${esc(S.chat.input)}</textarea><button type="submit" class="btn btn-ghost icon-btn send-btn" title="Send" aria-label="Send" ${S.chat.busy ? "disabled" : ""}>${icon("send")}</button></div>
+      <div class="compose-foot"><span class="small muted">Asks ${chatFolders().size} of ${[...new Set([...chatFolders(), ...S.chat.excluded])].length} folders · ↵ to send</span><button type="button" class="btn btn-ghost model-pick" data-action="copilot-model" title="${LLM_LOCAL ? "Locally your Ollama answers whichever you pick." : esc(chatModel().note)}">${esc(chatModel().name)}<span class="tier t-${chatModel().tier.toLowerCase()}">${chatModel().tier}</span><span class="small muted">${chatModel().paid ? "≈0.11 TC" : "0.001 TC"}</span>${icon("down")}</button></div></form>
   </section>`;
 }
 function chatAside(): string {
@@ -4865,7 +4866,7 @@ function gardenBubble(): string {
     const what = x.kind === "tag" ? `Tag <b>${esc(stem(x.path))}</b> with <code>#${esc(x.tag)}</code>` : x.kind === "link" ? `Link <b>${esc(stem(x.from))}</b> to <b>${esc(stem(x.to))}</b>` : `<b>${esc(stem(x.from))}</b> and <b>${esc(stem(x.to))}</b> belong together`;
     return `<div class="run"><span>${icon(x.kind === "tag" ? "tag" : "link")} ${what} <span class="small muted">· ${esc(x.why)}</span></span><span class="row-actions"><button type="button" class="btn" data-action="garden-accept" data-key="${esc(x.key)}">${x.kind === "tag" ? "Tag it" : "Link them"}</button><button type="button" class="btn btn-ghost icon-btn" data-action="garden-hide" data-key="${esc(x.key)}" title="Not this one; don't suggest it again" aria-label="Dismiss">${icon("x")}</button></span></div>`;
   };
-  return `<div class="msg notes"><div class="bubble md garden"><div class="row tight"><b>${icon("graph")} Gardener</b><span class="small muted">${all.length ? `${all.length} suggestion${all.length === 1 ? "" : "s"}` : "the garden is tidy"}</span><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="garden-ai" ${all.length ? "" : "disabled"} title="The model reads the notes involved and says which links matter most">${icon("bot")}<span class="small lbl">Which matter most?</span></button><button type="button" class="btn btn-ghost icon-btn" data-action="garden-close" title="Put it away" aria-label="Close">${icon("x")}</button></span></div>
+  return `<div class="msg notes"><div class="bubble md garden"><div class="row tight"><b>${icon("sprout")} Gardener</b><span class="small muted">${all.length ? `${all.length} suggestion${all.length === 1 ? "" : "s"}` : "the garden is tidy"}</span><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="garden-ai" ${all.length ? "" : "disabled"} title="The model reads the notes involved and says which links matter most">${icon("bot")}<span class="small lbl">Which matter most?</span></button><button type="button" class="btn btn-ghost icon-btn" data-action="garden-close" title="Put it away" aria-label="Close">${icon("x")}</button></span></div>
     <p class="small muted">Links your notes could use, notes that belong together, tags their neighbours carry. One click each, and you are taken to the note to see the change; what you dismiss stays dismissed. Missing notes and duplicate titles are in Organize › Health.</p>
     ${all.length ? `<div class="runs">${all.map(row).join("")}</div>` : `<p class="small muted">Nothing to suggest right now.</p>`}</div></div>`;
 }
@@ -7731,6 +7732,12 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
       toast(`“${r.Ok.name}” pays for your chat now.`, "ok");
       return render();
     }
+    case "notes-plus": {
+      const r = el.getBoundingClientRect();
+      return contextMenu(r.left, r.top - 8, "Tools", [
+        { label: "Gardener · links, pairs and tags your notes could use", icon: "sprout", action: () => void gardenAction("garden-run", el) },
+      ]);
+    }
     case "chat-plus": {
       const r = el.getBoundingClientRect();
       return contextMenu(r.left, r.top - 8, "", [
@@ -8381,7 +8388,12 @@ document.addEventListener("input", (ev) => {
     case "paytoken": S.payToken = v; store("nb-pay-token", v); break;
     case "progress": if (S.shared) { const st = Number(v); S.shared.myProgress = st; void notebookOf(S.shared.canister).set_progress(S.shared.path, st).then(() => toast(st ? "Progress saved for the group." : "Mark cleared.", "ok")); } break;
     case "chattext": if (S.community) { S.community.draft = v; el.style.height = "auto"; el.style.height = `${Math.min(el.scrollHeight, 160)}px`; } break;
-    case "chatq": S.chat.input = v; el.style.height = "auto"; el.style.height = `${Math.min(el.scrollHeight, 200)}px`; break;
+    case "chatq": {
+      S.chat.input = v; el.style.height = "auto"; el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+      // the gardener's bubble makes way as soon as a question is being typed; the box keeps the caret
+      if (S.chat.garden && v.trim()) { S.chat.garden = false; render(); const ta = document.querySelector<HTMLTextAreaElement>("[name=chatq]"); if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); } }
+      break;
+    }
     case "chatfolder": {
       const f = (el as HTMLInputElement).value;
       const on = (el as HTMLInputElement).checked;
