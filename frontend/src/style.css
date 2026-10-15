@@ -763,3 +763,6 @@ body .wsbar, body .topbar { padding-right: 50px; } /* keep the corner clear for 
 .modal .checks { display: grid; gap: 6px; margin: 8px 0 14px; }
 .modal .check { display: flex; align-items: center; gap: 8px; font-size: 14px; }
 .chat-head .segmented.sub a.tab { text-decoration: none; color: inherit; }
+
+/* the gardener's bubble in the chat */
+.bubble.garden { white-space: normal; max-width: 720px; } .bubble.garden .runs { margin-top: 6px; } .bubble.garden .run { padding: 6px 0; border-top: 1px solid var(--line); gap: 8px; } .bubble.garden .row.tight { align-items: center; gap: 8px; } .bubble.garden p { margin: 6px 0 0; }

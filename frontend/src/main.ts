@@ -255,7 +255,7 @@ const S = {
   tag: "",
   collapsed: new Set<string>(JSON.parse(store("nb-collapsed") ?? "[]") as string[]),
   tab: "notes" as Tab,
-  chat: { input: "", busy: false, messages: [] as ChatMsg[], excluded: new Set<string>(), stage: "" },
+  chat: { input: "", busy: false, messages: [] as ChatMsg[], excluded: new Set<string>(), stage: "", garden: false as boolean },
   mobile: mobileQuery.matches,
   mobilePane: "files" as MobilePane,
   graphGhosts: store("nb-graph-ghosts") === "1",
@@ -3890,7 +3890,6 @@ function organizeTab(): string {
   const opts = (sel?: string) => md.map((p) => `<option value="${esc(p)}" ${p === sel ? "selected" : ""}>${esc(stem(p))}</option>`).join("");
   const tpls = [...Object.keys(BUILTIN_TEMPLATES).map((k) => ({ v: `builtin:${k}`, l: `${k} (built in)` })), ...paths().filter((p) => p.startsWith("Templates/")).map((p) => ({ v: p, l: stem(p).slice(10) }))];
   return `<section class="main" style="overflow:auto"><div class="page wide org">
-    ${gardenCard()}
     <div class="card band">
       <div class="row"><h2>${icon("search")} Saved searches</h2></div>
       <form class="row tight" data-form="org-search"><input class="input code" name="orgq" value="${esc(o.q)}" placeholder='tag:#client status:open modified:<7d folder:Projects -tag:done' aria-label="Search query" style="flex:1"><button type="submit" class="btn">Run</button><button type="button" class="btn btn-primary" data-action="org-save" ${o.q.trim() ? "" : "disabled"}>${icon("star")}Save</button>${o.q.trim() ? `<button type="button" class="btn btn-ghost" data-action="org-tile" title="Show this search as a tile on a dashboard">${icon("graph")}Tile</button>` : ""}</form>
@@ -4763,12 +4762,12 @@ function chatHtml(): string {
     ? S.chat.messages.map((m, mi) => `<div class="msg ${m.role}">${m.role === "you" ? `<div class="bubble">${esc(m.text)}</div>` : `<div class="bubble md">${beyond(citeLinks(renderMd(m.text), m.picks ?? []))}${m.model ? `<div class="answer-tools"><button type="button" class="btn btn-ghost" data-action="chat-save" data-i="${mi}" title="Save this answer as a note, citations as links">${icon("plus")}Save as note</button>${m.deck ? `<button type="button" class="btn btn-ghost" data-action="chat-save-deck" data-i="${mi}" title="Save these cards as a flashcard deck">${icon("check")}Save as a deck</button>` : ""}${m.insertInto && note(m.insertInto) ? `<button type="button" class="btn btn-ghost" data-action="chat-insert" data-i="${mi}" title="Put this under a Summary heading in the note">${icon("edit")}Insert into “${esc(stem(m.insertInto))}”</button>` : ""}</div>` : ""}${m.model ? `<div class="answered-by small faint">${icon("bot")}${esc(LLM_LOCAL ? "Local Ollama (stand-in)" : modelName(m.model))}${m.cycles ? ` · ${tc(m.cycles)}` : ""}${m.fallback ? ` · ${esc(m.fallback)}` : ""}</div>` : m.fallback ? `<div class="answered-by small faint">${esc(m.fallback)}</div>` : ""}</div>${m.picks?.length ? `<div class="sources">${m.picks.map((p) => `<button type="button" class="src" data-action="open" data-path="${esc(p.path)}" title="${esc(p.why.join("; "))}">${icon("file")}${esc(title(p.path))}</button>`).join("")}</div>` : ""}`}</div>`).join("")
     : `<div class="chat-empty">${icon("chat")}<h3>Ask your notes</h3><p class="muted small">Type a question in plain language. The notebook picks the notes that look relevant from the folders ticked on the right and answers from them.</p></div>`;
   // with nothing asked yet, the notebook's notes glow behind as a sky of stars (click one to open it)
-  const empty = !S.chat.messages.length && !S.chat.busy;
+  const empty = !S.chat.messages.length && !S.chat.busy && !S.chat.garden;
   return `<section class="main chat ${empty ? "chat-quiet" : ""}" data-chat>
     ${empty ? `<canvas class="notes-sky" data-notes-sky aria-hidden="true"></canvas>` : ""}
-    <div class="chat-log">${msgs}${S.chat.busy ? `<div class="msg notes"><div class="bubble muted thinking"><span class="spin"></span>${esc(S.chat.stage || "Reading your notes…")}</div></div>` : ""}</div>
+    <div class="chat-log">${S.chat.garden && !S.chat.messages.length ? "" : msgs}${gardenBubble()}${S.chat.busy ? `<div class="msg notes"><div class="bubble muted thinking"><span class="spin"></span>${esc(S.chat.stage || "Reading your notes…")}</div></div>` : ""}</div>
     <form class="composer" data-form="chat"><div class="compose-box"><textarea name="chatq" rows="1" placeholder="Ask your notes…" title="↵ to send, ⇧↵ for a new line" aria-label="Ask your notes">${esc(S.chat.input)}</textarea><button type="submit" class="btn btn-ghost icon-btn send-btn" title="Send" aria-label="Send" ${S.chat.busy ? "disabled" : ""}>${icon("send")}</button></div>
-      <div class="compose-foot"><span class="small muted">Asks ${chatFolders().size} of ${[...new Set([...chatFolders(), ...S.chat.excluded])].length} folders · ↵ to send</span><button type="button" class="btn btn-ghost model-pick" data-action="copilot-model" title="${LLM_LOCAL ? "Locally your Ollama answers whichever you pick." : esc(chatModel().note)}">${esc(chatModel().name)}<span class="tier t-${chatModel().tier.toLowerCase()}">${chatModel().tier}</span><span class="small muted">${chatModel().paid ? "≈0.11 TC" : "0.001 TC"}</span>${icon("down")}</button></div></form>
+      <div class="compose-foot"><span class="small muted">Asks ${chatFolders().size} of ${[...new Set([...chatFolders(), ...S.chat.excluded])].length} folders · ↵ to send</span><button type="button" class="btn btn-ghost ${S.chat.garden ? "on" : ""}" data-action="garden-run" title="The gardener: links your notes could use, notes that belong together, tags to add">${icon("graph")}<span class="small lbl">Gardener</span></button><button type="button" class="btn btn-ghost model-pick" data-action="copilot-model" title="${LLM_LOCAL ? "Locally your Ollama answers whichever you pick." : esc(chatModel().note)}">${esc(chatModel().name)}<span class="tier t-${chatModel().tier.toLowerCase()}">${chatModel().tier}</span><span class="small muted">${chatModel().paid ? "≈0.11 TC" : "0.001 TC"}</span>${icon("down")}</button></div></form>
   </section>`;
 }
 function chatAside(): string {
@@ -4855,22 +4854,25 @@ function questsCard(): string {
 }
 /** Organize: links, pairs and tags the notes could use, one click each. */
 let gardenMemo: { key: string; out: Suggestion[] } | undefined;
-function gardenCard(): string {
-  if (!S.notes) return "";
-  // suggest() is O(n²) over the notes: only again when the notes, the drafts or the dismissals changed
-  const key = `${S.notes.length}|${[...S.drafts].filter(([, d]) => d.dirty).map(([p, d]) => `${p}:${d.text.length}`).join(",")}|${S.settings.gardenHidden.length}|${S.idx.links.size}`;
-  if (gardenMemo?.key !== key || gardenMemo.out.length === 0) gardenMemo = { key, out: suggest(notesNow(), S.idx, S.settings.gardenHidden, { max: 12 }) };
+/** The gardener's suggestions as a bubble from the notes in the chat; nothing until the person runs it. */
+function gardenBubble(): string {
+  if (!S.notes || !S.chat.garden) return "";
+  // suggest() is O(n²) over the notes: only again when the notes (their text too), the drafts or the dismissals changed
+  const key = `${S.notes.length}|${S.notes.reduce((a, n) => a + n.content.length, 0)}|${S.notes.reduce((a, n) => (n.modified > a ? n.modified : a), 0n)}|${[...S.drafts].filter(([, d]) => d.dirty).map(([p, d]) => `${p}:${d.text.length}`).join(",")}|${S.settings.gardenHidden.length}|${S.idx.links.size}`;
+  if (gardenMemo?.key !== key) gardenMemo = { key, out: suggest(notesNow(), S.idx, S.settings.gardenHidden, { max: 12 }) };
   const all = gardenMemo.out;
   const row = (x: Suggestion) => {
     const what = x.kind === "tag" ? `Tag <b>${esc(stem(x.path))}</b> with <code>#${esc(x.tag)}</code>` : x.kind === "link" ? `Link <b>${esc(stem(x.from))}</b> to <b>${esc(stem(x.to))}</b>` : `<b>${esc(stem(x.from))}</b> and <b>${esc(stem(x.to))}</b> belong together`;
-    return `<div class="run"><span>${icon(x.kind === "tag" ? "tag" : "link")} ${what} <span class="small muted">· ${esc(x.why)}</span></span><span class="right-actions"><button type="button" class="btn" data-action="garden-accept" data-key="${esc(x.key)}">${x.kind === "tag" ? "Tag it" : "Link them"}</button><button type="button" class="btn btn-ghost icon-btn" data-action="garden-hide" data-key="${esc(x.key)}" title="Not this one" aria-label="Dismiss">${icon("x")}</button></span></div>`;
+    return `<div class="run"><span>${icon(x.kind === "tag" ? "tag" : "link")} ${what} <span class="small muted">· ${esc(x.why)}</span></span><span class="row-actions"><button type="button" class="btn" data-action="garden-accept" data-key="${esc(x.key)}">${x.kind === "tag" ? "Tag it" : "Link them"}</button><button type="button" class="btn btn-ghost icon-btn" data-action="garden-hide" data-key="${esc(x.key)}" title="Not this one; don't suggest it again" aria-label="Dismiss">${icon("x")}</button></span></div>`;
   };
-  return `<div class="card band"><div class="row"><h2>${icon("graph")} Gardener</h2><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="garden-ai" ${all.length ? "" : "disabled"} title="The model reads the notes involved and says which links matter most">${icon("bot")}Ask the AI which matter most</button></span></div>
-    <p class="small muted">Links your notes could use, notes that belong together, tags their neighbours carry. One click each; what you dismiss stays dismissed. Missing notes and duplicate titles are in Health below.</p>
-    ${all.length ? `<div class="runs">${all.map(row).join("")}</div>` : `<p class="small muted">Nothing to suggest right now: the garden is tidy.</p>`}</div>`;
+  return `<div class="msg notes"><div class="bubble md garden"><div class="row tight"><b>${icon("graph")} Gardener</b><span class="small muted">${all.length ? `${all.length} suggestion${all.length === 1 ? "" : "s"}` : "the garden is tidy"}</span><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="garden-ai" ${all.length ? "" : "disabled"} title="The model reads the notes involved and says which links matter most">${icon("bot")}<span class="small lbl">Which matter most?</span></button><button type="button" class="btn btn-ghost icon-btn" data-action="garden-close" title="Put it away" aria-label="Close">${icon("x")}</button></span></div>
+    <p class="small muted">Links your notes could use, notes that belong together, tags their neighbours carry. One click each, and you are taken to the note to see the change; what you dismiss stays dismissed. Missing notes and duplicate titles are in Organize › Health.</p>
+    ${all.length ? `<div class="runs">${all.map(row).join("")}</div>` : `<p class="small muted">Nothing to suggest right now.</p>`}</div></div>`;
 }
 async function gardenAction(action: string, el: HTMLElement) {
   const key = el.dataset.key ?? "";
+  if (action === "garden-run") { S.chat.garden = true; if (S.mobile) S.mobilePane = "note"; return render(); }
+  if (action === "garden-close") { S.chat.garden = false; return render(); }
   if (action === "garden-hide") { S.settings.gardenHidden = [...S.settings.gardenHidden, key].slice(-500); await saveSettings(); return render(); }
   const all = suggest(notesNow(), S.idx, S.settings.gardenHidden, { max: 200 });
   if (action === "garden-ai") {
@@ -4884,8 +4886,9 @@ async function gardenAction(action: string, el: HTMLElement) {
   if (!x) return;
   if (x.kind === "tag") await writeNote(x.path, addTag(draftOf(x.path).text, x.tag));
   else await writeNote(x.from, addLink(draftOf(x.from).text, stem(x.to)));
-  toast(x.kind === "tag" ? "Tagged." : "Linked.", "ok");
-  render();
+  toast(x.kind === "tag" ? "Tagged: see the front matter." : "Linked: see “Related” at the end of the note.", "ok");
+  // to the note that changed, so the edit is in view; the gardener's bubble waits in the chat
+  await open(x.kind === "tag" ? x.path : x.from, { view: "preview" });
 }
 /** A kit copilot button: gather that kit's notes, ask. */
 async function copilotAction(action: string, el: HTMLElement) {
@@ -5482,7 +5485,7 @@ async function openNotebook(id: string, path?: string) {
   S.idx = buildIndex([]); // the last notebook's links would point at notes this one has not loaded
   S.drafts.clear();
   S.tab = "notes";
-  S.chat = { input: "", busy: false, messages: [], excluded: new Set(JSON.parse(store(`nb-chat-off-${id}`) ?? "[]") as string[]), stage: "" };
+  S.chat = { input: "", busy: false, messages: [], excluded: new Set(JSON.parse(store(`nb-chat-off-${id}`) ?? "[]") as string[]), stage: "", garden: false };
   S.query = S.tag = "";
   S.error = "";
   S.info = undefined;
