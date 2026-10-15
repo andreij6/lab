@@ -292,6 +292,9 @@ Prepared questions over a kit's notes, answered by the model picked in Chat with
 - **Fitness:** Plan my next session, from your last six workouts and your records.
 - **Crypto:** Question a thesis: counterarguments, what would prove it wrong, what to watch.
 - **Work:** Summarise the meeting with AI, in a meeting note's menu; the answer offers **Insert into the note**, which puts it under a `## Summary` heading after the title. Editors of a shared notebook get the same button on the shared page (free model only).
+- **Tools under the + beside the question box** (Chat with your notes): the Gardener, Tidy-up and Open questions; each answers as a bubble from the notes, and the bubble makes way once you start typing a question.
+- **Tidy-up**: what Health finds (links to notes that don't exist, orphans, duplicate titles, empty folders, projects untouched for a month) with the same one-click fixes, in the chat; no model, free.
+- **Open questions**: pick a folder; the model lists the questions its notes raise but don't answer and the evidence that is missing, as a `- [ ]` checklist grouped by note, with two next steps; charged like a chat answer; Save as note keeps it.
 - **The Gardener** (Chat with your notes › the + beside the question box; it says nothing until you run it, its suggestions arrive as a bubble from the notes, and the bubble makes way once you start typing a question): links your notes could use (a title named in the text but not linked), notes that overlap a lot without a link, and tags their neighbours carry, each one click, after which you are taken to the note to see the change (a link goes under `## Related`; a tag into the front matter); what you dismiss stays dismissed (saved with the notebook). Ask the AI which matter most sends the notes involved to the model for a short ranked list. Missing notes and duplicate titles stay in the Health card.
 
 ## Community

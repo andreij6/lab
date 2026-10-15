@@ -255,7 +255,7 @@ const S = {
   tag: "",
   collapsed: new Set<string>(JSON.parse(store("nb-collapsed") ?? "[]") as string[]),
   tab: "notes" as Tab,
-  chat: { input: "", busy: false, messages: [] as ChatMsg[], excluded: new Set<string>(), stage: "", garden: false as boolean },
+  chat: { input: "", busy: false, messages: [] as ChatMsg[], excluded: new Set<string>(), stage: "", garden: false as boolean, tidy: false as boolean },
   mobile: mobileQuery.matches,
   mobilePane: "files" as MobilePane,
   graphGhosts: store("nb-graph-ghosts") === "1",
@@ -460,6 +460,7 @@ const ICONS: Record<string, string> = {
   house: '<path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/>',
   award: '<circle cx="12" cy="9" r="6"/><path d="M8.5 13.9 7 22l5-3 5 3-1.5-8.1"/>',
   town: '<path d="M3 20v-8l5-4 5 4v8"/><path d="M13 20V9l4-3 4 3v11"/><path d="M2 20h20"/><path d="M7 20v-3h2v3"/>',
+  broom: '<path d="M19 3l-8 8"/><path d="M11 11l-4 4"/><path d="M7 15l-3 6 6-3"/><path d="M8.5 13.5l2 2"/>',
   sprout: '<path d="M12 21v-9"/><path d="M12 12c0-3.5 2.5-6 6-6 0 3.5-2.5 6-6 6z"/><path d="M12 15c0-3-2-5-5-5 0 3 2 5 5 5z"/><path d="M7 21h10"/>',
   user: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/>',
   compass: '<circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/>',
@@ -3883,8 +3884,8 @@ function organizeTab(): string {
   const inbox = inboxNotes();
   const t = o.triage ? inbox[Math.min(o.triageIdx, inbox.length - 1)] : undefined;
   const issues = lint(notes, S.idx, S.folders);
-  const kinds: [Issue["kind"], string][] = [["broken", "Broken links"], ["orphan", "Orphans"], ["duplicate", "Duplicate titles"], ["empty-folder", "Empty folders"], ["stale-project", "Stale projects"]];
-  const fix = (i: Issue) => i.kind === "broken" ? `<button type="button" class="btn btn-ghost" data-action="lint-create" data-target="${esc(i.target ?? "")}">${icon("plus")}Create it</button>` : i.kind === "orphan" ? `<button type="button" class="btn btn-ghost" data-action="lint-index" data-path="${esc(i.path)}">Link from index</button><button type="button" class="btn btn-ghost" data-action="org-archive" data-path="${esc(i.path)}">Archive</button>` : i.kind === "duplicate" ? `<button type="button" class="btn btn-ghost" data-action="lint-rename" data-path="${esc(i.path)}">Rename</button>` : i.kind === "empty-folder" ? `<button type="button" class="btn btn-ghost" data-action="lint-rmdir" data-path="${esc(i.path)}">Delete folder</button>` : `<button type="button" class="btn btn-ghost" data-action="lint-pause" data-path="${esc(i.path)}">Mark paused</button>`;
+  const kinds = LINT_KINDS;
+  const fix = lintFix;
   const next = nextToResurface(notes, S.settings.resurface);
   const fadedCount = notes.filter((n) => faded(n.path)).length;
   const md = notes.filter((n) => n.path.endsWith(".md")).map((n) => n.path);
@@ -4763,10 +4764,10 @@ function chatHtml(): string {
     ? S.chat.messages.map((m, mi) => `<div class="msg ${m.role}">${m.role === "you" ? `<div class="bubble">${esc(m.text)}</div>` : `<div class="bubble md">${beyond(citeLinks(renderMd(m.text), m.picks ?? []))}${m.model ? `<div class="answer-tools"><button type="button" class="btn btn-ghost" data-action="chat-save" data-i="${mi}" title="Save this answer as a note, citations as links">${icon("plus")}Save as note</button>${m.deck ? `<button type="button" class="btn btn-ghost" data-action="chat-save-deck" data-i="${mi}" title="Save these cards as a flashcard deck">${icon("check")}Save as a deck</button>` : ""}${m.insertInto && note(m.insertInto) ? `<button type="button" class="btn btn-ghost" data-action="chat-insert" data-i="${mi}" title="Put this under a Summary heading in the note">${icon("edit")}Insert into “${esc(stem(m.insertInto))}”</button>` : ""}</div>` : ""}${m.model ? `<div class="answered-by small faint">${icon("bot")}${esc(LLM_LOCAL ? "Local Ollama (stand-in)" : modelName(m.model))}${m.cycles ? ` · ${tc(m.cycles)}` : ""}${m.fallback ? ` · ${esc(m.fallback)}` : ""}</div>` : m.fallback ? `<div class="answered-by small faint">${esc(m.fallback)}</div>` : ""}</div>${m.picks?.length ? `<div class="sources">${m.picks.map((p) => `<button type="button" class="src" data-action="open" data-path="${esc(p.path)}" title="${esc(p.why.join("; "))}">${icon("file")}${esc(title(p.path))}</button>`).join("")}</div>` : ""}`}</div>`).join("")
     : `<div class="chat-empty">${icon("chat")}<h3>Ask your notes</h3><p class="muted small">Type a question in plain language. The notebook picks the notes that look relevant from the folders ticked on the right and answers from them.</p></div>`;
   // with nothing asked yet, the notebook's notes glow behind as a sky of stars (click one to open it)
-  const empty = !S.chat.messages.length && !S.chat.busy && !S.chat.garden;
+  const empty = !S.chat.messages.length && !S.chat.busy && !S.chat.garden && !S.chat.tidy;
   return `<section class="main chat ${empty ? "chat-quiet" : ""}" data-chat>
     ${empty ? `<canvas class="notes-sky" data-notes-sky aria-hidden="true"></canvas>` : ""}
-    <div class="chat-log">${S.chat.garden && !S.chat.messages.length ? "" : msgs}${gardenBubble()}${S.chat.busy ? `<div class="msg notes"><div class="bubble muted thinking"><span class="spin"></span>${esc(S.chat.stage || "Reading your notes…")}</div></div>` : ""}</div>
+    <div class="chat-log">${(S.chat.garden || S.chat.tidy) && !S.chat.messages.length ? "" : msgs}${gardenBubble()}${tidyBubble()}${S.chat.busy ? `<div class="msg notes"><div class="bubble muted thinking"><span class="spin"></span>${esc(S.chat.stage || "Reading your notes…")}</div></div>` : ""}</div>
     <form class="composer" data-form="chat"><div class="compose-box"><button type="button" class="btn btn-ghost icon-btn" data-action="notes-plus" title="Tools: the Gardener, and more to come" aria-label="Tools">${icon("plus")}</button><textarea name="chatq" rows="1" placeholder="Ask your notes…" title="↵ to send, ⇧↵ for a new line" aria-label="Ask your notes">${esc(S.chat.input)}</textarea><button type="submit" class="btn btn-ghost icon-btn send-btn" title="Send" aria-label="Send" ${S.chat.busy ? "disabled" : ""}>${icon("send")}</button></div>
       <div class="compose-foot"><span class="small muted">Asks ${chatFolders().size} of ${[...new Set([...chatFolders(), ...S.chat.excluded])].length} folders · ↵ to send</span><button type="button" class="btn btn-ghost model-pick" data-action="copilot-model" title="${LLM_LOCAL ? "Locally your Ollama answers whichever you pick." : esc(chatModel().note)}">${esc(chatModel().name)}<span class="tier t-${chatModel().tier.toLowerCase()}">${chatModel().tier}</span><span class="small muted">${chatModel().paid ? "≈0.11 TC" : "0.001 TC"}</span>${icon("down")}</button></div></form>
   </section>`;
@@ -4854,6 +4855,18 @@ function questsCard(): string {
     <div class="quests">${QUEST_ROWS(notes, links, streak).map(([name, have, need, gift]) => `<div class="quest ${have >= need ? "done" : ""}"><div class="row tight"><b>${have >= need ? icon("check") : ""}${name}</b><span class="small muted">${Math.min(have, need)}/${need}</span></div><div class="bar"><i style="width:${Math.min(100, (have / need) * 100).toFixed(0)}%"></i></div><div class="small muted">${gift}</div></div>`).join("")}</div></div>`;
 }
 /** Organize: links, pairs and tags the notes could use, one click each. */
+const LINT_KINDS: [Issue["kind"], string][] = [["broken", "Broken links"], ["orphan", "Orphans"], ["duplicate", "Duplicate titles"], ["empty-folder", "Empty folders"], ["stale-project", "Stale projects"]];
+/** The one-click fix for a Health finding (Organize › Health and the Tidy-up bubble). */
+const lintFix = (i: Issue) => i.kind === "broken" ? `<button type="button" class="btn btn-ghost" data-action="lint-create" data-target="${esc(i.target ?? "")}">${icon("plus")}Create it</button>` : i.kind === "orphan" ? `<button type="button" class="btn btn-ghost" data-action="lint-index" data-path="${esc(i.path)}">Link from index</button><button type="button" class="btn btn-ghost" data-action="org-archive" data-path="${esc(i.path)}">Archive</button>` : i.kind === "duplicate" ? `<button type="button" class="btn btn-ghost" data-action="lint-rename" data-path="${esc(i.path)}">Rename</button>` : i.kind === "empty-folder" ? `<button type="button" class="btn btn-ghost" data-action="lint-rmdir" data-path="${esc(i.path)}">Delete folder</button>` : `<button type="button" class="btn btn-ghost" data-action="lint-pause" data-path="${esc(i.path)}">Mark paused</button>`;
+/** Tidy-up: what Health finds, as a bubble from the notes with the same one-click fixes. */
+function tidyBubble(): string {
+  if (!S.notes || !S.chat.tidy) return "";
+  const issues = lint(orgNotes(), S.idx, S.folders);
+  const groups = LINT_KINDS.map(([k, label]) => [label, issues.filter((i) => i.kind === k)] as const).filter(([, v]) => v.length);
+  return `<div class="msg notes"><div class="bubble md garden"><div class="row tight"><b>${icon("broom")} Tidy-up</b><span class="small muted">${issues.length ? `${issues.length} thing${issues.length === 1 ? "" : "s"} to put right` : "nothing out of place"}</span><span class="right-actions"><button type="button" class="btn btn-ghost icon-btn" data-action="tidy-close" title="Put it away" aria-label="Close">${icon("x")}</button></span></div>
+    <p class="small muted">Links to notes that don't exist, notes nothing links to, two notes with one title, empty folders, projects nobody touched in a month. One click each.</p>
+    ${groups.map(([label, v]) => `<div class="pane-title" style="padding-left:0">${esc(label)} <span class="count">${v.length}</span></div><div class="runs">${v.map((i) => `<div class="run"><span><a href="#" data-action="open" data-path="${esc(i.path)}"><b>${esc(stem(i.path))}</b></a> <span class="small muted">· ${esc(i.detail)}</span></span><span class="row-actions">${lintFix(i)}</span></div>`).join("")}</div>`).join("")}</div></div>`;
+}
 let gardenMemo: { key: string; out: Suggestion[] } | undefined;
 /** The gardener's suggestions as a bubble from the notes in the chat; nothing until the person runs it. */
 function gardenBubble(): string {
@@ -4867,7 +4880,7 @@ function gardenBubble(): string {
     return `<div class="run"><span>${icon(x.kind === "tag" ? "tag" : "link")} ${what} <span class="small muted">· ${esc(x.why)}</span></span><span class="row-actions"><button type="button" class="btn" data-action="garden-accept" data-key="${esc(x.key)}">${x.kind === "tag" ? "Tag it" : "Link them"}</button><button type="button" class="btn btn-ghost icon-btn" data-action="garden-hide" data-key="${esc(x.key)}" title="Not this one; don't suggest it again" aria-label="Dismiss">${icon("x")}</button></span></div>`;
   };
   return `<div class="msg notes"><div class="bubble md garden"><div class="row tight"><b>${icon("sprout")} Gardener</b><span class="small muted">${all.length ? `${all.length} suggestion${all.length === 1 ? "" : "s"}` : "the garden is tidy"}</span><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="garden-ai" ${all.length ? "" : "disabled"} title="The model reads the notes involved and says which links matter most">${icon("bot")}<span class="small lbl">Which matter most?</span></button><button type="button" class="btn btn-ghost icon-btn" data-action="garden-close" title="Put it away" aria-label="Close">${icon("x")}</button></span></div>
-    <p class="small muted">Links your notes could use, notes that belong together, tags their neighbours carry. One click each, and you are taken to the note to see the change; what you dismiss stays dismissed. Missing notes and duplicate titles are in Organize › Health.</p>
+    <p class="small muted">Links your notes could use, notes that belong together, tags their neighbours carry. One click each, and you are taken to the note to see the change; what you dismiss stays dismissed. Missing notes and duplicate titles are Tidy-up's job.</p>
     ${all.length ? `<div class="runs">${all.map(row).join("")}</div>` : `<p class="small muted">Nothing to suggest right now.</p>`}</div></div>`;
 }
 async function gardenAction(action: string, el: HTMLElement) {
@@ -4902,6 +4915,13 @@ async function copilotAction(action: string, el: HTMLElement) {
   const src = (paths: string[], q: string) => paths.slice(0, 10).map((p) => ({ path: p, excerpt: excerpt(notes.find((n) => n.path === p)?.content ?? "", q, per(paths.length)) }));
   const folderPick = async (title: string) => { const folders = ["", ...S.folders.filter((f) => f !== AGENT_ROOT && !f.startsWith(`${AGENT_ROOT}/`))]; const f = await ask({ title, label: "Folder", choices: folders.map((x) => ({ value: x, label: x || "Top level" })), value: "", ok: "Go" }); if (f === null) return undefined; return notes.filter((n) => n.path.endsWith(".md") && !n.path.startsWith(`${AGENT_ROOT}/`) && (f ? n.path.startsWith(`${f}/`) : !n.path.includes("/"))).map((n) => n.path).slice(0, 10); };
   switch (action) {
+    case "copilot-questions": {
+      const paths = await folderPick("Open questions: which folder?");
+      if (!paths) return;
+      if (!paths.length) return toast("No notes in that folder.", "info");
+      const q = "From these notes, list the open questions they raise but do not answer, and the evidence that is missing, as a markdown checklist of `- [ ]` items grouped under the note each comes from (name the note as [[Note]]). At most twelve items, the most important first. End with two next steps.";
+      return copilot("Open questions these notes raise", q, src(paths, q));
+    }
     case "copilot-career-resume": {
       const post = await ask({ title: "Tailor my résumé", label: "Paste the job post", multiline: true, ok: "Tailor" });
       if (!post?.trim()) return;
@@ -5486,7 +5506,7 @@ async function openNotebook(id: string, path?: string) {
   S.idx = buildIndex([]); // the last notebook's links would point at notes this one has not loaded
   S.drafts.clear();
   S.tab = "notes";
-  S.chat = { input: "", busy: false, messages: [], excluded: new Set(JSON.parse(store(`nb-chat-off-${id}`) ?? "[]") as string[]), stage: "", garden: false };
+  S.chat = { input: "", busy: false, messages: [], excluded: new Set(JSON.parse(store(`nb-chat-off-${id}`) ?? "[]") as string[]), stage: "", garden: false, tidy: false };
   S.query = S.tag = "";
   S.error = "";
   S.info = undefined;
@@ -7736,7 +7756,11 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
       const r = el.getBoundingClientRect();
       return contextMenu(r.left, r.top - 8, "Tools", [
         { label: "Gardener · links, pairs and tags your notes could use", icon: "sprout", action: () => void gardenAction("garden-run", el) },
+        { label: "Tidy-up · broken links, orphans, duplicates, empty folders", icon: "broom", action: () => { S.chat.tidy = true; if (S.mobile) S.mobilePane = "note"; render(); } },
+        { label: `Open questions · what a folder's notes raise but don't answer · ${chatModel().paid ? "≈0.11 TC" : "0.001 TC"}`, icon: "help", action: () => void onAction("copilot-questions", el) },
       ]);
+    }
+    case "tidy-close": { S.chat.tidy = false; return render();
     }
     case "chat-plus": {
       const r = el.getBoundingClientRect();
@@ -8391,7 +8415,7 @@ document.addEventListener("input", (ev) => {
     case "chatq": {
       S.chat.input = v; el.style.height = "auto"; el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
       // the gardener's bubble makes way as soon as a question is being typed; the box keeps the caret
-      if (S.chat.garden && v.trim()) { S.chat.garden = false; render(); const ta = document.querySelector<HTMLTextAreaElement>("[name=chatq]"); if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); } }
+      if ((S.chat.garden || S.chat.tidy) && v.trim()) { S.chat.garden = false; S.chat.tidy = false; render(); const ta = document.querySelector<HTMLTextAreaElement>("[name=chatq]"); if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); } }
       break;
     }
     case "chatfolder": {
