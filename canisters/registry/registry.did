@@ -505,6 +505,8 @@ service : () -> {
   my_mentions : (nat64) -> (vec Message) query;
   // Notebooks the caller created.
   my_notebooks : () -> (vec Notebook) query;
+  // Your primary notebook: the one the community bills, in cycles.
+  my_primary : () -> (opt Notebook) query;
   // Rain that fell on you after `after` (an id), so the app can celebrate it anywhere.
   my_rain : (nat64) -> (vec Rain) query;
   my_wallet : () -> (opt principal) query;
@@ -576,6 +578,8 @@ service : () -> {
   set_notebook_meta : (principal, opt text, opt text) -> (Result_6);
   // Set the spawn price in e8s (controller only); 0 makes spawning free again.
   set_price : (nat64) -> (Result);
+  // Choose which of your notebooks pays for what you do in the community.
+  set_primary : (principal) -> (Result_6);
   // Add or change an accepted token (admin or controller).
   set_token : (Token) -> (Result);
   // Register (or with None, forget) the wallet you pay from, e.g. your OISY account.

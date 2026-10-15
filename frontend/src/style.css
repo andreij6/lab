@@ -727,3 +727,9 @@ body .wsbar, body .topbar { padding-right: 50px; } /* keep the corner clear for 
   .town-tools { bottom: 10px; } .town-tools .btn:not(.icon-btn) { padding: 6px 8px; } .town-tools .lbl { display: none; } .town-legend { bottom: 62px; font-size: .8rem; }
   .town-preview { height: 230px; margin-top: 20px; } .town-stat { gap: 10px; font-size: .74rem; padding: 6px 10px; } .town-stat .kicker { display: none; } .town-go { top: 10px; bottom: auto; right: 10px; }
 }
+/* chat with your notes: the community's composer, and the notes' sky behind it while nothing is asked */
+.chat { position: relative; isolation: isolate; }
+.chat .composer { padding: 6px clamp(12px, 4vw, 48px) 16px; }
+.chat .compose-box { background: color-mix(in srgb, var(--bg-3) 92%, transparent); }
+.compose-box .send-btn { color: var(--accent-2); } .compose-box .send-btn:disabled { opacity: .4; }
+.chat-quiet .chat-empty { background: color-mix(in srgb, var(--bg) 70%, transparent); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); border-radius: var(--r-lg); padding: 18px 22px; }

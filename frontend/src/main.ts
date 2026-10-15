@@ -265,7 +265,7 @@ const S = {
   pomodoro: undefined as { end: number; phase: "work" | "break" } | undefined,
   taskOwner: "" as string,
   clipperKey: undefined as string | undefined,
-  community: undefined as { channel: string; channels: Channel[]; messages: Message[]; online: Online[]; member?: Member; balance?: bigint; loading: boolean; draft: string; replyTo?: Message; unread: Record<string, number>; showOnline: boolean; showChannels: boolean; picker?: { mid?: bigint }; editing?: bigint; pins?: Message[]; showPins?: boolean; fee?: bigint; error?: string; github?: string; repo?: string; firstUnseen?: bigint; atBottom?: boolean; newCount?: number; gistSlide?: Map<bigint, number> } | undefined,
+  community: undefined as { channel: string; channels: Channel[]; messages: Message[]; online: Online[]; member?: Member; balance?: bigint; loading: boolean; draft: string; replyTo?: Message; unread: Record<string, number>; showOnline: boolean; showChannels: boolean; picker?: { mid?: bigint }; editing?: bigint; pins?: Message[]; showPins?: boolean; fee?: bigint; primary?: NotebookRec; error?: string; github?: string; repo?: string; firstUnseen?: bigint; atBottom?: boolean; newCount?: number; gistSlide?: Map<bigint, number> } | undefined,
   show: undefined as { slides: string[]; i: number; self?: string; dead?: boolean } | undefined,
   mentions: 0, // @mentions of me in the community since I last looked
   org: { q: "", selected: new Set<string>(), triage: false, triageIdx: 0 } as { q: string; sort?: { key: string; dir: number }; selected: Set<string>; triage: boolean; triageIdx: number },
@@ -1541,8 +1541,9 @@ async function loadCommunity(channel?: string) {
   S.community = c;
   render();
   try {
-    const [chs, mem, gh, repo, fee] = await Promise.all([registry().channels(), registry().my_membership(), registry().my_github(), registry().github_repo(), registry().message_cycles(200n).catch(() => 16_000_000n)]);
+    const [chs, mem, gh, repo, fee, primary] = await Promise.all([registry().channels(), registry().my_membership(), registry().my_github(), registry().github_repo(), registry().message_cycles(200n).catch(() => 16_000_000n), registry().my_primary().catch(() => undefined)]);
     c.fee = fee;
+    c.primary = primary ?? undefined;
     c.channels = chs;
     c.member = mem ?? undefined;
     c.github = gh ?? undefined;
@@ -1735,6 +1736,7 @@ function onlineHtml(): string {
   for (const o of here) byChan.set(o.channel, [...(byChan.get(o.channel) ?? []), o]);
   return `<div class="pane-title">Online <span class="count">${here.length}</span></div>
     ${here.length ? [...byChan.entries()].map(([ch, os]) => `<div class="pane-sub" style="padding:0 10px">#${esc(ch)}</div>${os.map((o) => `<div class="online-row"><span class="avatar" style="--h:${[...o.principal.toText()].reduce((a, x) => a + x.charCodeAt(0), 0) % 360}">${esc(o.handle.slice(0, 2).toUpperCase())}</span><span>${esc(o.handle)}</span>${o.principal.toText() === S.principal ? `<span class="small muted">you</span>` : ""}</div>`).join("")}`).join("") : `<div class="empty-side">Nobody is reading right now.</div>`}
+    ${c.member ? `<div class="pane-title">Paid from</div><div class="empty-side">${c.primary ? `<b>${esc(c.primary.emoji ?? "📓")} ${esc(c.primary.name)}</b> pays for your messages, polls, shared notes and fundraisers, in cycles: about ${cyc(c.fee ?? 16_000_000n)} each. Nothing is taken in ICP.` : "Your notebook pays for your messages in cycles."}${(S.notebooks?.length ?? 0) > 1 ? `<div class="nudge"><button type="button" class="btn btn-ghost" data-action="chat-primary">${icon("notebook")}Change</button></div>` : ""}</div>` : ""}
     <div class="pane-title">Notifications</div><div class="empty-side"><label class="switch" style="padding:0"><input type="checkbox" name="notify" ${notifyOn() ? "checked" : ""}> Tell me when I'm @mentioned, anywhere in the app</label>${notifyOn() && "Notification" in window && Notification.permission === "default" ? `<div class="nudge"><button type="button" class="btn btn-ghost" data-action="notify-allow">${icon("bell")}Also notify when this tab is hidden</button></div>` : ""}</div>
     <div class="pane-title">House rules</div><div class="empty-side">Anyone signed in can read. To post you need a notebook: it pays for each message in cycles, what storing it costs (a fraction of a cent). No links, no images, no foul language; the registry refuses them. Edits, reactions and votes are free. Messages are cleaned up after 90 days (pinned ones stay). Admins make channels.</div>`;
 }
@@ -2062,7 +2064,7 @@ setInterval(() => void checkMentions(), 20_000);
 setTimeout(() => void checkMentions(), 2500);
 async function joinCommunity() {
   const c = S.community!;
-  const handle = await ask({ title: c.member ? "Your handle" : "Join the community", label: "Handle", value: c.member?.handle ?? "", placeholder: "ada", body: `Anyone who owns a notebook can chat. Each new message is paid by your notebook, in cycles: what it costs Lab to store it, about ${cyc(c.fee ?? 16_000_000n)}. Reactions, votes and edits are free.`, ok: c.member ? "Save" : "Join" });
+  const handle = await ask({ title: c.member ? "Your handle" : "Join the community", label: "Handle", value: c.member?.handle ?? "", placeholder: "ada", body: `Anyone who owns a notebook can chat. Each new message is paid by your primary notebook${c.primary ? ` (“${c.primary.name}”)` : ""}, in cycles, never in ICP: what it costs Lab to store it, about ${cyc(c.fee ?? 16_000_000n)}. Reactions, votes and edits are free.`, ok: c.member ? "Save" : "Join" });
   if (!handle?.trim()) return;
   try {
     const r = await registry().join_community(handle.trim());
@@ -4306,9 +4308,12 @@ function chatHtml(): string {
   const msgs = S.chat.messages.length
     ? S.chat.messages.map((m, mi) => `<div class="msg ${m.role}">${m.role === "you" ? `<div class="bubble">${esc(m.text)}</div>` : `<div class="bubble md">${beyond(citeLinks(renderMd(m.text), m.picks ?? []))}${m.model ? `<div class="answer-tools"><button type="button" class="btn btn-ghost" data-action="chat-save" data-i="${mi}" title="Save this answer as a note, citations as links">${icon("plus")}Save as note</button></div>` : ""}${m.model ? `<div class="answered-by small faint">${icon("bot")}${esc(LLM_LOCAL ? "Local Ollama (stand-in)" : m.model === LLM_MODEL ? LLM_MODEL_NAME : m.model ?? "")}${m.fallback ? ` · ${esc(m.fallback)}` : ""}</div>` : m.fallback ? `<div class="answered-by small faint">${esc(m.fallback)}</div>` : ""}</div>${m.picks?.length ? `<div class="sources">${m.picks.map((p) => `<button type="button" class="src" data-action="open" data-path="${esc(p.path)}" title="${esc(p.why.join("; "))}">${icon("file")}${esc(title(p.path))}</button>`).join("")}</div>` : ""}`}</div>`).join("")
     : `<div class="chat-empty">${icon("chat")}<h3>Ask your notes</h3><p class="muted small">Type a question in plain language. The notebook picks the notes that look relevant from the folders ticked on the right and answers from them.</p></div>`;
-  return `<section class="main chat" data-chat>
+  // with nothing asked yet, the notebook's notes glow behind as a sky of stars (click one to open it)
+  const empty = !S.chat.messages.length && !S.chat.busy;
+  return `<section class="main chat ${empty ? "chat-quiet" : ""}" data-chat>
+    ${empty ? `<canvas class="notes-sky" data-notes-sky aria-hidden="true"></canvas>` : ""}
     <div class="chat-log">${msgs}${S.chat.busy ? `<div class="msg notes"><div class="bubble muted thinking"><span class="spin"></span>${esc(S.chat.stage || "Reading your notes…")}</div></div>` : ""}</div>
-    <form class="chat-ask" data-form="chat"><textarea class="input" name="chatq" rows="1" placeholder="Ask your notes…" title="↵ to send, ⇧↵ for a new line" aria-label="Ask your notes">${esc(S.chat.input)}</textarea><button type="submit" class="btn btn-primary icon-btn" title="Send" aria-label="Send" ${S.chat.busy ? "disabled" : ""}>${icon("send")}</button></form>
+    <form class="composer" data-form="chat"><div class="compose-box"><textarea name="chatq" rows="1" placeholder="Ask your notes…" title="↵ to send, ⇧↵ for a new line" aria-label="Ask your notes">${esc(S.chat.input)}</textarea><button type="submit" class="btn btn-ghost icon-btn send-btn" title="Send" aria-label="Send" ${S.chat.busy ? "disabled" : ""}>${icon("send")}</button></div></form>
   </section>`;
 }
 function chatAside(): string {
@@ -7009,14 +7014,23 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
       if (r.__kind__ === "Err") return toast(r.Err, "error");
       return replaceMessage(r.Ok);
     }
+    case "chat-primary": {
+      const n = await myNotebookChoice("Which notebook pays for your chat?");
+      if (!n || !S.community) return;
+      const r = await registry().set_primary(n.canister).catch((e) => ({ __kind__: "Err", Err: errMsg(e) }) as const);
+      if (r.__kind__ === "Err") return toast(r.Err, "error");
+      S.community.primary = r.Ok;
+      toast(`“${r.Ok.name}” pays for your chat now.`, "ok");
+      return render();
+    }
     case "chat-plus": {
       const r = el.getBoundingClientRect();
       return contextMenu(r.left, r.top - 8, "", [
-        { label: `Create a poll · ${icp(S.community!.fee ?? 20_000n)} ICP`, icon: "list", action: () => void createPoll() },
-        { label: `Share a note for opinions · ${icp(S.community!.fee ?? 20_000n)} ICP`, icon: "file", action: () => void shareGist() },
+        { label: `Create a poll · ${cyc(S.community!.fee ?? 16_000_000n)}`, icon: "list", action: () => void createPoll() },
+        { label: `Share a note for opinions · ${cyc(S.community!.fee ?? 16_000_000n)}`, icon: "file", action: () => void shareGist() },
         ...(flag("fundraisers") ? [S.community!.channels.find((x) => x.name === S.community!.channel)?.gate === "github"
-          ? { label: `Raise for an AI plan · ${icp(S.community!.fee ?? 20_000n)} ICP`, icon: "bolt", action: () => void startPlanFund() } as MenuItem
-          : { label: `Raise cycles for a notebook · ${icp(S.community!.fee ?? 20_000n)} ICP`, icon: "bolt", action: () => void startFund() } as MenuItem] : []),
+          ? { label: `Raise for an AI plan · ${cyc(S.community!.fee ?? 16_000_000n)}`, icon: "bolt", action: () => void startPlanFund() } as MenuItem
+          : { label: `Raise cycles for a notebook · ${cyc(S.community!.fee ?? 16_000_000n)}`, icon: "bolt", action: () => void startFund() } as MenuItem] : []),
       ]);
     }
     case "gist-open": { S.community = undefined; clearInterval(chatTimer); location.hash = `#/notebook/${el.dataset.nb}/${el.dataset.path}`; return; }

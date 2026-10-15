@@ -311,13 +311,13 @@ export function attachSky(canvas: HTMLCanvasElement, o: SkyOpts) {
       S.pointer.x = (e.clientX - b.left) / b.width; S.pointer.y = (e.clientY - b.top) / b.height; S.pointer.on = e.pointerType === "mouse";
       if (S.mode !== "notes") return;
       // the nearest star within reach is the hovered note (not over the view's own buttons and text)
-      const over = (e.target as HTMLElement).closest("button, a, input, .hints, h2, p");
+      const over = (e.target as HTMLElement).closest("button, a, input, textarea, form, .hints, h2, h3, p");
       let best = -1, bd = 14;
       if (!over) S.stars.slice(0, S.ids.length).forEach((st, i) => { const [x, y] = pos(st); const d = Math.hypot(x - (e.clientX - b.left), y - (e.clientY - b.top)); if (d < bd) { bd = d; best = i; } });
       if (best !== S.hover) { S.hover = best; host.style.cursor = best >= 0 ? "pointer" : ""; if (S.still) frame(performance.now()); }
     });
     host.addEventListener("pointerleave", () => { S.pointer.on = false; S.pointer.x = S.pointer.y = 0.5; S.hover = -1; host.style.cursor = ""; });
-    host.addEventListener("click", (e) => { if (S.mode === "notes" && S.hover >= 0 && !(e.target as HTMLElement).closest("button, a, input")) S.onOpen?.(S.ids[S.hover]); });
+    host.addEventListener("click", (e) => { if (S.mode === "notes" && S.hover >= 0 && !(e.target as HTMLElement).closest("button, a, input, textarea, form")) S.onOpen?.(S.ids[S.hover]); });
   }
   S.dark = o.dark;
   S.accent = accentOf(o.accent);

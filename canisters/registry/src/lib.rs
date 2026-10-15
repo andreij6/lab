@@ -1279,7 +1279,9 @@ thread_local! {
     /// the wallet a person pays from when it is not their sign-in principal (their OISY account)
     static WALLETS: RefCell<StableBTreeMap<Principal, Principal, Mem>> = RefCell::new(StableBTreeMap::init(MM.with_borrow(|m| m.get(MemoryId::new(32)))));
     static NEXT_WATCH: RefCell<ic_stable_structures::StableCell<u64, Mem>> = RefCell::new(ic_stable_structures::StableCell::init(MM.with_borrow(|m| m.get(MemoryId::new(31))), 1));
-    // MemoryIds 33-38 are retired (a journal that never shipped): leave them unused. 39: town.rs VISITORS; start new maps at 40
+    // MemoryIds 33-38 are retired (a journal that never shipped): leave them unused. 39: town.rs VISITORS; start new maps at 41
+    /// owner -> the notebook that pays for what they do in the community (none set: their oldest)
+    static PRIMARY: RefCell<StableBTreeMap<Principal, Principal, Mem>> = RefCell::new(StableBTreeMap::init(MM.with_borrow(|m| m.get(MemoryId::new(40)))));
 }
 
 // --- trip check-ins: leave a plan with someone; they are alerted when a check-in or the return is missed
@@ -1889,29 +1891,41 @@ fn accept_fee() {
     FEE_CREDIT.with_borrow_mut(|c| *c.entry(nb).or_default() += got);
 }
 
-/// Bill one of `me`'s notebooks `cycles`: the first that can spare them (staying well above its
-/// freezing reserve) sends them with `accept_fee`; the registry counts what arrived, so a notebook
-/// whose owner changed its code cannot post for free.
+/// The notebook that pays for `me`'s messages, posts, polls, shared notes and fundraisers: the one they
+/// chose, or their oldest while they haven't chosen (or the chosen one is gone or sold).
+fn primary_of(me: Principal) -> Option<Notebook> {
+    let mine: Vec<Notebook> = NOTEBOOKS.with_borrow(|m| m.iter().map(|e| e.value().0).filter(|n| n.owner == me).collect());
+    let chosen = PRIMARY.with_borrow(|p| p.get(&me));
+    mine.iter().find(|n| Some(n.canister) == chosen).cloned().or_else(|| mine.into_iter().min_by_key(|n| (n.created_at, n.canister)))
+}
+/// Your primary notebook: the one the community bills, in cycles.
+#[query]
+fn my_primary() -> Option<Notebook> {
+    primary_of(msg_caller())
+}
+/// Choose which of your notebooks pays for what you do in the community.
+#[update]
+fn set_primary(canister: Principal) -> Result<Notebook, String> {
+    let me = msg_caller();
+    owns(me, canister)?;
+    PRIMARY.with_borrow_mut(|p| p.insert(me, canister));
+    primary_of(me).ok_or("unknown notebook".into())
+}
+/// Bill `me`'s primary notebook `cycles`: it sends them with `accept_fee` (staying well above its
+/// freezing reserve); the registry counts what arrived, so a notebook whose owner changed its code
+/// cannot post for free. No ICP is ever taken for this.
 async fn bill_notebook(me: Principal, cycles: u64) -> Result<(), String> {
-    let mine: Vec<Principal> = NOTEBOOKS.with_borrow(|m| m.iter().filter(|e| e.value().0.owner == me).map(|e| *e.key()).collect());
-    if mine.is_empty() {
-        return Err(NEED_NOTEBOOK.into());
-    }
+    let nb = primary_of(me).ok_or(NEED_NOTEBOOK)?;
     let want = cycles as u128;
-    for nb in mine {
-        let _ = Call::bounded_wait(nb, "pay_registry").with_arg(Nat::from(cycles)).await;
-        let paid = FEE_CREDIT.with_borrow_mut(|c| match c.get_mut(&nb) {
-            Some(have) if *have >= want => {
-                *have -= want;
-                true
-            }
-            _ => false,
-        });
-        if paid {
-            return Ok(());
+    let _ = Call::bounded_wait(nb.canister, "pay_registry").with_arg(Nat::from(cycles)).await;
+    let paid = FEE_CREDIT.with_borrow_mut(|c| match c.get_mut(&nb.canister) {
+        Some(have) if *have >= want => {
+            *have -= want;
+            true
         }
-    }
-    Err("your notebooks are too low on cycles to pay for this; top one up in Manage".into())
+        _ => false,
+    });
+    if paid { Ok(()) } else { Err(format!("your primary notebook “{}” is too low on cycles to pay for this; top it up in Manage, or choose another in the community's side panel", nb.name)) }
 }
 
 /// Share a note in chat: `text` is the comment (may be empty), the gist is a snapshot of the note.
