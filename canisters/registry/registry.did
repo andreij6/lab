@@ -13,6 +13,8 @@ type AppStats = record {
   users : nat64;
   active_notebooks : nat64;
   active_users : nat64;
+  // cycles earned from model answers, all time
+  ai_fees_cycles : nat;
 };
 // The judge's verdict on a notebook, attached to its listing.
 type Attestation = record {
@@ -425,6 +427,8 @@ type Watch = record {
   every_hours : opt nat32;
 };
 service : () -> {
+  // A notebook pays Lab's share of a model answer: the cycles attached are kept, and counted.
+  accept_ai_fee : () -> ();
   // A notebook pays a fee: the cycles attached to this call are kept and credited to it. Only the
   // registry's notebooks may pay; anyone else's cycles are left unaccepted and go back.
   accept_fee : () -> ();

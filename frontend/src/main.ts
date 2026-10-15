@@ -189,7 +189,7 @@ type MobilePane = "files" | "note" | "links";
 /** A pane holds tabs (note paths); several panes sit side by side. */
 type Pane = { id: number; tabs: string[]; active?: string; view: View; study?: boolean };
 type Draft = { text: string; dirty: boolean; saving: boolean };
-type ChatMsg = { role: "you" | "notes"; text: string; picks?: Pick[]; model?: string; fallback?: string; deck?: boolean; insertInto?: string };
+type ChatMsg = { role: "you" | "notes"; text: string; picks?: Pick[]; model?: string; fallback?: string; deck?: boolean; insertInto?: string; cycles?: bigint };
 /** The ICP LLM canister; locally the stand-in in canisters/llm-dev that answers with Ollama. */
 const LLM_CANISTER = env["PUBLIC_CANISTER_ID:llm"] ?? "w36hm-eqaaa-aaaal-qr76a-cai";
 const LLM_LOCAL = !!env["PUBLIC_CANISTER_ID:llm"];
@@ -199,12 +199,13 @@ const XRC_CANISTER = env["PUBLIC_CANISTER_ID:xrc"] ?? "uf6dk-hyaaa-aaaaq-qaaaq-c
 const LLM_MODEL = "qwen3:32b";
 const LLM_MODEL_NAME = "Qwen3 32B";
 /** The models on the Internet Computer's LLM canister that the notebook canister will ask, by tier.
- *  Paid ones have about 0.1 TC attached from the notebook (what is unused comes back); free ones cost nothing. */
+ *  Every answer is paid for by the notebook: what the model cost plus a tenth for Lab (paid models have 0.1 TC
+ *  attached, what is unused comes back), or a flat 0.001 TC for a free model. */
 const MODELS = [
-  { id: "z-ai:glm-5.2", name: "GLM 5.2", tier: "Premium", paid: true, note: "The strongest answers. About 0.1 TC of this notebook's cycles a question." },
-  { id: "gemma3:27b", name: "Gemma 3 27B", tier: "Plus", paid: true, note: "Strong and quick. About 0.1 TC of this notebook's cycles a question." },
-  { id: "qwen3:32b", name: "Qwen3 32B", tier: "Everyday", paid: false, note: "The strongest free model. Questions cost nothing." },
-  { id: "llama3.1:8b", name: "Llama 3.1 8B", tier: "Low", paid: false, note: "Small and fast, for quick lookups. Questions cost nothing." },
+  { id: "z-ai:glm-5.2", name: "GLM 5.2", tier: "Premium", paid: true, note: "The strongest answers. What the model costs plus a tenth for Lab: about 0.11 TC of this notebook's cycles a question." },
+  { id: "gemma3:27b", name: "Gemma 3 27B", tier: "Plus", paid: true, note: "Strong and quick. What the model costs plus a tenth for Lab: about 0.11 TC of this notebook's cycles a question." },
+  { id: "qwen3:32b", name: "Qwen3 32B", tier: "Everyday", paid: false, note: "The strongest of the free models. 0.001 TC of this notebook's cycles a question, Lab's share." },
+  { id: "llama3.1:8b", name: "Llama 3.1 8B", tier: "Low", paid: false, note: "Small and fast, for quick lookups. 0.001 TC of this notebook's cycles a question, Lab's share." },
 ] as const;
 /** The model the person picked for this browser (Everyday until they do). */
 const chatModel = () => MODELS.find((m) => m.id === store("nb-chat-model")) ?? MODELS[2];
@@ -3274,7 +3275,7 @@ function adminStatsHtml(): string {
   const n = (x: bigint) => Number(x).toLocaleString("en-US");
   const stat = (v: string, label: string) => `<div><b>${v}</b><span>${label}</span></div>`;
   return `<section class="card"><div class="row"><h2>${icon("graph")} The app</h2><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="admin-stats">${icon("refresh")}Count again</button></span></div>
-      ${st ? `<div class="career-stats">${stat(n(st.users), "people")}${stat(n(st.active_users), "active people")}${stat(n(st.notebooks), "notebooks")}${stat(n(st.active_notebooks), "active notebooks")}${stat(n(st.notes), "notes")}${stat(n(st.files), "files")}${stat(n(st.members), "community members")}</div>
+      ${st ? `<div class="career-stats">${stat(n(st.users), "people")}${stat(n(st.active_users), "active people")}${stat(n(st.notebooks), "notebooks")}${stat(n(st.active_notebooks), "active notebooks")}${stat(n(st.notes), "notes")}${stat(n(st.files), "files")}${stat(tc(st.ai_fees_cycles), "earned from model answers")}${stat(n(st.members), "community members")}</div>
         <p class="small muted">Active means a notebook changed or a chat message in the last 30 days. Counted ${ago(st.at)}${st.unreachable > 0n ? `; ${n(st.unreachable)} notebook${st.unreachable === 1n ? "" : "s"} did not answer (frozen or out of cycles)` : ""}.</p>` : `<p class="muted">Counting every notebook…</p>`}
     </section>`;
 }
@@ -4378,7 +4379,7 @@ function chatFolders(): Set<string> {
 }
 function chatHtml(): string {
   const msgs = S.chat.messages.length
-    ? S.chat.messages.map((m, mi) => `<div class="msg ${m.role}">${m.role === "you" ? `<div class="bubble">${esc(m.text)}</div>` : `<div class="bubble md">${beyond(citeLinks(renderMd(m.text), m.picks ?? []))}${m.model ? `<div class="answer-tools"><button type="button" class="btn btn-ghost" data-action="chat-save" data-i="${mi}" title="Save this answer as a note, citations as links">${icon("plus")}Save as note</button>${m.deck ? `<button type="button" class="btn btn-ghost" data-action="chat-save-deck" data-i="${mi}" title="Save these cards as a flashcard deck">${icon("check")}Save as a deck</button>` : ""}${m.insertInto && note(m.insertInto) ? `<button type="button" class="btn btn-ghost" data-action="chat-insert" data-i="${mi}" title="Put this under a Summary heading in the note">${icon("edit")}Insert into “${esc(stem(m.insertInto))}”</button>` : ""}</div>` : ""}${m.model ? `<div class="answered-by small faint">${icon("bot")}${esc(LLM_LOCAL ? "Local Ollama (stand-in)" : modelName(m.model))}${m.fallback ? ` · ${esc(m.fallback)}` : ""}</div>` : m.fallback ? `<div class="answered-by small faint">${esc(m.fallback)}</div>` : ""}</div>${m.picks?.length ? `<div class="sources">${m.picks.map((p) => `<button type="button" class="src" data-action="open" data-path="${esc(p.path)}" title="${esc(p.why.join("; "))}">${icon("file")}${esc(title(p.path))}</button>`).join("")}</div>` : ""}`}</div>`).join("")
+    ? S.chat.messages.map((m, mi) => `<div class="msg ${m.role}">${m.role === "you" ? `<div class="bubble">${esc(m.text)}</div>` : `<div class="bubble md">${beyond(citeLinks(renderMd(m.text), m.picks ?? []))}${m.model ? `<div class="answer-tools"><button type="button" class="btn btn-ghost" data-action="chat-save" data-i="${mi}" title="Save this answer as a note, citations as links">${icon("plus")}Save as note</button>${m.deck ? `<button type="button" class="btn btn-ghost" data-action="chat-save-deck" data-i="${mi}" title="Save these cards as a flashcard deck">${icon("check")}Save as a deck</button>` : ""}${m.insertInto && note(m.insertInto) ? `<button type="button" class="btn btn-ghost" data-action="chat-insert" data-i="${mi}" title="Put this under a Summary heading in the note">${icon("edit")}Insert into “${esc(stem(m.insertInto))}”</button>` : ""}</div>` : ""}${m.model ? `<div class="answered-by small faint">${icon("bot")}${esc(LLM_LOCAL ? "Local Ollama (stand-in)" : modelName(m.model))}${m.cycles ? ` · ${tc(m.cycles)}` : ""}${m.fallback ? ` · ${esc(m.fallback)}` : ""}</div>` : m.fallback ? `<div class="answered-by small faint">${esc(m.fallback)}</div>` : ""}</div>${m.picks?.length ? `<div class="sources">${m.picks.map((p) => `<button type="button" class="src" data-action="open" data-path="${esc(p.path)}" title="${esc(p.why.join("; "))}">${icon("file")}${esc(title(p.path))}</button>`).join("")}</div>` : ""}`}</div>`).join("")
     : `<div class="chat-empty">${icon("chat")}<h3>Ask your notes</h3><p class="muted small">Type a question in plain language. The notebook picks the notes that look relevant from the folders ticked on the right and answers from them.</p></div>`;
   // with nothing asked yet, the notebook's notes glow behind as a sky of stars (click one to open it)
   const empty = !S.chat.messages.length && !S.chat.busy;
@@ -4386,7 +4387,7 @@ function chatHtml(): string {
     ${empty ? `<canvas class="notes-sky" data-notes-sky aria-hidden="true"></canvas>` : ""}
     <div class="chat-log">${msgs}${S.chat.busy ? `<div class="msg notes"><div class="bubble muted thinking"><span class="spin"></span>${esc(S.chat.stage || "Reading your notes…")}</div></div>` : ""}</div>
     <form class="composer" data-form="chat"><div class="compose-box"><textarea name="chatq" rows="1" placeholder="Ask your notes…" title="↵ to send, ⇧↵ for a new line" aria-label="Ask your notes">${esc(S.chat.input)}</textarea><button type="submit" class="btn btn-ghost icon-btn send-btn" title="Send" aria-label="Send" ${S.chat.busy ? "disabled" : ""}>${icon("send")}</button></div>
-      <div class="compose-foot"><span class="small muted">Asks ${chatFolders().size} of ${[...new Set([...chatFolders(), ...S.chat.excluded])].length} folders · ↵ to send</span><button type="button" class="btn btn-ghost model-pick" data-action="copilot-model" title="${LLM_LOCAL ? "Locally your Ollama answers whichever you pick." : esc(chatModel().note)}">${esc(chatModel().name)}<span class="tier t-${chatModel().tier.toLowerCase()}">${chatModel().tier}</span>${chatModel().paid ? `<span class="small muted">0.1 TC</span>` : ""}${icon("down")}</button></div></form>
+      <div class="compose-foot"><span class="small muted">Asks ${chatFolders().size} of ${[...new Set([...chatFolders(), ...S.chat.excluded])].length} folders · ↵ to send</span><button type="button" class="btn btn-ghost model-pick" data-action="copilot-model" title="${LLM_LOCAL ? "Locally your Ollama answers whichever you pick." : esc(chatModel().note)}">${esc(chatModel().name)}<span class="tier t-${chatModel().tier.toLowerCase()}">${chatModel().tier}</span><span class="small muted">${chatModel().paid ? "≈0.11 TC" : "0.001 TC"}</span>${icon("down")}</button></div></form>
   </section>`;
 }
 function chatAside(): string {
@@ -4449,7 +4450,7 @@ async function copilot(label: string, question: string, sources: { path: string;
   const picks: Pick[] = sources.map((x) => ({ path: x.path, score: 1, why: [], snippet: "" }));
   try {
     const r = unwrap(await nb().ask(Principal.fromText(LLM_CANISTER), chatModel().id, question.slice(0, 1000), sources.slice(0, 10)));
-    chat.messages.push({ role: "notes", text: r.text, picks, model: r.model, deck: o.deck, insertInto: o.insertInto });
+    chat.messages.push({ role: "notes", text: r.text, picks, model: r.model, cycles: r.cycles, deck: o.deck, insertInto: o.insertInto });
   } catch (e) {
     chat.messages.push({ role: "notes", text: `The copilot could not answer: ${errMsg(e)}`, picks: [] });
   }
@@ -4460,7 +4461,7 @@ async function copilot(label: string, question: string, sources: { path: string;
 }
 /** A kit's copilot card: prepared questions over that kit's notes. */
 function copilotCard(kit: string, items: { a: string; icon: string; label: string; hint: string }[]): string {
-  return `<div class="card band copilot"><div class="row tight wrap"><h2 title="Answers land in Chat with your notes, cited, and can be saved as notes">${icon("bot")} Copilot</h2>${items.map((i) => `<button type="button" class="btn" data-action="copilot-${kit}-${i.a}" title="${esc(i.hint)}">${icon(i.icon)}${esc(i.label)}</button>`).join("")}<span class="right-actions"><button type="button" class="btn btn-ghost" data-action="copilot-model" title="${LLM_LOCAL ? "Locally your Ollama answers whichever you pick." : esc(chatModel().note)}">${icon("bot")}${esc(chatModel().name)} · ${chatModel().tier}${chatModel().paid ? " · 0.1 TC" : ""}</button></span></div></div>`;
+  return `<div class="card band copilot"><div class="row tight wrap"><h2 title="Answers land in Chat with your notes, cited, and can be saved as notes">${icon("bot")} Copilot</h2>${items.map((i) => `<button type="button" class="btn" data-action="copilot-${kit}-${i.a}" title="${esc(i.hint)}">${icon(i.icon)}${esc(i.label)}</button>`).join("")}<span class="right-actions"><button type="button" class="btn btn-ghost" data-action="copilot-model" title="${LLM_LOCAL ? "Locally your Ollama answers whichever you pick." : esc(chatModel().note)}">${icon("bot")}${esc(chatModel().name)} · ${chatModel().tier} · ${chatModel().paid ? "≈0.11 TC" : "0.001 TC"}</button></span></div></div>`;
 }
 const QUEST_ROWS = (notes: number, links: number, streak: number): [string, number, number, string][] => [["Sprout", notes, 10, "a flower bed by your home"], ["Weaver", links, 25, "ivy on its walls"], ["A week of writing", streak, 7, "a flag on the roof"], ["A month of writing", streak, 30, "a statue in the yard"], ["Librarian", notes, 100, "a lantern by the door, lit at night"]];
 /** Manage › Notebook: what writing has earned your home in the town. */
@@ -4509,7 +4510,7 @@ async function gardenAction(action: string, el: HTMLElement) {
 async function copilotAction(action: string, el: HTMLElement) {
   if (action === "copilot-model") {
     const r = el.getBoundingClientRect();
-    return contextMenu(Math.max(8, r.right - 260), r.bottom + 4, "Model", MODELS.map((m) => ({ label: `${m.tier} · ${m.name}${m.paid ? " · ≈0.1 TC" : " · free"}${chatModel().id === m.id ? " ✓" : ""}`, icon: m.paid ? "bolt" : "bot", action: () => { store("nb-chat-model", m.id); render(); } })));
+    return contextMenu(Math.max(8, r.right - 260), r.bottom + 4, "Model", MODELS.map((m) => ({ label: `${m.tier} · ${m.name} · ${m.paid ? "≈0.11 TC" : "0.001 TC"}${chatModel().id === m.id ? " ✓" : ""}`, icon: m.paid ? "bolt" : "bot", action: () => { store("nb-chat-model", m.id); render(); } })));
   }
   const notes = notesNow(), today = dayKey(new Date());
   const per = (n: number) => Math.min(2000, Math.floor(7600 / Math.max(1, n)));
@@ -4597,7 +4598,7 @@ async function askNotes() {
       const r = unwrap(await nb().ask(Principal.fromText(LLM_CANISTER), model, q, sources));
       const used = cited(r.text, picks.length);
       // cited notes first, in the order the model used them, so [n] still points at the right note
-      S.chat.messages.push({ role: "notes", text: r.text, picks, model: r.model, fallback: used.length || !picks.length || /beyond your notes/i.test(r.text) ? "" : "no citations given" });
+      S.chat.messages.push({ role: "notes", text: r.text, picks, model: r.model, cycles: r.cycles, fallback: used.length || !picks.length || /beyond your notes/i.test(r.text) ? "" : "no citations given" });
     } catch (e) {
       S.chat.messages.push({ role: "notes", text: answer(q, picks), picks, fallback: errMsg(e) });
     }

@@ -1288,7 +1288,9 @@ thread_local! {
     /// the wallet a person pays from when it is not their sign-in principal (their OISY account)
     static WALLETS: RefCell<StableBTreeMap<Principal, Principal, Mem>> = RefCell::new(StableBTreeMap::init(MM.with_borrow(|m| m.get(MemoryId::new(32)))));
     static NEXT_WATCH: RefCell<ic_stable_structures::StableCell<u64, Mem>> = RefCell::new(ic_stable_structures::StableCell::init(MM.with_borrow(|m| m.get(MemoryId::new(31))), 1));
-    // MemoryIds 33-38 are retired (a journal that never shipped): leave them unused. 39: town.rs VISITORS; 41-43: sponsors.rs; start new maps at 44
+    // MemoryIds 33-38 are retired (a journal that never shipped): leave them unused. 39: town.rs VISITORS; 41-43: sponsors.rs; 44: AI_FEES; start new maps at 45
+    /// cycles Lab has earned from model answers, all time
+    pub static AI_FEES: RefCell<ic_stable_structures::StableCell<u128, Mem>> = RefCell::new(ic_stable_structures::StableCell::init(MM.with_borrow(|m| m.get(MemoryId::new(44))), 0));
     /// owner -> the notebook that pays for what they do in the community (none set: their oldest)
     static PRIMARY: RefCell<StableBTreeMap<Principal, Principal, Mem>> = RefCell::new(StableBTreeMap::init(MM.with_borrow(|m| m.get(MemoryId::new(40)))));
 }
@@ -1889,6 +1891,15 @@ thread_local! {
     static FEE_CREDIT: RefCell<std::collections::HashMap<Principal, u128>> = RefCell::new(Default::default());
 }
 
+/// A notebook pays Lab's share of a model answer: the cycles attached are kept, and counted.
+#[update]
+fn accept_ai_fee() {
+    if notebook(msg_caller()).is_none() {
+        return;
+    }
+    let got = ic_cdk::api::msg_cycles_accept(ic_cdk::api::msg_cycles_available());
+    AI_FEES.with_borrow_mut(|c| { let v = *c.get(); c.set(v + got); });
+}
 /// A notebook pays a fee: the cycles attached to this call are kept and credited to it. Only the
 /// registry's notebooks may pay; anyone else's cycles are left unaccepted and go back.
 #[update]

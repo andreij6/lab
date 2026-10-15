@@ -11,6 +11,8 @@ type AskAnswer = record {
   // the model that actually answered (a paid model falls back to the best free one)
   model : text;
   "text" : text;
+  // what this notebook paid for the answer: the model's cycles plus Lab's share
+  cycles : nat64;
 };
 type AskSource = record { path : text; excerpt : text };
 type Attempt = record {

@@ -2548,6 +2548,8 @@ pub struct AskAnswer {
     pub text: String,
     /// the model that actually answered (a paid model falls back to the best free one)
     pub model: String,
+    /// what this notebook paid for the answer: the model's cycles plus Lab's share
+    pub cycles: u64,
 }
 #[derive(CandidType, Serialize)]
 struct LlmRequest {
@@ -2560,6 +2562,9 @@ const PAID_MODELS: &[&str] = &["z-ai:glm-5.2", "gemma3:27b"];
 const FREE_FALLBACK: &str = "qwen3:32b";
 /// paid models want at least this attached; unused cycles come back
 const LLM_CYCLES: u128 = 100_000_000_000;
+/// Lab's share of every answer, paid to the registry: a tenth of what a paid model cost, or this flat
+/// 0.001 TC for a free one
+const FREE_FEE: u128 = 1_000_000_000;
 /// the LLM canister caps a request at 10 KiB across all messages
 const PROMPT_BUDGET: usize = 9_600;
 const ASK_SYSTEM: &str = "You are a helpful assistant answering questions with the user's notes. The notes are numbered like [1]. Use them first: after every sentence a note supports, cite it with its number in square brackets, for example [1] or [2][3], and only cite numbers that exist. If the notes do not cover the question, or only part of it, also answer from your own knowledge when you can, but put that part after a line that reads exactly 'Beyond your notes:' and cite no notes there. If you do not know, say so. Be concise and answer in Markdown.";
@@ -2593,16 +2598,23 @@ fn ask_prompt(question: &str, sources: &[AskSource], model: &str) -> String {
     }
     format!("{ctx}{tail}")
 }
-async fn llm_chat(llm: Principal, model: &str, user: String) -> Result<String, String> {
+/// Ask the model; the answer and what the call cost this notebook in cycles (0 for a free model).
+async fn llm_chat(llm: Principal, model: &str, user: String) -> Result<(String, u128), String> {
     let paid = PAID_MODELS.contains(&model);
     if paid && canister_cycle_balance() < LLM_CYCLES * 4 {
         return Err("this notebook has too few cycles for a paid model".into());
     }
     let req = LlmRequest { model: model.to_string(), messages: vec![ic_llm::ChatMessage::System { content: ASK_SYSTEM.into() }, ic_llm::ChatMessage::User { content: user }], tools: None };
-    let r = Call::bounded_wait(llm, "v1_chat").change_timeout(300).with_cycles(if paid { LLM_CYCLES } else { 0 }).with_arg(&req).await.map_err(|e| e.to_string())?;
+    let attached = if paid { LLM_CYCLES } else { 0 };
+    let r = Call::bounded_wait(llm, "v1_chat").change_timeout(300).with_cycles(attached).with_arg(&req).await.map_err(|e| e.to_string())?;
+    let spent = attached.saturating_sub(ic_cdk::api::msg_cycles_refunded());
     let resp: ic_llm::Response = r.candid().map_err(|e| e.to_string())?;
     let text = strip_think(&resp.message.content.unwrap_or_default());
-    if text.is_empty() { Err("the model returned nothing".into()) } else { Ok(text) }
+    if text.is_empty() { Err("the model returned nothing".into()) } else { Ok((text, spent)) }
+}
+/// Lab's share of an answer goes to the registry (kept, not credited to anything).
+async fn pay_ai_fee(fee: u128) {
+    let _ = Call::bounded_wait(config().registry, "accept_ai_fee").with_cycles(fee).await;
 }
 #[update]
 async fn ask(llm: Principal, model: String, question: String, sources: Vec<AskSource>) -> Result<AskAnswer, NotebookError> {
@@ -2618,13 +2630,22 @@ async fn ask(llm: Principal, model: String, question: String, sources: Vec<AskSo
     if sources.len() > 10 {
         return Err(NotebookError::Invalid("at most 10 notes per question".into()));
     }
+    // every answer costs something: the flat share for a free model must be affordable before asking
+    if ic_cdk::api::canister_liquid_cycle_balance() < FREE_FEE + PAY_FLOOR {
+        return Err(NotebookError::Invalid("this notebook is too low on cycles to ask; top it up".into()));
+    }
     let mut last = String::new();
     let mut tried: Vec<String> = vec![];
     for m in [model.trim().to_string(), FREE_FALLBACK.to_string()] {
         if m.is_empty() || tried.contains(&m) { continue; }
         tried.push(m.clone());
         match llm_chat(llm, &m, ask_prompt(&question, &sources, &m)).await {
-            Ok(text) => return Ok(AskAnswer { text, model: m }),
+            Ok((text, spent)) => {
+                // Lab's share: a tenth of a paid model's cost, or the flat fee for a free one
+                let fee = if spent > 0 { spent / 10 } else { FREE_FEE };
+                pay_ai_fee(fee).await;
+                return Ok(AskAnswer { text, model: m, cycles: (spent + fee) as u64 });
+            }
             Err(e) => last = format!("{m}: {e}"),
         }
     }

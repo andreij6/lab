@@ -20,6 +20,8 @@ pub struct AppStats {
     pub members: u64,
     /// notebooks that did not answer (frozen or out of cycles)
     pub unreachable: u64,
+    /// cycles earned from model answers, all time
+    pub ai_fees_cycles: u128,
     pub at: u64,
 }
 #[derive(CandidType, Deserialize)]
@@ -80,7 +82,7 @@ async fn app_stats(fresh: bool) -> Result<AppStats, String> {
     let cutoff = now.saturating_sub(ACTIVE_NS);
     let mut people = std::collections::HashSet::new();
     let mut active_people = std::collections::HashSet::new();
-    let mut st = AppStats { notebooks: nbs.len() as u64, at: now, ..Default::default() };
+    let mut st = AppStats { notebooks: nbs.len() as u64, at: now, ai_fees_cycles: AI_FEES.with_borrow(|c| *c.get()), ..Default::default() };
     for (n, u) in nbs.iter().zip(usage.iter()) {
         people.insert(n.owner);
         let Some(u) = u else {
