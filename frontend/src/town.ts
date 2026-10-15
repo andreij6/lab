@@ -291,7 +291,7 @@ export function layoutTown(t: TownData): Plan {
   paving.push([works[0] - 0.3, works[1] - 0.3, 6.6, 3.9]);
   put({ k: "factory", x: works[0], y: works[1], w: 4.4, d: 2.8, s: 0, tg: { kind: "factory" } });
   for (let i = 0; i < Math.min(10, t.spawned7d); i++) put({ k: "crate", x: works[0] + 4.7 + (i % 2) * 0.7, y: works[1] + 0.2 + Math.floor(i / 2) * 0.62, w: 0.5, d: 0.5, s: i + 20 });
-  // where the works stood, behind the town hall: the town green, with the model home on it (what a
+  // where the works stood, behind the Lab: the town green, with the model home on it (what a
   // notebook becomes here, every trimming on), trees and a bench
   const model: TownHouse = { lot: -1, storeys: 2, size: 2, lit: 2, badges: 31 };
   put({ k: "house", x: -5.0, y: -4.9, w: 1.5, d: 1.45, s: hashOf("model home"), h: model, face: "y", model: true, tg: { kind: "house", house: model, mine: false, building: false, model: true } });
@@ -705,20 +705,62 @@ function drawObj(o: Obj, t: number) {
       return hit(flat(o.x, o.y, o.w, o.d), o.tg);
     }
     case "hall": {
-      const { x, y, w, d } = o, h = 30;
-      box(x, y, w, d, h, p.wall, p.wallR, shade(p.wall, 0.03));
-      ctx.save(); ctx.strokeStyle = acc(); ctx.lineWidth = line * 1.6;
-      ctx.beginPath(); const a = P(x, y + d, h - 3), b = P(x + w, y + d, h - 3), c = P(x + w, y, h - 3); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.lineTo(c[0], c[1]); ctx.stroke(); ctx.restore();
-      for (const f of ["y", "x"] as const) {
-        for (let i = 0; i < 4; i++) { const u = 0.5 + i; if (i === 1 || i === 2) { onFace(f, x, y, w, d, u - 0.15, u + 0.15, 13, 19, night ? p.lit : p.win); continue; } onFace(f, x, y, w, d, u - 0.12, u + 0.12, 5, 10, night ? p.lit : p.win); onFace(f, x, y, w, d, u - 0.12, u + 0.12, 15, 20, night ? p.lit : p.win); }
-        onFace(f, x, y, w, d, 1.55, 2.45, 0, 7, shade(toHex(acc()), 0.1));
-      }
-      for (const [u, v] of [[1, 1], [2.6, 1], [1, 2.6], [2.6, 2.6]]) poly(flat(x + u - 0.3, y + v - 0.3, 0.6, 0.6, h), p.roofs[3]);
-      // the flag, in the accent
-      const [fx, fy] = P(x + w - 0.6, y + 0.6, h), wave = S.still ? 0 : Math.sin(t * 3) * 1.5;
+      // the Lab itself: a modern laboratory with a glass facade. A curtain wall of blue glass in a grid
+      // of mullions with a spandrel band at each floor, a taller glass atrium on one corner, a flat roof
+      // with solar panels and vents, a canopy over the door, the accent flag on top.
+      const { x, y, w, d } = o, h = 34, floors = 4;
+      const mull = night ? "rgba(200,215,235,.28)" : "rgba(40,60,90,.22)", frame = night ? "#3b4458" : "#e2e6ec", frameD = shade(frame, 0.12);
+      const glassFace = (pts: [number, number][], lit: boolean) => {
+        const g = ctx.createLinearGradient(pts[3][0], pts[3][1], pts[1][0], pts[1][1]);
+        if (night) { g.addColorStop(0, lit ? "#2d3d5c" : "#222c44"); g.addColorStop(1, lit ? "#3e5680" : "#2b3a58"); }
+        else { g.addColorStop(0, "#9fc6e4"); g.addColorStop(0.55, "#cfe4f3"); g.addColorStop(1, "#e9f4fb"); }
+        poly(pts, g as unknown as string);
+      };
+      // the two visible faces of the main block, glass bottom to top
+      const faceY: [number, number][] = [P(x, y + d, 0), P(x + w, y + d, 0), P(x + w, y + d, h), P(x, y + d, h)];
+      const faceX: [number, number][] = [P(x + w, y, 0), P(x + w, y + d, 0), P(x + w, y + d, h), P(x + w, y, h)];
+      glassFace(faceY, true); glassFace(faceX, false);
+      // a reflection: a pale diagonal band across the front
+      ctx.save(); ctx.beginPath(); faceY.forEach((q, i) => (i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]))); ctx.closePath(); ctx.clip();
+      const r0 = P(x + 0.6, y + d, h), r1 = P(x + 1.6, y + d, h), r2 = P(x + 3.0, y + d, 0), r3 = P(x + 2.0, y + d, 0);
+      poly([r0, r1, r2, r3], night ? "rgba(255,255,255,.04)" : "rgba(255,255,255,.35)", false); ctx.restore();
+      // mullions and spandrels
+      ctx.save(); ctx.strokeStyle = mull; ctx.lineWidth = line * 0.8; ctx.beginPath();
+      for (let i = 1; i < 10; i++) { const u = (w * i) / 10, a = P(x + u, y + d, 0), b = P(x + u, y + d, h); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); }
+      for (let i = 1; i < 10; i++) { const v = (d * i) / 10, a = P(x + w, y + v, 0), b = P(x + w, y + v, h); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); }
+      ctx.stroke(); ctx.restore();
+      for (let f = 1; f < floors; f++) { const z = (h / floors) * f; onFace("y", x, y, w, d, 0, w, z - 0.9, z + 0.9, frame, false); onFace("x", x, y, w, d, 0, d, z - 0.9, z + 0.9, frameD, false); }
+      // lit rooms at night, a few per floor, always the same ones
+      if (night) for (let f = 0; f < floors; f++) for (let i = 0; i < 10; i++) { if (((f * 7 + i * 3) % 5) > 1) continue; const z0 = (h / floors) * f + 1.5, z1 = (h / floors) * (f + 1) - 1.5, u0 = (w * i) / 10 + 0.04, u1 = (w * (i + 1)) / 10 - 0.04; onFace("y", x, y, w, d, u0, u1, z0, z1, "rgba(255,220,150,.55)", false); }
+      // the corners and the roof edge
+      ctx.save(); ctx.strokeStyle = p.line; ctx.beginPath();
+      for (const q of [P(x, y + d, 0), P(x + w, y + d, 0), P(x + w, y, 0)]) { const t2 = [q[0], q[1] - h]; ctx.moveTo(q[0], q[1]); ctx.lineTo(t2[0], t2[1]); }
+      ctx.stroke(); ctx.restore();
+      poly(flat(x, y, w, d, h), frame);
+      // the roof: solar panels in two rows, two vents
+      for (let i = 0; i < 4; i++) for (const v of [0.5, 1.6]) poly([P(x + 0.4 + i * 0.75, y + v, h + 0.4), P(x + 1.0 + i * 0.75, y + v, h + 0.4), P(x + 1.0 + i * 0.75, y + v + 0.7, h + 2.2), P(x + 0.4 + i * 0.75, y + v + 0.7, h + 2.2)], night ? "#1d2a4a" : "#2a3f7a");
+      for (const [vx, vy] of [[x + 0.6, y + 3.2], [x + 1.3, y + 3.2]]) { const [cx2, cy2] = P(vx, vy, h); ctx.beginPath(); ctx.ellipse(cx2, cy2 - 5, 4, 2, 0, 0, 6.283); ctx.fillStyle = frameD; ctx.fill(); ctx.stroke(); ctx.beginPath(); ctx.moveTo(cx2 - 4, cy2); ctx.lineTo(cx2 - 4, cy2 - 5); ctx.moveTo(cx2 + 4, cy2); ctx.lineTo(cx2 + 4, cy2 - 5); ctx.stroke(); }
+      // the atrium: a taller glass block on the front right corner
+      const ax = x + w - 1.5, ay = y + d - 1.5, aw = 1.5, ad = 1.5, ah = 46;
+      const atY: [number, number][] = [P(ax, ay + ad, h), P(ax + aw, ay + ad, h), P(ax + aw, ay + ad, ah), P(ax, ay + ad, ah)];
+      const atX: [number, number][] = [P(ax + aw, ay, h), P(ax + aw, ay + ad, h), P(ax + aw, ay + ad, ah), P(ax + aw, ay, ah)];
+      glassFace(atY, true); glassFace(atX, false);
+      ctx.save(); ctx.strokeStyle = mull; ctx.lineWidth = line * 0.8; ctx.beginPath();
+      for (let i = 1; i < 4; i++) { const a = P(ax + (aw * i) / 4, ay + ad, h), b = P(ax + (aw * i) / 4, ay + ad, ah); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); const c2 = P(ax + aw, ay + (ad * i) / 4, h), e = P(ax + aw, ay + (ad * i) / 4, ah); ctx.moveTo(c2[0], c2[1]); ctx.lineTo(e[0], e[1]); }
+      for (const z of [h + 12, h + 24, h + 36]) { const a = P(ax, ay + ad, z), b = P(ax + aw, ay + ad, z), c2 = P(ax + aw, ay, z); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.lineTo(c2[0], c2[1]); }
+      ctx.stroke(); ctx.restore();
+      poly([P(ax, ay + ad, h), P(ax + aw, ay + ad, h), P(ax + aw, ay + ad, ah), P(ax, ay + ad, ah)], undefined);
+      poly([P(ax + aw, ay, h), P(ax + aw, ay + ad, h), P(ax + aw, ay + ad, ah), P(ax + aw, ay, ah)], undefined);
+      poly(flat(ax, ay, aw, ad, ah), frame);
+      // the entrance: a canopy over a dark glass door in the middle of the front
+      onFace("y", x, y, w, d, w / 2 - 0.55, w / 2 + 0.55, 0, 7, night ? "#141c2e" : "#5f7fa8", false);
+      poly([P(x + w / 2 - 0.8, y + d, 8), P(x + w / 2 + 0.8, y + d, 8), P(x + w / 2 + 0.8, y + d + 0.5, 8), P(x + w / 2 - 0.8, y + d + 0.5, 8)], frame);
+      poly([P(x + w / 2 - 0.8, y + d + 0.5, 8), P(x + w / 2 + 0.8, y + d + 0.5, 8), P(x + w / 2 + 0.8, y + d + 0.5, 6.8), P(x + w / 2 - 0.8, y + d + 0.5, 6.8)], frameD);
+      // the flag, in the accent, on the atrium
+      const [fx, fy] = P(ax + aw - 0.35, ay + 0.35, ah), wave = S.still ? 0 : Math.sin(t * 3) * 1.5;
       ctx.beginPath(); ctx.moveTo(fx, fy); ctx.lineTo(fx, fy - 22); ctx.stroke();
       poly([[fx, fy - 22], [fx + 11, fy - 19 + wave], [fx, fy - 15]], acc());
-      return hit([P(x, y, 0), P(x + w, y + d, 0), P(x, y + d, 0), P(x + w, y, 0), P(x, y, h + 22)], o.tg);
+      return hit([P(x, y, 0), P(x + w, y + d + 0.5, 0), P(x, y + d + 0.5, 0), P(x + w, y, 0), [fx, fy - 24]], o.tg);
     }
     case "fountain": {
       const cx = o.x + o.w / 2, cy = o.y + o.d / 2, [sx, sy] = P(cx, cy), frozen = data.off.includes("rain") || S.sea.name === "winter";

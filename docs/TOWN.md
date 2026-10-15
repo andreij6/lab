@@ -6,7 +6,7 @@ nothing to play. Every lit window is someone writing in their own notebook; nobo
 ## What becomes what
 
 **Homes: one per person** who owns a notebook edited in the last 30 days. Quiet owners (every notebook idle 30+
-days) get no house; the town hall counts their plots.
+days) get no house; the Lab counts their plots.
 
 - **Lot** = the owner's lowest token id − 1. Token ids are never reused, so adding or removing other houses never
   moves anyone; your own house moves only if you delete or sell your oldest notebook (or buy an older one).
@@ -21,7 +21,7 @@ days) get no house; the town hall counts their plots.
 
 | Block | Building | Data |
 |---|---|---|
-| Centre | Town hall, accent flag | people, homes, quiet plots |
+| Centre | The Lab: a glass laboratory, accent flag | people, homes, quiet plots |
 | Front | The Square: a fountain, a stall per chat channel | online now and messages in 24 h per channel; rains (the fountain runs; frozen when rain is off) |
 | Left | The board's pavilion, a paper per live post | live posts, new in 24 h |
 | Right | Market hall, a crate per listing (a park while the market is off) | listings |
