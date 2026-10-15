@@ -23,7 +23,7 @@ export type Target =
   | { kind: "fountain" } | { kind: "board" } | { kind: "market" } | { kind: "factory" } | { kind: "school" } | { kind: "chapel" } | { kind: "tower" }
   | { kind: "park" } | { kind: "trail" } | { kind: "lake" } | { kind: "walker"; channel: string; me: boolean }
   | { kind: "landmark"; landmark: Landmark } | { kind: "district"; district: District } | { kind: "station" } | { kind: "visitor"; mine: boolean };
-type Kind = "station" | "canopy" | "portal" | "trestle" | "news" | "datacentre" | "credentials" | "bank" | "exchange" | "capitol" | "statue" | "launchpad" | "office" | "sign" | "house" | "plot" | "garden" | "tree" | "pine" | "poplar" | "bush" | "rock" | "hall" | "stall" | "fountain" | "gazebo" | "market" | "crate" | "factory" | "school" | "chapel" | "tower" | "bench" | "lantern" | "bridge" | "reeds";
+type Kind = "station" | "canopy" | "buffer" | "trestle" | "news" | "datacentre" | "credentials" | "bank" | "exchange" | "capitol" | "statue" | "launchpad" | "office" | "sign" | "house" | "plot" | "garden" | "tree" | "pine" | "poplar" | "bush" | "rock" | "hall" | "stall" | "fountain" | "gazebo" | "market" | "crate" | "factory" | "school" | "chapel" | "tower" | "bench" | "lantern" | "bridge" | "reeds";
 export type Obj = { k: Kind; x: number; y: number; w: number; d: number; s: number; tg?: Target; h?: TownHouse; face?: "x" | "y" | ""; ch?: TownChan; mine?: boolean; building?: boolean };
 /** Ground cells: nothing (beyond the shore), land, water, road, a bridge over water, railway. */
 // ---------------------------------------------------------------- districts and landmarks
@@ -287,7 +287,7 @@ export function layoutTown(t: TownData): Plan {
   paving.push([0.6, TY - 1, 14, 0.9]);
   put({ k: "station", x: 8.4, y: TY - 3, w: 4.2, d: 1.7, s: 0, tg: { kind: "station" } });
   put({ k: "canopy", x: 1.2, y: TY - 1, w: 5.6, d: 0.9, s: 0, tg: { kind: "station" } });
-  for (const x of [rx0, rx1]) put({ k: "portal", x: x - 0.1, y: TY - 0.6, w: 1.2, d: 1.6, s: x === rx0 ? 0 : 1 });
+  for (const x of [rx0, rx1]) put({ k: "buffer", x: x === rx0 ? x : x + 0.7, y: TY + 0.15, w: 0.3, d: 0.7, s: 0 });
   for (const x of trestle) put({ k: "trestle", x, y: TY, w: 1, d: 1, s: 0 });
   const platform: [number, number][] = [];
   for (let i = 0; i < 24; i++) platform.push([1 + ((i * 0.585) % 13.6), TY - 0.45 - (i % 2) * 0.3]);
@@ -852,13 +852,9 @@ function drawObj(o: Obj, t: number) {
       box(x, y - 0.1, w, d + 0.2, 1.5, shade(toHex(roof), 0.05), shade(toHex(roof), 0.15), roof, 11);
       return;
     }
-    case "portal": {
-      // where the railway goes into the hills: a grassy mound with a dark arch
-      const [mx, my] = P(o.x + o.w / 2, o.y + o.d / 2), hill = toHex(p.pine);
-      ctx.beginPath(); ctx.ellipse(mx, my - 4, 26, 15, 0, Math.PI, 0); ctx.lineTo(mx + 26, my + 2); ctx.lineTo(mx - 26, my + 2); ctx.closePath(); ctx.fillStyle = hill; ctx.fill(); ctx.stroke();
-      const [ax, ay] = P(o.x + (o.s ? 0.2 : o.w - 0.2), o.y + 0.6);
-      ctx.beginPath(); ctx.ellipse(ax, ay - 2, 7, 9, 0, Math.PI, 0); ctx.lineTo(ax + 7, ay + 3); ctx.lineTo(ax - 7, ay + 3); ctx.closePath(); ctx.fillStyle = night ? "#0c0f16" : "#3a3f4a"; ctx.fill();
-      ctx.save(); ctx.strokeStyle = night ? "#8a93a8" : "#c9ced8"; ctx.lineWidth = line * 2; ctx.beginPath(); ctx.ellipse(ax, ay - 2, 8, 10, 0, Math.PI, 0); ctx.stroke(); ctx.restore();
+    case "buffer": {
+      // the end of the line: a buffer stop, striped
+      box(o.x, o.y, o.w, o.d, 5, "#f5c542", "#d9a92e", "#2a2d36");
       return;
     }
     case "trestle": {
@@ -1286,22 +1282,25 @@ function frame(now: number) {
 /** Where the train's front is (tiles along the track), or undefined while it's away: a minute and a half
  *  round, in from the left, a stop at the platform, out to the right. */
 function trainAt(t: number, rl: Plan["rail"]): number | undefined {
-  const c = S.still ? 30 : (t + 8) % 90, run = rl.stop - rl.x0 + 5, ease = (u: number) => u * u * (3 - 2 * u);
-  if (c < 14) return rl.x0 - 5 + run * (1 - (1 - ease(c / 14)) ** 1.5);
+  const c = S.still ? 30 : (t + 8) % 90, start = rl.x0 + 1.9, run = rl.stop - start, ease = (u: number) => u * u * (3 - 2 * u);
+  if (c < 14) return start + run * (1 - (1 - ease(c / 14)) ** 1.5);
   if (c < 36) return rl.stop;
-  if (c < 52) return rl.stop + (rl.x1 + 6 - rl.stop) * ((c - 36) / 16) ** 2;
+  if (c < 52) return rl.stop + (rl.x1 + 1 - rl.stop + 5.5) * ((c - 36) / 16) ** 2;
   return undefined;
 }
-/** A locomotive and two coaches heading right; the parts inside the tunnels are not drawn. */
+/** A locomotive and two coaches heading right, fading in at the start of the line and out at its end. */
 function drawTrain(front: number, rl: Plan["rail"]) {
   const night = S.o!.dark, y = rl.y + 0.18, d = 0.64, loco = acc(), coach = night ? "#5a6276" : "#f4f1ea", roof = night ? "#3c4252" : "#9aa3b5";
   const cars: [number, number, boolean][] = [[front - 1.9, 1.9, true], [front - 3.7, 1.7, false], [front - 5.5, 1.7, false]];
   for (const [x, len, isLoco] of [...cars].reverse()) {
-    if (x < rl.x0 + 0.3 || x + len > rl.x1 + 0.7) continue;
+    const fade = Math.max(0, Math.min(1, (x - rl.x0) / 2.5, (rl.x1 + 1 - (x + len)) / 2.5));
+    if (fade <= 0) continue;
+    ctx.save(); ctx.globalAlpha = fade;
     box(x, y, len, d, 9, isLoco ? loco : coach, shade(toHex(isLoco ? (loco.startsWith("#") ? loco : "#6d7cff") : coach), 0.1), roof, 1.5);
     if (isLoco) { box(x + len - 0.5, y, 0.5, d, 3, shade(toHex(loco.startsWith("#") ? loco : "#6d7cff"), 0.15), shade(toHex(loco.startsWith("#") ? loco : "#6d7cff"), 0.25), undefined, 10.5); onFace("x", x, y, len, d, 0.15, d - 0.15, 6, 9, night ? S.pal.lit : S.pal.win); }
     else for (let i = 0; i < 4; i++) onFace("y", x, y, len, d, 0.15 + i * 0.4, 0.4 + i * 0.4, 5.5, 8.5, night ? S.pal.lit : S.pal.win);
     for (const u of [0.25, len - 0.25]) { const [wx, wy] = P(x + u, y + d, 1.5); ctx.beginPath(); ctx.arc(wx, wy, 1.4, 0, 6.283); ctx.fillStyle = "#2a2d36"; ctx.fill(); }
+    ctx.restore();
   }
 }
 /** A few birds in loose flocks, flapping across the sky (decoration only). */

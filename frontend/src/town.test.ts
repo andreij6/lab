@@ -96,7 +96,7 @@ test("town: a railway across the front of the island, a station by the town gate
   assert.ok(x1 - x0 > 20 && stop > x0 && stop < x1);
   for (let x = x0; x <= x1; x++) assert.ok([RAIL, WATER].includes(cellAt(pl, x, y)), `track at ${x}`);
   assert.ok(pl.objs.some((o) => o.k === "trestle"), "a trestle where it crosses the river");
-  assert.ok(pl.objs.some((o) => o.k === "station") && pl.objs.filter((o) => o.k === "portal").length === 2);
+  assert.ok(pl.objs.some((o) => o.k === "station") && pl.objs.filter((o) => o.k === "buffer").length === 2 && !pl.objs.some((o) => (o.k as string) === "portal"), "buffer stops, no tunnels");
   // the street from the gate reaches the station, and walkers start there
   assert.equal(cellAt(pl, 7, y - 3), ROAD);
   assert.ok(pl.gate[1] > 21);

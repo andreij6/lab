@@ -256,7 +256,7 @@ const S = {
   isAdmin: false,
   flags: [] as Flag[],
   admin: undefined as { bugs: Bug[]; filter: string; kind?: string; open?: bigint; loading: boolean; repo?: string; stats?: AppStats } | undefined,
-  town: undefined as { data?: TownData; legend: boolean } | undefined,
+  town: undefined as { data?: TownData; legend: boolean; hudOpen?: boolean } | undefined,
   /** the landing page's town: null when it is switched off or did not load */
   landingTown: undefined as TownData | null | undefined,
   settings: parseSettings(undefined) as Settings,
@@ -3048,6 +3048,7 @@ async function loadTown() {
     const hud = document.querySelector<HTMLElement>(".town-hud");
     if (!hud) return render();
     hud.innerHTML = townHud(d);
+    fitHud();
     townSync();
   };
   await pull();
@@ -3081,15 +3082,26 @@ function townHud(d: TownData): string {
   const now = new Date(), clock = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }), date = now.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
   const card = (ic: string, big: string | number, small: string, title = "") => `<div class="town-card glass" ${title ? `title="${esc(title)}"` : ""}>${icon(ic)}<span><b>${big}</b><small>${small}</small></span></div>`;
   return [
-    card("calendar", clock, `${date} · ${sea.name} · ${sea.next} in ${sea.days} day${sea.days === 1 ? "" : "s"}`),
     card("town", d.homes, `home${d.homes === 1 ? "" : "s"}${d.homes > d.houses.length ? ` · ${d.houses.length} shown` : ""} · ${n.today} lit today`, `People with a notebook edited in the last 30 days. ${d.quiet} quiet plot${d.quiet === 1 ? "" : "s"}.${d.homes > d.houses.length ? ` The town draws at most ${d.maxShown} homes, a mix of every kind, and always yours.` : ""}`),
+    card("calendar", clock, `${date} · ${sea.name} · ${sea.next} in ${sea.days} day${sea.days === 1 ? "" : "s"}`),
     card("users", n.online, "online now", "People in the community chat this minute"),
     card("chat", n.talk, "messages today", "Messages in the community in the last 24 hours"),
     ...(off.has("board") ? [] : [card("pin", d.postsLive, `post${d.postsLive === 1 ? "" : "s"} on the board`)]),
     card("bolt", cyclesText(d.cycles), `held · ${cyclesText(d.burnPerDay)} a day${n.days !== undefined ? ` · ${n.days} days` : ""}`, "Cycles every notebook holds between them, and what they burn a day: the water tower"),
     ...(d.building.length ? [card("plus", d.building.length, `home${d.building.length === 1 ? "" : "s"} going up`, "Notebooks made in the last three days")] : []),
+    // shown only when the cards don't fit on one row (fitHud)
+    `<button type="button" class="town-card town-more glass" data-action="town-hud" aria-expanded="${!!S.town?.hudOpen}">${S.town?.hudOpen ? "See less" : "See more"}</button>`,
   ].join("");
 }
+/** The HUD on one row: when its cards would wrap, show just the first and a "See more". */
+function fitHud() {
+  const hud = document.querySelector<HTMLElement>(".town-hud");
+  if (!hud) return;
+  hud.classList.remove("collapsed");
+  const cards = [...hud.querySelectorAll<HTMLElement>(".town-card:not(.town-more)")];
+  if (cards.length > 1 && cards[cards.length - 1].offsetTop > cards[0].offsetTop) hud.classList.add("collapsed");
+}
+addEventListener("resize", () => fitHud());
 function townPage(): string {
   const t = S.town!, d = t.data;
   if (!d) return pageShell("<b>Town</b>", `<div class="town"><p class="muted town-wait">Walking into town…</p></div>`, true);
@@ -3114,7 +3126,7 @@ function townPage(): string {
   const label = `Lab as a town: ${d.homes} homes, ${n.today} lit today, ${n.online} people online, ${n.talk} messages today.`;
   return pageShell("<b>Town</b>", `<div class="town">
     <canvas data-town="full" tabindex="0" role="img" aria-label="${esc(label)}"></canvas><div class="town-tip" hidden></div>
-    <div class="town-hud">${hud}</div>${legend}${tools}
+    <div class="town-hud ${t.hudOpen ? "open" : ""}">${hud}</div>${legend}${tools}
     ${d.at ? "" : `<div class="town-wake glass small">The town is waking up: counting homes…</div>`}
   </div>`, true);
 }
@@ -3169,6 +3181,7 @@ function townOpen(tg: TownTarget) {
 }
 /** Put the town on its canvas after every render (the landing preview or the town page). */
 function townSync() {
+  fitHud();
   const canvas = document.querySelector<HTMLCanvasElement>("canvas[data-town]");
   if (!canvas) { if (!S.identity && !S.town && !S.shared) loadLandingTown(); return; }
   const data = canvas.dataset.town === "full" ? S.town?.data : S.landingTown;
@@ -3183,6 +3196,7 @@ function townAction(action: string) {
   else if (action === "town-home") townCamera("home");
   else if (action === "town-mine") townCamera("mine");
   else if (action === "town-legend") { t.legend = !t.legend; render(); }
+  else if (action === "town-hud") { t.hudOpen = !t.hudOpen; render(); }
 }
 /** Admin: the numbers. */
 function adminStatsHtml(): string {

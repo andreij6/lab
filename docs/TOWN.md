@@ -51,7 +51,7 @@ the back of the island through the lake and off the front edge in a waterfall, a
 Streets are drawn around the civic centre, all of ring 2, and the residential blocks up to the last one lived in, so
 the town grows block by block.
 
-**The station**, across the front of the island: a railway between two tunnel mouths (a trestle over the river), a
+**The station**, across the front of the island: a railway between two buffer stops (a trestle over the river; the train fades in and out at the ends), a
 platform where visitors wait (people who signed in within 30 days and own no notebook, ≤24; yours first, marked
 "You"), a station house, and a train that comes in every 90 seconds, stops and goes on. The street from the town gate
 runs to it, so walkers come in from the station. The app calls the registry's `visit()` on sign-in (recorded at most
