@@ -18,7 +18,8 @@ pub struct TownHouse {
     pub size: u8,
     /// last edited: 0 within 30 days, 1 within 7, 2 within 24 hours
     pub lit: u8,
-    pub agent: bool,
+    /// one of the notebooks has under 30 days of cycles left
+    pub low: bool,
 }
 #[derive(CandidType, Deserialize, Clone, Debug)]
 pub struct TownChannel {
@@ -31,7 +32,7 @@ pub struct Town {
     /// when the houses were counted; 0 while the town is still waking up
     pub at: u64,
     pub houses: Vec<TownHouse>,
-    /// people who own a notebook (not agents)
+    /// people who own a notebook
     pub people: u32,
     pub homes: u32,
     /// owners whose notebooks have all been quiet for 30 days
@@ -45,19 +46,33 @@ pub struct Town {
     pub posts_live: u32,
     pub posts_24h: u32,
     pub listings: u32,
-    pub discoveries: u32,
-    pub under_review: u32,
     pub rains_24h: u32,
     pub last_rain: Option<u64>,
     /// trips out right now that are on time, at most 6
     pub hikers: u8,
-    /// which of board, market, journal, rain are switched off
+    /// lots with a notebook made in the last 3 days: building sites (or a new storey going up)
+    pub building: Vec<u32>,
+    pub notebooks: u32,
+    /// notebooks the registry made in the last day and week (the factory)
+    pub spawned_24h: u32,
+    pub spawned_7d: u32,
+    /// people who joined the community in the last week (the school)
+    pub newcomers_7d: u32,
+    /// cycles every notebook holds, and what they burn a day between them (the water tower)
+    pub cycles: Nat,
+    pub burn_per_day: Nat,
+    /// fundraisers in chat that are still open, and what they raised (the chapel)
+    pub fundraisers_open: u32,
+    pub raised_e8s: u64,
+    /// which of board, market, rain, fundraisers are switched off
     pub off: Vec<String>,
 }
 
 const DAY_NS: u64 = 24 * HOUR_NS;
 const MAX_HOUSES: usize = 600;
 const REFRESH_NS: u64 = 6 * HOUR_NS;
+const LOW_DAYS: u128 = 30;
+const BUILDING_NS: u64 = 3 * DAY_NS;
 
 #[derive(Default)]
 struct Counted {
@@ -66,6 +81,10 @@ struct Counted {
     people: u32,
     homes: u32,
     quiet: u32,
+    cycles: u128,
+    burn: u128,
+    fundraisers_open: u32,
+    raised_e8s: u64,
 }
 /// Clears the busy flag however a refresh ends (even if a call's callback traps).
 struct Busy;
@@ -83,7 +102,7 @@ thread_local! {
 /// last edited. None when every notebook has been quiet for 30 days.
 pub fn house_of(notebooks: u64, notes: u64, newest: Option<u64>, now: u64) -> Option<(u8, u8, u8)> {
     let age = now.saturating_sub(newest?);
-    if age > journal::ACTIVE_NS {
+    if age > stats::ACTIVE_NS {
         return None;
     }
     let lit = if age <= DAY_NS { 2 } else if age <= 7 * DAY_NS { 1 } else { 0 };
@@ -101,37 +120,68 @@ pub async fn refresh_town() {
     let _busy = Busy;
     let now = time();
     let nbs: Vec<Notebook> = NOTEBOOKS.with_borrow(|m| m.iter().map(|e| e.value().0).collect());
-    let usage = journal::usage_all(&nbs).await;
-    // owner -> (lowest token id, notebooks, notes, newest edit)
-    let mut by: std::collections::BTreeMap<Principal, (u64, u64, u64, Option<u64>)> = Default::default();
-    for (n, u) in nbs.iter().zip(usage.iter()) {
+    let usage = stats::usage_all(&nbs).await;
+    let status = status_all(&nbs).await;
+    let (mut cycles, mut burn) = (0u128, 0u128);
+    // owner -> (lowest token id, notebooks, notes, newest edit, low on cycles)
+    let mut by: std::collections::BTreeMap<Principal, (u64, u64, u64, Option<u64>, bool)> = Default::default();
+    for ((n, u), st) in nbs.iter().zip(usage.iter()).zip(status.iter()) {
+        if let Some((c, b)) = st {
+            cycles += c;
+            burn += b;
+        }
         // notebooks from before tokens only have an address once tokenize_all has run
         let Some(id) = ID_OF.with_borrow(|m| m.get(&n.canister)) else { continue };
-        let e = by.entry(n.owner).or_insert((u64::MAX, 0, 0, None));
+        let e = by.entry(n.owner).or_insert((u64::MAX, 0, 0, None, false));
         e.0 = e.0.min(id);
         e.1 += 1;
+        e.4 |= st.is_some_and(|(c, b)| b > 0 && c / b < LOW_DAYS);
         // an unreachable notebook (frozen, out of cycles) counts as quiet
         if let Some(u) = u {
             e.2 += u.notes;
             e.3 = e.3.max(u.last_modified);
         }
     }
-    let mut people = 0;
+    let mut people: u32 = 0;
     let mut houses: Vec<TownHouse> = Vec::new();
-    for (owner, (id, count, notes, newest)) in by {
-        let agent = is_agent(&owner);
-        people += !agent as u32;
+    for (_, (id, count, notes, newest, low)) in by {
+        people += 1;
         if let Some((storeys, size, lit)) = house_of(count, notes, newest, now) {
-            houses.push(TownHouse { lot: (id - 1) as u32, storeys, size, lit, agent });
+            houses.push(TownHouse { lot: (id - 1) as u32, storeys, size, lit, low });
         }
     }
-    let homes = houses.iter().filter(|h| !h.agent).count() as u32;
+    // the chapel: fundraisers still open, and what fundraisers raised (messages go after 90 days)
+    let (mut fundraisers_open, mut raised_e8s) = (0, 0);
+    if flag_on("fundraisers") {
+        // ponytail: scans every message every 6 hours; keep running totals if chat grows large
+        MESSAGES.with_borrow(|m| {
+            for e in m.iter() {
+                if let Some(f) = e.value().0.fund {
+                    fundraisers_open += !f.closed as u32;
+                    raised_e8s += f.raised_e8s;
+                }
+            }
+        });
+    }
+    let homes = houses.len() as u32;
     let quiet = people.saturating_sub(homes);
     // the most lit first when there are too many to draw, then in street order
     houses.sort_by_key(|h| (std::cmp::Reverse(h.lit), h.lot));
     houses.truncate(MAX_HOUSES);
     houses.sort_by_key(|h| h.lot);
-    TOWN.with_borrow_mut(|t| *t = Counted { at: now, houses, people, homes, quiet });
+    TOWN.with_borrow_mut(|t| *t = Counted { at: now, houses, people, homes, quiet, cycles, burn, fundraisers_open, raised_e8s });
+}
+/// Every notebook's cycles and what it burns a day while idle (the registry controls them all).
+async fn status_all(nbs: &[Notebook]) -> Vec<Option<(u128, u128)>> {
+    let mut out = Vec::new();
+    for chunk in nbs.chunks(50) {
+        let calls = chunk.iter().map(|n| async move {
+            let st = mgmt::canister_status(&mgmt::CanisterStatusArgs { canister_id: n.canister }).await.ok()?;
+            Some((st.cycles.0.try_into().unwrap_or(u128::MAX), st.idle_cycles_burned_per_day.0.try_into().unwrap_or(0)))
+        });
+        out.extend(stats::join_all(calls.collect()).await);
+    }
+    out
 }
 /// From the hourly timer: count again when the houses are 6 hours old.
 pub async fn town_tick() {
@@ -184,7 +234,6 @@ fn town() -> Result<Town, String> {
         });
     }
     let listings = if on("market") { LISTINGS.with_borrow(|l| l.len()) as u32 } else { 0 };
-    let (discoveries, under_review) = if on("journal") { journal::journal_counts() } else { (0, 0) };
     let (mut rains_24h, mut last_rain) = (0, None);
     if on("rain") {
         RAINS.with_borrow(|r| {
@@ -200,8 +249,30 @@ fn town() -> Result<Town, String> {
     }
     // ponytail: scans every check-in; keep a running count if there are ever thousands
     let hikers = WATCHES.with_borrow(|w| w.iter().filter(|e| { let w = e.value().0; !w.closed && !watch_overdue(&w, now) }).count()).min(6) as u8;
-    let off = ["board", "market", "journal", "rain"].iter().filter(|f| !on(f)).map(|f| f.to_string()).collect();
-    Ok(TOWN.with_borrow(|t| Town { at: t.at, homes: t.homes, houses: t.houses.clone(), people: t.people, quiet: t.quiet, mine, my_channel, channels, post_topics, posts_live, posts_24h, listings, discoveries, under_review, rains_24h, last_rain, hikers, off }))
+    let off = ["board", "market", "rain", "fundraisers"].iter().filter(|f| !on(f)).map(|f| f.to_string()).collect();
+    // new notebooks: building sites on their owners' lots, and the factory's output
+    let (mut spawned_24h, mut spawned_7d, mut notebooks) = (0, 0, 0);
+    let mut new_owners = std::collections::BTreeSet::new();
+    let mut lowest: std::collections::BTreeMap<Principal, u64> = Default::default();
+    NOTEBOOKS.with_borrow(|m| {
+        for e in m.iter() {
+            let n = e.value().0;
+            notebooks += 1;
+            spawned_24h += (n.created_at >= since) as u32;
+            spawned_7d += (n.created_at >= now.saturating_sub(7 * DAY_NS)) as u32;
+            if n.created_at >= now.saturating_sub(BUILDING_NS) {
+                new_owners.insert(n.owner);
+            }
+            if let Some(id) = ID_OF.with_borrow(|i| i.get(e.key())) {
+                let l = lowest.entry(n.owner).or_insert(id);
+                *l = (*l).min(id);
+            }
+        }
+    });
+    let building = new_owners.iter().filter_map(|o| lowest.get(o)).map(|id| (id - 1) as u32).take(30).collect();
+    let week = now.saturating_sub(7 * DAY_NS);
+    let newcomers_7d = MEMBERS.with_borrow(|m| m.iter().filter(|e| e.value().0.joined_at >= week).count()) as u32;
+    Ok(TOWN.with_borrow(|t| Town { at: t.at, homes: t.homes, houses: t.houses.clone(), people: t.people, quiet: t.quiet, mine, my_channel, channels, post_topics, posts_live, posts_24h, listings, rains_24h, last_rain, hikers, off, building, notebooks, spawned_24h, spawned_7d, newcomers_7d, cycles: Nat::from(t.cycles), burn_per_day: Nat::from(t.burn), fundraisers_open: t.fundraisers_open, raised_e8s: t.raised_e8s }))
 }
 
 #[cfg(test)]

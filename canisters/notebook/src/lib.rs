@@ -44,9 +44,6 @@ pub struct Init {
     pub name: String,
     pub owner: Principal,
     pub registry: Principal,
-    /// an agent's notebook: readable by anyone, for good (set by the registry at spawn)
-    #[serde(default)]
-    pub public: Option<bool>,
 }
 
 #[derive(CandidType, Deserialize, Clone, Debug)]
@@ -199,9 +196,6 @@ pub struct Info {
     pub total_topped_up_e8s: u64,
     pub total_cycles_from_topups: Nat,
     pub pending_topups: u64,
-    /// an agent's notebook, readable by anyone for good
-    #[serde(default)]
-    pub public: Option<bool>,
 }
 
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq)]
@@ -247,8 +241,6 @@ struct Config {
     owner: Principal,
     registry: Principal,
     created_at: u64,
-    #[serde(default)]
-    public: Option<bool>,
 }
 
 #[derive(CandidType, Deserialize, Clone, Debug)]
@@ -271,7 +263,7 @@ struct RevStored {
 
 thread_local! {
     static MM: RefCell<MemoryManager<DefaultMemoryImpl>> = RefCell::new(MemoryManager::init(DefaultMemoryImpl::default()));
-    static CONFIG: RefCell<StableCell<C<Config>, Mem>> = RefCell::new(StableCell::init(mem(0), C(Config { name: String::new(), owner: Principal::anonymous(), registry: Principal::anonymous(), created_at: 0, public: None })));
+    static CONFIG: RefCell<StableCell<C<Config>, Mem>> = RefCell::new(StableCell::init(mem(0), C(Config { name: String::new(), owner: Principal::anonymous(), registry: Principal::anonymous(), created_at: 0 })));
     /// path -> file
     static FILES: RefCell<StableBTreeMap<String, C<Stored>, Mem>> = RefCell::new(StableBTreeMap::init(mem(1)));
     static TOPUPS: RefCell<StableLog<C<TopUp>, Mem, Mem>> = RefCell::new(StableLog::init(mem(2), mem(3)));
@@ -311,7 +303,7 @@ fn index_page(name: &str) -> String {
 #[init]
 fn init(a: Init) {
     let now = time();
-    CONFIG.with_borrow_mut(|c| c.set(C(Config { name: a.name.clone(), owner: a.owner, registry: a.registry, created_at: now, public: a.public.filter(|p| *p) })));
+    CONFIG.with_borrow_mut(|c| c.set(C(Config { name: a.name.clone(), owner: a.owner, registry: a.registry, created_at: now })));
     FOLDERS.with_borrow_mut(|f| f.insert(AGENT_ROOT.into(), ()));
     FILES.with_borrow_mut(|f| f.insert("index.md".into(), C(Stored { content: index_page(&a.name), created: now, modified: now, agent: None })));
     // a Projects folder with one project note, so the Work tab has something to show from day one
@@ -834,7 +826,6 @@ fn info() -> Info {
         total_topped_up_e8s: TOTALS.with_borrow(|t| t.get().0 .0),
         total_cycles_from_topups: Nat::from(TOTALS.with_borrow(|t| t.get().0 .1)),
         pending_topups: PENDING.with_borrow(|p| p.len()),
-        public: c.public,
     }
 }
 
@@ -851,25 +842,6 @@ pub struct Usage {
 #[query]
 fn usage() -> Usage {
     FILES.with_borrow(|f| Usage { files: f.len(), notes: f.iter().filter(|e| e.key().ends_with(".md")).count() as u64, last_modified: f.iter().map(|e| e.value().0.modified).max() })
-}
-
-/// The notes under `prefix` (a folder, a single note, or "" for everything) as (path, content),
-/// for a journal submission: the registry freezes this copy. Registry only; refused above `max_bytes`.
-#[update]
-fn snapshot_for_registry(prefix: String, max_bytes: u64) -> Result<Vec<(String, String)>, NotebookError> {
-    if msg_caller() != config().registry {
-        return Err(NotebookError::Unauthorized);
-    }
-    let prefix = if prefix.trim().is_empty() { String::new() } else { check_path(&prefix)? };
-    let files: Vec<(String, String)> = FILES.with_borrow(|f| f.iter().filter(|e| prefix.is_empty() || e.key() == &prefix || e.key().starts_with(&format!("{prefix}/"))).map(|e| (e.key().clone(), e.value().0.content)).collect());
-    if files.is_empty() {
-        return Err(NotebookError::NotFound);
-    }
-    let bytes: u64 = files.iter().map(|(p, c)| (p.len() + c.len()) as u64).sum();
-    if bytes > max_bytes {
-        return Err(NotebookError::Invalid(format!("{bytes} bytes is more than a submission may hold ({max_bytes})")));
-    }
-    Ok(files)
 }
 
 // ---------------------------------------------------------------- ownership and the quality audit
@@ -1062,10 +1034,9 @@ async fn prices(xrc: Principal, symbols: Vec<String>) -> Result<Vec<Price>, Note
     }).collect())
 }
 
-/// The most one fee may be (a long board post is ~0.03 B cycles; a journal submission tens of B), and what a notebook keeps
+/// The most one community fee may be (a long board post is ~0.03 B cycles), and what a notebook keeps
 /// above its freezing reserve after paying: chatting never freezes anyone's notes.
-// ponytail: one flat cap; a journal submission archived for ten years is the biggest fee (~40B for 1 MB)
-const MAX_FEE: u128 = 100_000_000_000;
+const MAX_FEE: u128 = 1_000_000_000;
 const PAY_FLOOR: u128 = 100_000_000_000;
 
 /// Pay the registry what one of the owner's chat messages or board posts costs it in cycles. The
@@ -1878,12 +1849,10 @@ fn shares() -> Result<Vec<Share>, NotebookError> {
 
 /// What `caller` may do with `path`, from the owner's rights or any share covering the path.
 fn access(path: &str, caller: Principal) -> Option<Role> {
-    let c = config();
-    if caller == c.owner {
+    if caller == config().owner {
         return Some(Role::Edit);
     }
-    // an agent's notebook is open to everyone, signed in or not, and no share can close it
-    let mut best: Option<Role> = (c.public == Some(true)).then_some(Role::View);
+    let mut best: Option<Role> = None;
     SHARES.with_borrow(|m| {
         for e in m.iter() {
             let s = e.value().0;

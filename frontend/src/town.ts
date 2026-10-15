@@ -10,20 +10,26 @@
 
 import { accentOf, hashOf, hex, mix, rgba, rng, skyColours, still, type RGB } from "./sky.ts";
 
-export type TownHouse = { lot: number; storeys: number; size: number; lit: number; agent: boolean };
+export type TownHouse = { lot: number; storeys: number; size: number; lit: number; low?: boolean };
 export type TownChan = { name: string; online: number; messages24h: number };
 export type TownData = {
   at: number; houses: TownHouse[]; people: number; homes: number; quiet: number; mine?: number; myChannel?: string;
-  channels: TownChan[]; postTopics: string[]; postsLive: number; posts24h: number; listings: number; discoveries: number;
-  underReview: number; rains24h: number; lastRain?: number; hikers: number; off: string[];
+  channels: TownChan[]; postTopics: string[]; postsLive: number; posts24h: number; listings: number; rains24h: number; lastRain?: number; hikers: number; off: string[];
+  building: number[]; notebooks: number; spawned24h: number; spawned7d: number; newcomers7d: number; cycles: number; burnPerDay: number; fundraisersOpen: number; raisedE8s: number;
 };
 export type Target =
-  | { kind: "house"; house: TownHouse; mine: boolean } | { kind: "plot" } | { kind: "hall" } | { kind: "stall"; channel: TownChan }
-  | { kind: "fountain" } | { kind: "board" } | { kind: "market" } | { kind: "observatory" } | { kind: "obelisk"; n: number }
-  | { kind: "park" } | { kind: "trail" } | { kind: "walker"; channel: string; me: boolean };
-type Kind = "house" | "plot" | "garden" | "tree" | "pine" | "rock" | "hall" | "stall" | "fountain" | "gazebo" | "market" | "crate" | "observatory" | "obelisk" | "bench" | "lantern";
-export type Obj = { k: Kind; x: number; y: number; w: number; d: number; s: number; tg?: Target; h?: TownHouse; face?: "x" | "y" | ""; n?: number; ch?: TownChan; mine?: boolean };
-export type Plan = { R: number; lo: number; hi: number; tlo: number; thi: number; objs: Obj[]; water: number[][]; paving: number[][]; stalls: Obj[]; gateY: number; loop: [number, number][] };
+  | { kind: "house"; house: TownHouse; mine: boolean; building: boolean } | { kind: "plot" } | { kind: "hall" } | { kind: "stall"; channel: TownChan }
+  | { kind: "fountain" } | { kind: "board" } | { kind: "market" } | { kind: "factory" } | { kind: "school" } | { kind: "chapel" } | { kind: "tower" }
+  | { kind: "park" } | { kind: "trail" } | { kind: "lake" } | { kind: "walker"; channel: string; me: boolean };
+type Kind = "house" | "plot" | "garden" | "tree" | "pine" | "poplar" | "bush" | "rock" | "hall" | "stall" | "fountain" | "gazebo" | "market" | "crate" | "factory" | "school" | "chapel" | "tower" | "bench" | "lantern" | "bridge" | "reeds";
+export type Obj = { k: Kind; x: number; y: number; w: number; d: number; s: number; tg?: Target; h?: TownHouse; face?: "x" | "y" | ""; ch?: TownChan; mine?: boolean; building?: boolean };
+/** Ground cells: nothing (beyond the shore), land, water, road, a bridge over water. */
+export const VOID = 0, LAND = 1, WATER = 2, ROAD = 3, BRIDGE = 4;
+export type Plan = {
+  R: number; lo: number; hi: number; n: number; cells: Uint8Array; objs: Obj[]; water: number[][]; paving: number[][];
+  stalls: Obj[]; gate: [number, number]; loop: [number, number][]; yard: [number, number, number, number]; lake: [number, number];
+};
+export const cellAt = (p: Plan, x: number, y: number) => (x < p.lo || y < p.lo || x > p.hi || y > p.hi ? VOID : p.cells[(y - p.lo) * p.n + (x - p.lo)]);
 
 // ---------------------------------------------------------------- the plan
 
@@ -58,53 +64,87 @@ function lotTiles(bx: number, by: number, slot: number): { x: number; y: number;
 }
 /** A well-mixed 0..1 from a string (FNV alone is biased for keys that differ in one character). */
 const h01 = (s: string) => { let h = hashOf(s); h = Math.imul(h ^ (h >>> 16), 0x85ebca6b); h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
+/** A smooth wobble around the island (the same every time). */
+const shore = (a: number) => 0.52 + 0.26 * Math.sin(3 * a + 1.3) + 0.16 * Math.sin(5 * a + 0.4) + 0.08 * Math.sin(9 * a + 2.2);
+const BELT = 13;
 
 export function layoutTown(t: TownData): Plan {
-  const off = new Set(t.off);
-  const agents = t.houses.filter((h) => h.agent).sort((a, b) => a.lot - b.lot);
-  const quarter = new Map(agents.slice(0, 16).map((h, i) => [h.lot, i]));
-  const people = t.houses.filter((h) => !quarter.has(h.lot));
-  const used = [...people.map((h) => h.lot), ...(t.mine !== undefined ? [t.mine] : [])];
+  const off = new Set(t.off), building = new Set(t.building);
+  const byLot = new Map(t.houses.map((h) => [h.lot, h]));
+  const used = [...t.houses.map((h) => h.lot), ...t.building, ...(t.mine !== undefined ? [t.mine] : [])];
   const maxBlock = used.length ? Math.floor(Math.max(...used) / 8) : 0;
-  const R = Math.max(2, ringOf(maxBlock));
-  const tlo = -7 * R, thi = 7 * R + 7, lo = tlo - 6, hi = thi + 6;
+  // the town: the civic centre, all of ring 2, then the blocks that are lived in so far
+  const blocks: [number, number][] = [];
+  for (let x = -1; x <= 1; x++) for (let y = -1; y <= 1; y++) blocks.push([x, y]);
+  const homesBlocks: number[] = [];
+  for (let b = 0; b < 16 || b <= maxBlock; b++) { homesBlocks.push(b); blocks.push(blockAt(b)); }
+  const R = Math.max(...blocks.map(([x, y]) => Math.max(Math.abs(x), Math.abs(y))));
+  const tlo = -7 * R, thi = 7 * R + 7, lo = tlo - BELT, hi = thi + BELT, n = hi - lo + 1;
+  const cells = new Uint8Array(n * n);
+  const set = (x: number, y: number, v: number) => { if (x >= lo && y >= lo && x <= hi && y <= hi) cells[(y - lo) * n + (x - lo)] = v; };
+  const get = (x: number, y: number) => (x < lo || y < lo || x > hi || y > hi ? VOID : cells[(y - lo) * n + (x - lo)]);
+  // the island: the town's square of land and an uneven belt of country around it
+  const c = (tlo + thi) / 2;
+  for (let x = lo; x <= hi; x++) for (let y = lo; y <= hi; y++) {
+    const dx = Math.max(tlo - x, 0, x - thi), dy = Math.max(tlo - y, 0, y - thi), d = Math.hypot(dx, dy);
+    if (d <= 0.5 + BELT * shore(Math.atan2(y - c, x - c)) * 0.95) set(x, y, LAND);
+  }
+  // a lake in the country on the left, and a river through it from the back of the island to the front
+  const lake: [number, number] = [tlo - 7, Math.round(c) - 4];
+  const riverX = (y: number) => lake[0] + (y > lake[1] ? 2.2 : 1.4) * Math.sin((y - lake[1]) * 0.3);
+  for (let x = lo; x <= hi; x++) for (let y = lo; y <= hi; y++) {
+    const a = Math.atan2(y - lake[1], x - lake[0]), r = 4.6 + 1.1 * Math.sin(3 * a + 0.7);
+    const inLake = Math.hypot(x + 0.5 - lake[0], (y + 0.5 - lake[1]) * 1.15) < r, inRiver = Math.abs(x + 0.5 - riverX(y + 0.5)) < 0.95;
+    const bank = Math.hypot(x + 0.5 - lake[0], (y + 0.5 - lake[1]) * 1.15) < r + 2 || Math.abs(x + 0.5 - riverX(y + 0.5)) < 3;
+    if (inLake || inRiver) set(x, y, WATER); else if (bank && get(x, y) === VOID && x < tlo) set(x, y, LAND);
+  }
+  // no lakes of nothing inside the island: anything the sea can't reach from the edge is land
+  const sea = new Uint8Array(n * n), stack: number[] = [];
+  for (let i = 0; i < n; i++) for (const j of [i, (n - 1) * n + i, i * n, i * n + n - 1]) if (!cells[j] && !sea[j]) { sea[j] = 1; stack.push(j); }
+  while (stack.length) {
+    const j = stack.pop()!, x = j % n, y = (j - x) / n;
+    for (const k of [x > 0 ? j - 1 : -1, x < n - 1 ? j + 1 : -1, y > 0 ? j - n : -1, y < n - 1 ? j + n : -1]) if (k >= 0 && !cells[k] && !sea[k]) { sea[k] = 1; stack.push(k); }
+  }
+  for (let j = 0; j < n * n; j++) if (!cells[j] && !sea[j]) cells[j] = LAND;
+  // the road out of town to the west, over the river on a bridge
+  for (let x = tlo - 1; x >= lo; x--) { const v = get(x, 7); if (v === VOID) break; set(x, 7, v === WATER ? BRIDGE : ROAD); }
+  // the streets: around every block of the town
+  for (const [bx, by] of blocks) for (let i = 0; i <= 7; i++) for (const [x, y] of [[7 * bx + i, 7 * by], [7 * bx + i, 7 * by + 7], [7 * bx, 7 * by + i], [7 * bx + 7, 7 * by + i]]) set(x, y, ROAD);
+  const inBlock = new Set<string>();
+  for (const [bx, by] of blocks) for (let x = 1; x <= 6; x++) for (let y = 1; y <= 6; y++) inBlock.add(`${7 * bx + x},${7 * by + y}`);
+
   const objs: Obj[] = [], water: number[][] = [], paving: number[][] = [];
   const put = (o: Obj) => { objs.push(o); return o; };
-  const tree = (x: number, y: number, seed: string, pine?: boolean) => put({ k: pine ?? h01(seed) < 0.45 ? "pine" : "tree", x: x - 0.3, y: y - 0.3, w: 0.6, d: 0.6, s: hashOf(seed) });
-  const byLot = new Map(people.map((h) => [h.lot, h]));
-  /** One lot: a house, your quiet plot, or something green. */
-  const lot = (bx: number, by: number, slot: number, n: number | undefined, h: TownHouse | undefined) => {
+  const tree = (x: number, y: number, seed: string, kind?: "tree" | "pine" | "poplar" | "bush") => {
+    const r = h01(seed), k = kind ?? (r < 0.42 ? "pine" : r < 0.8 ? "tree" : r < 0.92 ? "poplar" : "bush");
+    return put({ k, x: x - 0.3, y: y - 0.3, w: 0.6, d: 0.6, s: hashOf(seed) });
+  };
+  /** One lot: a home (or one being built), your quiet plot, or something green. */
+  const lot = (bx: number, by: number, slot: number, n: number) => {
     const { x, y, face } = lotTiles(bx, by, slot);
-    const mine = n !== undefined && n === t.mine;
+    const mine = n === t.mine, isNew = building.has(n);
+    const h = byLot.get(n) ?? (isNew ? { lot: n, storeys: 1, size: 0, lit: 2 } : undefined);
     if (h) {
       // the house sits toward its road; bigger houses fill more of the lot
       const fw = [1.1, 1.3, 1.5, 1.75][h.size], fd = [1.0, 1.2, 1.45, 1.7][h.size];
       const ox = face === "x" ? 1.9 - fw : 0.1 + (1.8 - fw) / 2, oy = face === "y" ? 1.9 - fd : 0.1 + (1.8 - fd) / 2;
-      put({ k: "house", x: x + ox, y: y + oy, w: fw, d: fd, s: hashOf(`lot${h.lot}`), h, face, mine, tg: { kind: "house", house: h, mine } });
-      if (h.size === 0) put({ k: "garden", x: x + (face === "x" ? 0.15 : 1.3), y: y + (face === "y" ? 0.15 : 1.3), w: 0.55, d: 0.55, s: 1 });
+      put({ k: "house", x: x + ox, y: y + oy, w: fw, d: fd, s: hashOf(`lot${h.lot}`), h, face, mine, building: isNew, tg: { kind: "house", house: h, mine, building: isNew } });
+      if (h.size === 0 && !isNew) put({ k: "garden", x: x + (face === "x" ? 0.15 : 1.3), y: y + (face === "y" ? 0.15 : 1.3), w: 0.55, d: 0.55, s: 1 });
       return;
     }
     if (mine) { put({ k: "plot", x: x + 0.15, y: y + 0.15, w: 1.7, d: 1.7, s: 0, mine, tg: { kind: "plot" } }); return; }
     const key = `${bx},${by},${slot}`, r = h01(`fill${key}`);
-    if (r < 0.5) { tree(x + 0.6, y + 0.6, `a${key}`); if (r < 0.3) tree(x + 1.4, y + 1.3, `b${key}`); if (r < 0.15) tree(x + 1.3, y + 0.5, `c${key}`); }
+    if (r < 0.5) { tree(x + 0.6, y + 0.6, `a${key}`); if (r < 0.3) tree(x + 1.4, y + 1.3, `b${key}`); if (r < 0.15) tree(x + 1.3, y + 0.5, `c${key}`, "bush"); }
     else if (r < 0.7) put({ k: "garden", x: x + 0.3, y: y + 0.3, w: 1.4, d: 1.4, s: hashOf(key) });
-    else if (r < 0.8) water.push([x + 0.25, y + 0.25, 1.5, 1.5]);
+    else if (r < 0.78) water.push([x + 0.25, y + 0.25, 1.5, 1.5]);
     else if (r < 0.9) put({ k: "rock", x: x + 0.7, y: y + 0.8, w: 0.5, d: 0.4, s: hashOf(key) });
   };
-  const courtyard = (bx: number, by: number) => tree(7 * bx + 4, 7 * by + 4, `court${bx},${by}`, false);
-  // the residential rings, every block up to the outermost one used
-  for (let b = 0; ringOf(b) <= R; b++) {
+  for (const b of homesBlocks) {
     const [bx, by] = blockAt(b);
-    for (let s = 0; s < 8; s++) { const n = b * 8 + s; const h = byLot.get(n); lot(bx, by, s, n, h); }
-    courtyard(bx, by);
+    for (let s = 0; s < 8; s++) lot(bx, by, s, b * 8 + s);
+    tree(7 * bx + 4, 7 * by + 4, `court${bx},${by}`, "tree");
   }
-  // the Agent Quarter, beside the observatory: the first 16 agents' workshops
-  const q: [number, number][] = [[-1, 0], [0, -1]];
-  q.forEach(([bx, by], qi) => {
-    for (let s = 0; s < 8; s++) { const a = agents[qi * 8 + s]; lot(bx, by, s, a?.lot, a); }
-    courtyard(bx, by);
-  });
-  // the civic centre
+  // the civic centre: the town hall
   paving.push([1, 1, 6, 6]);
   put({ k: "hall", x: 2, y: 2, w: 4, d: 4, s: 0, tg: { kind: "hall" } });
   // the Square: a fountain, a stall for each channel around it, the way in from the west road
@@ -117,11 +157,11 @@ export function layoutTown(t: TownData): Plan {
   for (let y = 12; y >= 9; y--) if (y !== 10 && y !== 11) ring.push([8, y]);
   const chans = t.channels.slice(0, 16);
   // spread around the Square, evenly
-  const stalls = chans.map((ch, i) => ({ ch, at: ring[Math.floor((i * ring.length) / chans.length)] })).map(({ ch, at }, i) => put({ k: "stall", x: at[0] + 0.12, y: at[1] + 0.12, w: 0.76, d: 0.76, s: i, ch, tg: { kind: "stall", channel: ch } }));
+  const stalls = chans.map((ch, i) => { const at = ring[Math.floor((i * ring.length) / chans.length)]; return put({ k: "stall", x: at[0] + 0.12, y: at[1] + 0.12, w: 0.76, d: 0.76, s: i, ch, tg: { kind: "stall", channel: ch } }); });
   // the board's pavilion (left)
   paving.push([-5, 9, 4, 4]);
   put({ k: "gazebo", x: -4.4, y: 9.6, w: 2.8, d: 2.8, s: 0, tg: { kind: "board" } });
-  for (const [x, y] of [[-5.5, 8.5], [-0.5, 8.5], [-5.5, 13.5], [-0.5, 13.5]]) tree(x, y, `bd${x}${y}`, false);
+  for (const [x, y] of [[-5.5, 8.5], [-0.5, 8.5], [-5.5, 13.5], [-0.5, 13.5]]) tree(x, y, `bd${x}${y}`, "tree");
   // the market hall (right), or a park while the market is off
   if (!off.has("market")) {
     paving.push([8, -6, 6, 6]);
@@ -132,39 +172,48 @@ export function layoutTown(t: TownData): Plan {
     for (const [x, y] of [[8.6, -1.4], [12.8, -1.6], [13, -5.4], [10.6, -1.0]]) tree(x, y, `mk${x}${y}`);
     put({ k: "bench", x: 10.3, y: -2.6, w: 1, d: 0.35, s: 0 });
   }
-  // the observatory (back) and the avenue of discoveries, while the journal is on
-  if (!off.has("journal")) {
-    paving.push([-6, -2, 6, 1], [-2, -6, 1, 5]);
-    put({ k: "observatory", x: -5.6, y: -5.6, w: 3, d: 3, s: 0, tg: { kind: "observatory" } });
-    const spots: [number, number][] = [];
-    for (let y = -5.5; y <= -0.5; y++) spots.push([-1.5, y]);
-    for (let x = -2.5; x >= -5.5; x--) spots.push([x, -1.5]);
-    const shown = Math.min(t.discoveries, spots.length);
-    for (let i = 0; i < shown; i++) {
-      const more = i === shown - 1 && t.discoveries > spots.length;
-      put({ k: "obelisk", x: spots[i][0] - 0.2, y: spots[i][1] - 0.2, w: 0.4, d: 0.4, s: more ? 2 : 1, n: more ? t.discoveries : i + 1, tg: { kind: "obelisk", n: more ? t.discoveries : i + 1 } });
-    }
-  } else for (const [x, y] of [[-5, -5], [-3.5, -4.5], [-4.5, -2.5], [-2, -5], [-2, -2], [-5.2, -1.4]]) tree(x, y, `ob${x}${y}`);
-  // the park with its pond (front right)
-  water.push([9.2, 1.6, 3, 2.4]);
-  for (const [x, y] of [[8.6, 5.4], [12.8, 5.2], [13, 1.4], [10.5, 5.6]]) tree(x, y, `pk${x}${y}`);
-  put({ k: "bench", x: 9.6, y: 4.6, w: 1, d: 0.35, s: 0, tg: { kind: "park" } });
+  // the notebook works (back): the registry, where every notebook is made; a crate for each this week
+  paving.push([-6, -6, 6, 6]);
+  put({ k: "factory", x: -5.6, y: -5.6, w: 4.4, d: 2.8, s: 0, tg: { kind: "factory" } });
+  for (let i = 0; i < Math.min(10, t.spawned7d); i++) put({ k: "crate", x: -5.4 + (i % 5) * 0.85, y: -1.9 + Math.floor(i / 5) * 0.75, w: 0.5, d: 0.5, s: i + 20 });
+  // the school (back left), its yard full of this week's newcomers
+  put({ k: "school", x: -5.6, y: 1.4, w: 3.8, d: 2.0, s: 0, tg: { kind: "school" } });
+  paving.push([-6, 4, 5, 2.6]);
+  for (const [x, y] of [[-0.6, 1.6], [-0.7, 5.4]]) tree(x, y, `sc${x}${y}`, "tree");
+  // the chapel (back right), where fundraisers ring the bell
+  put({ k: "chapel", x: 2.4, y: -5.6, w: 2.0, d: 3.6, s: 0, tg: { kind: "chapel" } });
+  paving.push([2, -2, 3, 1]);
+  for (const [x, y] of [[5.4, -5.4], [5.6, -3.4], [1.4, -1.2], [5.4, -1.4]]) tree(x, y, `ch${x}${y}`, x > 5 ? "poplar" : "tree");
+  // the park (front right): a pond, and the water tower that shows the town's cycles
+  water.push([8.7, 1.5, 2.8, 2.2]);
+  put({ k: "tower", x: 11.7, y: 3.4, w: 1.4, d: 1.4, s: 0, tg: { kind: "tower" } });
+  for (const [x, y] of [[8.6, 5.4], [13.2, 1.4], [10.4, 5.7], [13.3, 6.2]]) tree(x, y, `pk${x}${y}`);
+  put({ k: "bench", x: 9.2, y: 4.6, w: 1, d: 0.35, s: 0, tg: { kind: "park" } });
   // the trailhead grove (front left): a loop path with lanterns that hikers walk
   const loop: [number, number][] = [[2.5, 9.5], [5.5, 9.5], [5.5, 12.5], [2.5, 12.5]];
   for (let x = 1; x <= 6; x++) for (let y = 8; y <= 13; y++) {
     const onPath = (y === 9 || y === 12) && x >= 2 && x <= 5 || (x === 2 || x === 5) && y >= 9 && y <= 12;
-    if (!onPath && h01(`tr${x},${y}`) < 0.75) tree(x + 0.5, y + 0.5, `tr${x},${y}`, h01(`tp${x},${y}`) < 0.7);
+    if (!onPath && h01(`tr${x},${y}`) < 0.75) tree(x + 0.5, y + 0.5, `tr${x},${y}`, h01(`tp${x},${y}`) < 0.7 ? "pine" : "tree");
   }
   for (const [x, y] of loop) put({ k: "lantern", x: x - 0.1, y: y - 0.1, w: 0.2, d: 0.2, s: 0, tg: { kind: "trail" } });
-  // the forest around it all, thinning toward the edge
+  // the country: woods that thin toward the shore, reeds by the water, the bridge
   for (let x = lo; x <= hi; x++) for (let y = lo; y <= hi; y++) {
-    if (x >= tlo && x <= thi && y >= tlo && y <= thi) continue;
-    const edge = Math.min(x - lo, hi - x, y - lo, hi - y);
-    if (h01(`f${x},${y}`) < 0.22 + edge * 0.07) tree(x + 0.5, y + 0.5, `f${x},${y}`, h01(`fp${x},${y}`) < 0.65);
+    const v = get(x, y);
+    if (v === BRIDGE) { put({ k: "bridge", x, y, w: 1, d: 1, s: 0 }); continue; }
+    if (v !== LAND || inBlock.has(`${x},${y}`)) continue;
+    const near = [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([a, b]) => get(x + a, y + b));
+    if (near.includes(WATER)) { if (h01(`rd${x},${y}`) < 0.35) put({ k: "reeds", x: x + 0.3, y: y + 0.3, w: 0.4, d: 0.4, s: hashOf(`rd${x},${y}`) }); continue; }
+    if (near.includes(ROAD) || near.includes(BRIDGE)) continue;
+    const coast = near.includes(VOID) ? 0.12 : 0;
+    if (h01(`f${x},${y}`) < 0.5 - coast) tree(x + 0.5, y + 0.5, `f${x},${y}`);
   }
+  put({ k: "rock", x: lake[0] + 2.6, y: lake[1] - 3.1, w: 0.5, d: 0.4, s: 7, tg: { kind: "lake" } });
+  // the gate: where the street between the Square and the grove leaves town
+  let gy = 14;
+  while (get(7, gy + 1) === ROAD) gy++;
   // painter's order: back to front by the middle of each footprint
   objs.sort((a, b) => a.x + a.w / 2 + a.y + a.d / 2 - (b.x + b.w / 2 + b.y + b.d / 2) || a.x - b.x);
-  return { R, lo, hi, tlo, thi, objs, water, paving, stalls, gateY: thi + 0.5, loop };
+  return { R, lo, hi, n, cells, objs, water, paving, stalls, gate: [7.5, gy + 0.5], loop, yard: [-5.6, 4.2, 4.4, 2.2], lake };
 }
 
 // ---------------------------------------------------------------- drawing
@@ -206,7 +255,7 @@ const S = {
   hits: [] as Hit[], hover: undefined as Target | undefined,
   raf: 0, last: 0, t0: performance.now(), still: still(), ro: undefined as ResizeObserver | undefined,
   drag: undefined as { x: number; y: number; cx: number; cy: number; moved: boolean } | undefined, pts: new Map<number, [number, number]>(), pinch: 0,
-  tapped: undefined as Target | undefined, pinched: false, flakes: [] as [number, number, number][],
+  tapped: undefined as Target | undefined, pinched: false, warned: false, flakes: [] as [number, number, number][],
 };
 
 let ctx!: CanvasRenderingContext2D;
@@ -243,12 +292,58 @@ function hit(pts: [number, number][], tg?: Target) {
   S.hits.push({ x0, y0, x1, y1, tg });
 }
 
+/** A crane beside a building site: a lattice mast, a jib, a load swinging on its cable. */
+function crane(bx: number, by: number, t: number) {
+  const [mx, my] = P(bx, by), top = my - 58, sway = S.still ? 0 : Math.sin(t * 0.8) * 3;
+  ctx.save(); ctx.strokeStyle = S.pal.line;
+  ctx.lineWidth = line * 1.1;
+  ctx.beginPath(); ctx.moveTo(mx - 2.5, my); ctx.lineTo(mx - 2.5, top); ctx.moveTo(mx + 2.5, my); ctx.lineTo(mx + 2.5, top); ctx.stroke();
+  ctx.beginPath(); for (let z = my; z > top + 5; z -= 6) { ctx.moveTo(mx - 2.5, z); ctx.lineTo(mx + 2.5, z - 6); } ctx.stroke();
+  ctx.lineWidth = line * 1.6; ctx.strokeStyle = "#e0a92e";
+  ctx.beginPath(); ctx.moveTo(mx - 44, top); ctx.lineTo(mx + 16, top); ctx.stroke();
+  ctx.lineWidth = line;
+  ctx.strokeStyle = S.pal.line; ctx.beginPath(); ctx.moveTo(mx - 34 + sway, top); ctx.lineTo(mx - 34 + sway, top + 24); ctx.stroke();
+  ctx.restore();
+  poly([[mx + 10, top - 1], [mx + 16, top - 1], [mx + 16, top + 5], [mx + 10, top + 5]], shade(S.pal.wallR.startsWith("#") ? S.pal.wallR : "#cccccc", 0.3));
+  poly([[mx - 38 + sway, top + 24], [mx - 30 + sway, top + 24], [mx - 30 + sway, top + 29], [mx - 38 + sway, top + 29]], "#d9b98e");
+}
+/** A notebook made in the last three days: the house going up, its frame, scaffolding and a crane. */
+function drawSite(o: Obj, t: number) {
+  const p = S.pal, night = S.o!.dark, { x, y, w, d } = o, h = 14, rh = 6 + Math.min(w, d) * 5;
+  poly(flat(x - 0.15, y - 0.15, w + 0.3, d + 0.3), night ? "#463f35" : "#e8dcc6", false);
+  box(x, y, w, d, 2, shade(p.wallR.startsWith("#") ? p.wallR : "#e9ebee", 0.06), shade(p.wallR.startsWith("#") ? p.wallR : "#e9ebee", 0.12), p.pave);
+  // the walls are half up
+  const brick = night ? "#7a5a4a" : "#e9c3a8";
+  box(x, y, w, d, h * 0.45, brick, shade(brick, 0.1), undefined, 2);
+  // the frame: corner posts, top beams, rafters to the ridge
+  const corners: [number, number][] = [[x, y], [x + w, y], [x + w, y + d], [x, y + d]];
+  ctx.save(); ctx.strokeStyle = night ? "#b8946a" : "#a87f52"; ctx.lineWidth = line * 1.3;
+  ctx.beginPath();
+  for (const [cx, cy] of corners) { const a = P(cx, cy, 2), b = P(cx, cy, h); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); }
+  corners.forEach(([cx, cy], i) => { const [nx, ny] = corners[(i + 1) % 4], a = P(cx, cy, h), b = P(nx, ny, h); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); });
+  for (const u of [0, 0.5, 1]) { const a = P(x + w * u, y, h), m = P(x + w * u, y + d / 2, h + rh), b = P(x + w * u, y + d, h); ctx.moveTo(a[0], a[1]); ctx.lineTo(m[0], m[1]); ctx.lineTo(b[0], b[1]); }
+  { const a = P(x, y + d / 2, h + rh), b = P(x + w, y + d / 2, h + rh); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); }
+  ctx.stroke(); ctx.restore();
+  scaffold(o, h + 2);
+  // a pallet of bricks
+  box(x + w + 0.08, y + d - 0.45, 0.4, 0.4, 3, brick, shade(brick, 0.12), shade(brick, -0.05));
+  crane(x - 0.2, y - 0.25, t);
+}
+/** Scaffolding along the front of a building: poles and two planks. */
+function scaffold(o: Obj, top: number) {
+  const { x, y, w, d } = o, yy = y + d + 0.18;
+  ctx.save(); ctx.strokeStyle = S.o!.dark ? "#8a93a8" : "#7d8597"; ctx.lineWidth = line;
+  ctx.beginPath();
+  for (const u of [0.05, w / 2, w - 0.05]) { const a = P(x + u, yy, 0), b = P(x + u, yy, top); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); }
+  for (const z of [top * 0.45, top * 0.9]) { const a = P(x, yy, z), b = P(x + w, yy, z); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); }
+  ctx.stroke(); ctx.restore();
+}
 function drawHouse(o: Obj, t: number) {
   const p = S.pal, hv = o.h!, r = rng(o.s), night = S.o!.dark;
   const { x, y, w, d } = o;
+  if (o.building && hv.storeys <= 1) { drawSite(o, t); if (o.mine) mineMark(o, 30, t); return hit([P(x, y, 0), P(x + w, y + d, 0), P(x, y + d, 0), P(x + w, y, 0), P(x, y, 58)], o.tg); }
   const h = 6 + hv.storeys * 8, roofC = toHex(p.roofs[Math.floor(r() * 5)]), shape = Math.floor(r() * 3), chim = r() < 0.6;
-  const agent = hv.agent;
-  const wallL = agent ? shade(p.wall, 0.04) : p.wall, wallR = p.wallR;
+  const wallL = p.wall, wallR = p.wallR;
   if (o.mine) { ctx.save(); ctx.strokeStyle = acc(); ctx.lineWidth = line * 1.6; }
   box(x, y, w, d, h, wallL, wallR);
   // windows: lit at night when the house was edited this week
@@ -263,17 +358,7 @@ function drawHouse(o: Obj, t: number) {
   if (o.face === "x") onFace("x", x, y, w, d, d / 2 - 0.13, d / 2 + 0.13, 0, 6.5, shade(roofC, 0.25));
   if (lit) { const [cx, cy] = P(x + w / 2, y + d, h / 2); const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, 26); g.addColorStop(0, "rgba(255,210,130,.18)"); g.addColorStop(1, "rgba(255,210,130,0)"); ctx.fillStyle = g; ctx.fillRect(cx - 26, cy - 26, 52, 52); }
   let top = h;
-  if (agent) {
-    // a workshop: flat roof, a glass panel, an antenna that blinks
-    poly(flat(x, y, w, d, h), shade(p.wall, 0.08));
-    poly(flat(x + w * 0.2, y + d * 0.2, w * 0.45, d * 0.5, h + 0.5), night ? "#3d5a7a" : "#cfe6f4");
-    const [ax, ay] = P(x + w * 0.8, y + d * 0.3, h);
-    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(ax, ay - 10); ctx.stroke();
-    const on = S.still || Math.sin(t * 2.4 + o.s) > 0;
-    ctx.fillStyle = on ? `rgb(${skyColours("agents")[0].map((v) => v | 0).join(",")})` : p.line;
-    ctx.beginPath(); ctx.arc(ax, ay - 11, 1.8, 0, 6.283); ctx.fill();
-    top = h + 12;
-  } else {
+  {
     const rh = 6 + Math.min(w, d) * 5, dark2 = shade(roofC, 0.12);
     if (shape === 0) { // gable, ridge along x
       poly([P(x, y, h), P(x + w, y, h), P(x + w, y + d / 2, h + rh), P(x, y + d / 2, h + rh)], dark2);
@@ -300,15 +385,24 @@ function drawHouse(o: Obj, t: number) {
       }
     }
   }
-  if (o.mine) {
-    ctx.restore();
-    // a pennant above your house
-    const [px, py] = P(x + w / 2, y + d / 2, top + 4), bob = S.still ? 0 : Math.sin(t * 2) * 1.5;
-    ctx.beginPath(); ctx.moveTo(px, py + 6); ctx.lineTo(px, py - 10 + bob); ctx.stroke();
-    poly([[px, py - 10 + bob], [px + 9, py - 7 + bob], [px, py - 4 + bob]], acc());
-    label("You", px, py - 16 + bob, acc());
+  if (o.mine) ctx.restore();
+  // a new notebook: another storey going up
+  if (o.building) { scaffold(o, h + 4); crane(x - 0.2, y - 0.25, t); top = Math.max(top, 58); }
+  // running low on cycles: a red lamp by the door blinks
+  if (hv.low) {
+    const on = S.still || Math.sin(t * 3 + o.s) > -0.2, [lx, ly] = o.face === "x" ? P(x + w, y + d / 2 + 0.3, 8) : P(x + w / 2 + 0.3, y + d, 8);
+    if (on) { const g = ctx.createRadialGradient(lx, ly, 0, lx, ly, 9); g.addColorStop(0, "rgba(240,80,70,.55)"); g.addColorStop(1, "rgba(240,80,70,0)"); ctx.fillStyle = g; ctx.fillRect(lx - 9, ly - 9, 18, 18); }
+    ctx.fillStyle = on ? "#f0504a" : "#8a3a36"; ctx.beginPath(); ctx.arc(lx, ly, 1.7, 0, 6.283); ctx.fill(); ctx.stroke();
   }
+  if (o.mine) mineMark(o, top, t);
   hit([P(x, y, 0), P(x + w, y, 0), P(x + w, y + d, 0), P(x, y + d, 0), P(x + w / 2, y + d / 2, top)], o.tg);
+}
+/** A pennant and "You" above your house. */
+function mineMark(o: Obj, top: number, t: number) {
+  const [px, py] = P(o.x + o.w / 2, o.y + o.d / 2, top + 4), bob = S.still ? 0 : Math.sin(t * 2) * 1.5;
+  ctx.beginPath(); ctx.moveTo(px, py + 6); ctx.lineTo(px, py - 10 + bob); ctx.stroke();
+  poly([[px, py - 10 + bob], [px + 9, py - 7 + bob], [px, py - 4 + bob]], acc());
+  label("You", px, py - 16 + bob, acc());
 }
 function label(text: string, x: number, y: number, color: string) {
   ctx.font = "600 10px Inter, system-ui, sans-serif";
@@ -318,22 +412,45 @@ function label(text: string, x: number, y: number, color: string) {
   ctx.beginPath(); ctx.roundRect(x - tw / 2 - 5, y - 9, tw + 10, 14, 7); ctx.fill(); ctx.strokeStyle = color; ctx.stroke();
   ctx.fillStyle = color; ctx.textAlign = "center"; ctx.fillText(text, x, y + 1.5); ctx.restore();
 }
+/** A tree: a shadow, a trunk, and a canopy lit from the upper left (a lighter cap, a darker belly). */
 function drawTree(o: Obj) {
-  const p = S.pal, [bx, by] = P(o.x + o.w / 2, o.y + o.d / 2), r = rng(o.s), sc = 0.8 + r() * 0.45;
-  ctx.fillStyle = "rgba(0,0,0,.06)"; ctx.beginPath(); ctx.ellipse(bx, by, 6 * sc, 3 * sc, 0, 0, 6.283); ctx.fill();
+  const p = S.pal, [bx, by] = P(o.x + o.w / 2, o.y + o.d / 2), r = rng(o.s), sc = 0.8 + r() * 0.45, winter = S.sea.name === "winter";
+  const leaf = p.leaf[Math.floor(r() * p.leaf.length)], dark = shade(toHex(leaf), 0.14), light = shade(toHex(leaf), -0.12);
+  ctx.fillStyle = "rgba(0,0,0,.07)"; ctx.beginPath(); ctx.ellipse(bx + 2, by, 7 * sc, 3.2 * sc, 0, 0, 6.283); ctx.fill();
+  const trunk = (hgt: number) => { ctx.save(); ctx.strokeStyle = p.trunk; ctx.lineWidth = line * 1.6; ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx, by - hgt); ctx.stroke(); ctx.restore(); };
+  /** An ellipse canopy with its shading, outlined once. */
+  const canopy = (cx: number, cy: number, rx: number, ry: number) => {
+    ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, 6.283); ctx.fillStyle = leaf; ctx.fill();
+    ctx.save(); ctx.clip();
+    ctx.fillStyle = dark; ctx.beginPath(); ctx.ellipse(cx + rx * 0.45, cy + ry * 0.55, rx * 0.95, ry * 0.75, 0, 0, 6.283); ctx.fill();
+    ctx.fillStyle = light; ctx.beginPath(); ctx.ellipse(cx - rx * 0.35, cy - ry * 0.45, rx * 0.45, ry * 0.35, 0, 0, 6.283); ctx.fill();
+    ctx.restore();
+    ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, 6.283); ctx.stroke();
+  };
   if (o.k === "pine") {
-    const hgt = 22 * sc, wd = 7 * sc;
-    ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx, by - 4); ctx.stroke();
-    poly([[bx - wd, by - 4], [bx + wd, by - 4], [bx, by - hgt * 0.62]], p.pine);
-    poly([[bx - wd * 0.78, by - hgt * 0.42], [bx + wd * 0.78, by - hgt * 0.42], [bx, by - hgt]], p.pine);
+    // three tiers, the right half of each in shade, snow on the tips in winter
+    const hgt = 24 * sc, wd = 7.5 * sc, pine = toHex(p.pine), pd = shade(pine, 0.16);
+    trunk(4);
+    for (let i = 0; i < 3; i++) {
+      const base = by - 4 - i * hgt * 0.22, apex = base - hgt * (0.5 - i * 0.04), half = wd * (1 - i * 0.24);
+      poly([[bx - half, base], [bx, base + 1.5], [bx, apex]], pine, false);
+      poly([[bx, base + 1.5], [bx + half, base], [bx, apex]], pd, false);
+      poly([[bx - half, base], [bx, base + 1.5], [bx + half, base], [bx, apex]], undefined);
+      if (winter) poly([[bx - half * 0.35, apex + (base - apex) * 0.35], [bx + half * 0.35, apex + (base - apex) * 0.35], [bx, apex]], S.o!.dark ? "#cfd8e6" : "#ffffff");
+    }
+  } else if (o.k === "poplar") {
+    trunk(5); canopy(bx, by - 5 - 11 * sc, 4.2 * sc, 11 * sc);
+  } else if (o.k === "bush") {
+    canopy(bx - 3 * sc, by - 3 * sc, 4 * sc, 3.2 * sc); canopy(bx + 2.5 * sc, by - 3.5 * sc, 4.4 * sc, 3.6 * sc);
   } else {
-    const c = p.leaf[Math.floor(r() * p.leaf.length)], rad = 6.5 * sc;
-    ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx, by - 6 * sc); ctx.stroke();
-    ctx.beginPath(); ctx.ellipse(bx, by - 6 * sc - rad, rad * 0.95, rad * 1.08, 0, 0, 6.283); ctx.fillStyle = c; ctx.fill(); ctx.stroke();
-    if (S.sea.name === "spring" && r() < 0.6) { ctx.fillStyle = "#fff4f7"; for (let i = 0; i < 3; i++) { ctx.beginPath(); ctx.arc(bx + (r() - 0.5) * rad, by - 6 * sc - rad + (r() - 0.5) * rad, 1, 0, 6.283); ctx.fill(); } }
+    const rad = 6.5 * sc;
+    trunk(6 * sc); canopy(bx, by - 6 * sc - rad, rad * 1.02, rad * 1.1);
+    if (S.sea.name === "spring" && r() < 0.6) { ctx.fillStyle = "#fff4f7"; for (let i = 0; i < 4; i++) { ctx.beginPath(); ctx.arc(bx + (r() - 0.5) * rad, by - 6 * sc - rad + (r() - 0.5) * rad, 1, 0, 6.283); ctx.fill(); } }
+    if (winter && r() < 0.5) { ctx.fillStyle = S.o!.dark ? "rgba(210,220,235,.8)" : "#ffffff"; ctx.beginPath(); ctx.ellipse(bx - rad * 0.2, by - 6 * sc - rad * 1.75, rad * 0.55, rad * 0.22, 0, 0, 6.283); ctx.fill(); }
   }
 }
-function drawPerson(x: number, y: number, c: string, t: number, walking: boolean) {
+function drawPerson(x: number, y: number, c: string, t: number, walking: boolean, sc = 1, hop = 0) {
+  if (sc !== 1 || hop) { const [px, py] = P(x, y); ctx.save(); ctx.translate(px, py - hop); ctx.scale(sc, sc); ctx.translate(-px, -py); drawPerson(x, y, c, t, walking); ctx.restore(); return; }
   const [px, py] = P(x, y), step = walking && !S.still ? Math.sin(t * 9 + x * 3) * 1.2 : 0;
   ctx.fillStyle = "rgba(0,0,0,.1)"; ctx.beginPath(); ctx.ellipse(px, py, 2.6, 1.3, 0, 0, 6.283); ctx.fill();
   ctx.save(); ctx.lineWidth = line;
@@ -347,7 +464,7 @@ function drawObj(o: Obj, t: number) {
   const p = S.pal, night = S.o!.dark, data = S.data!;
   switch (o.k) {
     case "house": return drawHouse(o, t);
-    case "tree": case "pine": return drawTree(o);
+    case "tree": case "pine": case "poplar": case "bush": return drawTree(o);
     case "rock": { const [cx, cy] = P(o.x + 0.25, o.y + 0.2); poly([[cx - 6, cy], [cx - 4, cy - 5], [cx + 2, cy - 7], [cx + 6, cy - 2], [cx + 5, cy + 1]], night ? "#566075" : "#cfd3da"); return; }
     case "garden": {
       poly(flat(o.x, o.y, o.w, o.d), night ? "#3a3a34" : "#e7dcc8");
@@ -432,27 +549,122 @@ function drawObj(o: Obj, t: number) {
       return hit([P(x, y, 0), P(x + w, y + d + 0.5, 0), P(x, y + d + 0.5, 0), P(x + w, y, 0), P(x, y + d / 2, h + 9)], o.tg);
     }
     case "crate": return box(o.x, o.y, o.w, o.d, 5, "#d9b98e", "#c4a275", "#e6c9a0");
-    case "observatory": {
-      const { x, y, w, d } = o, h = 18, cx = x + w / 2, cy = y + d / 2, [sx, sy] = P(cx, cy, h);
-      box(x, y, w, d, h, p.wall, p.wallR, shade(p.wall, 0.04));
-      for (const f of ["y", "x"] as const) for (let i = 0; i < 3; i++) onFace(f, x, y, w, d, 0.4 + i, 0.6 + i, 7, 13, night ? p.lit : p.win);
-      // the dome glows while work is under review
-      const reviewing = data.underReview > 0, glow = reviewing ? 0.5 + (S.still ? 0.3 : 0.3 * Math.sin(t * 1.5)) : 0;
-      if (glow) { const g = ctx.createRadialGradient(sx, sy - 10, 0, sx, sy - 10, 42); g.addColorStop(0, rgba(S.accent, glow * 0.45)); g.addColorStop(1, rgba(S.accent, 0)); ctx.fillStyle = g; ctx.fillRect(sx - 42, sy - 52, 84, 84); }
-      ctx.beginPath(); ctx.ellipse(sx, sy, 30, 15, 0, Math.PI, 0); ctx.bezierCurveTo(sx + 30, sy - 32, sx - 30, sy - 32, sx - 30, sy); ctx.closePath();
-      ctx.fillStyle = night ? "#5c6680" : "#e9edf3"; ctx.fill(); ctx.stroke();
-      ctx.save(); ctx.translate(sx, sy - 18); ctx.rotate(-0.5); ctx.fillStyle = night ? "#20263a" : "#56607a"; ctx.fillRect(-3, -9, 6, 12); ctx.restore();
-      return hit([P(x, y, 0), P(x + w, y + d, 0), P(x, y + d, 0), P(x + w, y, 0), [sx, sy - 32]], o.tg);
+    case "factory": {
+      // the notebook works: a sawtooth roof with its glazing toward us, two stacks that smoke when notebooks are made
+      const { x, y, w, d } = o, h = 16, brick = night ? "#6e5a52" : "#efdccb", glass = night ? p.lit : "#cfe3f1";
+      box(x, y, w, d, h, brick, shade(toHex(brick), 0.1));
+      for (let i = 0; i < 5; i++) onFace("y", x, y, w, d, 0.25 + i * 0.85, 0.65 + i * 0.85, 6, 12, night ? p.lit : p.win);
+      onFace("y", x, y, w, d, w - 1.3, w - 0.4, 0, 9, shade(toHex(brick), 0.3));
+      for (let i = 0; i < 3; i++) {
+        const u0 = x + (w * i) / 3, u1 = x + (w * (i + 1)) / 3;
+        poly([P(u0, y, h), P(u1, y, h + 9), P(u1, y + d, h + 9), P(u0, y + d, h)], night ? "#4a4e5e" : "#c9ced8");
+        poly([P(u0, y + d, h), P(u1, y + d, h), P(u1, y + d, h + 9)], brick);
+        poly([P(u1, y, h), P(u1, y + d, h), P(u1, y + d, h + 9), P(u1, y, h + 9)], glass);
+      }
+      const stacks: [number, number][] = [[x + 0.35, y + 0.3], [x + 1.2, y + 0.3]];
+      for (const [sx, sy] of stacks) { box(sx, sy, 0.42, 0.42, 46, "#f2f2f0", "#dcdcd8", "#c9c9c4"); box(sx, sy, 0.42, 0.42, 5, "#e07a6a", "#c96456", undefined, 38); }
+      if (!S.still) {
+        const busy = data.spawned24h > 0, puffs = busy ? 6 : 2;
+        for (const [sx, sy] of stacks) {
+          const [cx, cy] = P(sx + 0.21, sy + 0.21, 48);
+          for (let i = 0; i < puffs; i++) {
+            const u = (((t * (busy ? 0.22 : 0.1) + i / puffs + sx) % 1) + 1) % 1;
+            ctx.fillStyle = night ? `rgba(190,198,215,${0.42 * (1 - u)})` : `rgba(160,166,178,${0.4 * (1 - u)})`;
+            ctx.beginPath(); ctx.arc(cx + u * 26 + Math.sin(u * 5 + i) * 3, cy - u * 34, 2.5 + u * (busy ? 7 : 4), 0, 6.283); ctx.fill();
+          }
+        }
+      }
+      return hit([P(x, y, 0), P(x + w, y + d, 0), P(x, y + d, 0), P(x + w, y, 0), P(x + 0.35, y + 0.3, 50)], o.tg);
     }
-    case "obelisk": {
-      // a plinth, a slim shaft, a pointed cap with a light in the accent
-      const big = o.s === 2, h = big ? 30 : 20, { x, y, w, d } = o, c = night ? "#6e7896" : "#e6e9ef", m = big ? 0.1 : 0.13;
-      box(x - 0.04, y - 0.04, w + 0.08, d + 0.08, 3, shade(c, 0.04), shade(c, 0.12), c);
-      box(x + m, y + m, w - 2 * m, d - 2 * m, h - 4, c, shade(c, 0.1), undefined, 3);
-      const ap = P(x + w / 2, y + d / 2, h + 3);
-      poly([P(x + m, y + d - m, h - 1), P(x + w - m, y + d - m, h - 1), ap], c); poly([P(x + w - m, y + m, h - 1), P(x + w - m, y + d - m, h - 1), ap], shade(c, 0.1));
-      ctx.fillStyle = rgba(S.accent, 0.9); ctx.beginPath(); ctx.arc(ap[0], ap[1] - 2, big ? 2.4 : 1.7, 0, 6.283); ctx.fill();
-      return hit([P(x, y, 0), P(x + w, y + d, 0), [ap[0] - 6, ap[1] - 4], [ap[0] + 6, ap[1]]], o.tg);
+    case "school": {
+      // a schoolhouse: a hip roof, a bell tower, a clock; this week's newcomers play in the yard
+      const { x, y, w, d } = o, h = 15, rh = 9, cream = night ? "#585e6a" : "#fbf2dc", roof = night ? "#8a5a4e" : "#e39a7a";
+      box(x, y, w, d, h, cream, shade(toHex(cream), 0.08));
+      for (let i = 0; i < 4; i++) if (i !== 2) onFace("y", x, y, w, d, 0.3 + i * 0.9, 0.75 + i * 0.9, 5, 11, night ? p.lit : p.win);
+      onFace("y", x, y, w, d, 2.1, 2.5, 0, 8, shade(toHex(roof), 0.25));
+      for (let i = 0; i < 2; i++) onFace("x", x, y, w, d, 0.4 + i * 0.8, 0.75 + i * 0.8, 5, 11, night ? p.lit : p.win);
+      const r0 = P(x + 0.7, y + d / 2, h + rh), r1 = P(x + w - 0.7, y + d / 2, h + rh);
+      poly([P(x, y, h), P(x + w, y, h), r1, r0], shade(toHex(roof), 0.12)); poly([P(x, y, h), P(x, y + d, h), r0], shade(toHex(roof), 0.12));
+      poly([P(x + w, y, h), P(x + w, y + d, h), r1], shade(toHex(roof), 0.05)); poly([P(x, y + d, h), P(x + w, y + d, h), r1, r0], roof);
+      const bx = x + w / 2 - 0.3, by = y + d / 2 - 0.3;
+      box(bx, by, 0.6, 0.6, 9, cream, shade(toHex(cream), 0.08), undefined, h + rh - 3);
+      const ap = P(bx + 0.3, by + 0.3, h + rh + 13);
+      poly([P(bx, by + 0.6, h + rh + 6), P(bx + 0.6, by + 0.6, h + rh + 6), ap], roof); poly([P(bx + 0.6, by, h + rh + 6), P(bx + 0.6, by + 0.6, h + rh + 6), ap], shade(toHex(roof), 0.08));
+      const [kx, ky] = P(bx + 0.3, by + 0.6, h + rh + 2.5); ctx.fillStyle = "#e0a92e"; ctx.beginPath(); ctx.arc(kx, ky, 1.8, 0, 6.283); ctx.fill(); ctx.stroke();
+      const [cx, cy] = P(x + w / 2, y + d, h - 3.5); ctx.beginPath(); ctx.ellipse(cx, cy, 3.2, 2.6, 0, 0, 6.283); ctx.fillStyle = "#ffffff"; ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx, cy - 1.8); ctx.moveTo(cx, cy); ctx.lineTo(cx + 1.4, cy + 0.6); ctx.stroke();
+      return hit([P(x, y, 0), P(x + w, y + d, 0), P(x, y + d, 0), P(x + w, y, 0), ap], o.tg);
+    }
+    case "chapel": {
+      // the chapel: a nave, a rose window, a steeple whose bell swings while a fundraiser is open
+      const { x, y, w, d } = o, h = 13, rh = 10, stone = night ? "#5a6070" : "#f4f1ea", slate = night ? "#3c4252" : "#9aa3b5";
+      box(x, y, w, d, h, stone, shade(toHex(stone), 0.08));
+      for (let i = 0; i < 3; i++) onFace("x", x, y, w, d, 0.5 + i * 1.1, 0.8 + i * 1.1, 4, 10, night ? p.lit : "#c9d5ea");
+      poly([P(x, y, h), P(x, y + d, h), P(x + w / 2, y + d, h + rh), P(x + w / 2, y, h + rh)], shade(toHex(slate), 0.1));
+      poly([P(x + w, y, h), P(x + w, y + d, h), P(x + w / 2, y + d, h + rh), P(x + w / 2, y, h + rh)], slate);
+      poly([P(x, y + d, h), P(x + w, y + d, h), P(x + w / 2, y + d, h + rh)], stone);
+      // the rose window: stained glass in the channels' colours, glowing at night
+      const [rx, ry] = P(x + w / 2, y + d, h + 3);
+      const cols = ["general", "help", "study", "crypto", "creators", "careers"].map((c) => skyColours(c)[0]);
+      cols.forEach((c, i) => { ctx.beginPath(); ctx.moveTo(rx, ry); ctx.ellipse(rx, ry, 4.4, 3.6, 0, (i / 6) * 6.283, ((i + 1) / 6) * 6.283); ctx.closePath(); ctx.fillStyle = rgba(c, night ? 0.95 : 0.75); ctx.fill(); });
+      ctx.beginPath(); ctx.ellipse(rx, ry, 4.4, 3.6, 0, 0, 6.283); ctx.stroke();
+      if (night) { const g = ctx.createRadialGradient(rx, ry, 0, rx, ry, 20); g.addColorStop(0, "rgba(255,220,160,.25)"); g.addColorStop(1, "rgba(255,220,160,0)"); ctx.fillStyle = g; ctx.fillRect(rx - 20, ry - 20, 40, 40); }
+      // the steeple in front
+      const tx = x + w / 2 - 0.45, ty = y + d, tw = 0.9, th = 24;
+      box(tx, ty, tw, tw, th, stone, shade(toHex(stone), 0.08));
+      onFace("y", tx, ty, tw, tw, 0.3, 0.6, 0, 6, shade(toHex(slate), 0.3));
+      onFace("y", tx, ty, tw, tw, 0.22, 0.68, 15, 21, night ? "#20263a" : "#56607a");
+      const swing = !S.still && data.fundraisersOpen > 0 && !data.off.includes("fundraisers") ? Math.sin(t * 3) * 1.6 : 0;
+      const [bx2, by2] = P(tx + tw / 2, ty + tw, 17.5); ctx.fillStyle = "#e0a92e"; ctx.beginPath(); ctx.arc(bx2 + swing, by2, 2, 0, 6.283); ctx.fill(); ctx.stroke();
+      const sp = P(tx + tw / 2, ty + tw / 2, th + 20);
+      poly([P(tx, ty + tw, th), P(tx + tw, ty + tw, th), sp], slate); poly([P(tx + tw, ty, th), P(tx + tw, ty + tw, th), sp], shade(toHex(slate), 0.1));
+      ctx.beginPath(); ctx.moveTo(sp[0], sp[1]); ctx.lineTo(sp[0], sp[1] - 7); ctx.moveTo(sp[0] - 2.5, sp[1] - 4.5); ctx.lineTo(sp[0] + 2.5, sp[1] - 4.5); ctx.stroke();
+      return hit([P(x, y, 0), P(x + w, y + d + 1, 0), P(x, y + d + 1, 0), P(x + w, y, 0), [sp[0], sp[1] - 7]], o.tg);
+    }
+    case "tower": {
+      // the water tower: the cycles every notebook holds, its level the days they last at today's burn
+      const { x, y, w, d } = o, cx = x + w / 2, cy = y + d / 2, [sx, sy] = P(cx, cy), yb = sy - 26, yt = sy - 46, rx = 17, ry = 8;
+      const days = data.burnPerDay > 0 ? data.cycles / data.burnPerDay : data.cycles > 0 ? 365 : 0, level = Math.max(0.04, Math.min(1, days / 365));
+      ctx.save(); ctx.strokeStyle = p.line;
+      ctx.beginPath();
+      for (const [u, v] of [[0.15, 0.15], [w - 0.15, 0.15], [w - 0.15, d - 0.15], [0.15, d - 0.15]]) { const a = P(x + u, y + v), b = P(cx + (u - w / 2) * 0.6, cy + (v - d / 2) * 0.6, 26); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); }
+      { const a = P(x + 0.15, y + d - 0.15, 4), b = P(x + w - 0.15, y + d - 0.15, 18), c2 = P(x + w - 0.15, y + d - 0.15, 4), e = P(x + 0.15, y + d - 0.15, 18); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.moveTo(c2[0], c2[1]); ctx.lineTo(e[0], e[1]); }
+      ctx.stroke(); ctx.restore();
+      const body = () => { ctx.beginPath(); ctx.moveTo(sx - rx, yt); ctx.lineTo(sx - rx, yb); ctx.ellipse(sx, yb, rx, ry, 0, Math.PI, 0, true); ctx.lineTo(sx + rx, yt); ctx.closePath(); };
+      body(); ctx.fillStyle = p.wall; ctx.fill();
+      ctx.save(); body(); ctx.clip();
+      const wl = yb + ry - level * (yb + ry - yt);
+      ctx.fillStyle = rgba(hex(night ? "#4a7aa8" : "#8cc3e3"), 0.85); ctx.fillRect(sx - rx, wl, rx * 2, yb + ry - wl);
+      ctx.fillStyle = shade(p.wallR.startsWith("#") ? p.wallR : "#e9ebee", 0.05); ctx.fillRect(sx + rx * 0.35, yt, rx * 0.65, yb + ry - yt);
+      ctx.restore();
+      body(); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(sx - rx, wl); ctx.lineTo(sx + rx, wl); ctx.strokeStyle = night ? "#9cc8f0" : "#4f8fbf"; ctx.stroke(); ctx.strokeStyle = p.line;
+      ctx.beginPath(); ctx.ellipse(sx, yt, rx, ry, 0, 0, 6.283); ctx.fillStyle = shade(p.wall.startsWith("#") ? p.wall : "#fdfdfc", 0.06); ctx.fill(); ctx.stroke();
+      poly([[sx - rx - 1, yt], [sx, yt - 13], [sx + rx + 1, yt]], p.roofs[2]);
+      ctx.beginPath(); ctx.ellipse(sx, yt, rx + 1, ry + 0.5, 0, 0, Math.PI); ctx.stroke();
+      if (night) { const on = S.still || Math.sin(t * 2) > 0; ctx.fillStyle = on ? "#f0504a" : "#5a2a28"; ctx.beginPath(); ctx.arc(sx, yt - 14, 1.6, 0, 6.283); ctx.fill(); }
+      // what the notebooks burn a day drips out of the pipe, faster when they burn more
+      const [px, py] = P(cx, cy, 3);
+      ctx.beginPath(); ctx.moveTo(sx, yb + ry); ctx.lineTo(px, py - 2); ctx.stroke();
+      if (!S.still && data.burnPerDay > 0) {
+        const rate = Math.min(3, 0.6 + Math.log10(1 + data.burnPerDay / 1e9) * 0.6);
+        for (let i = 0; i < 3; i++) { const u = (t * rate + i / 3) % 1; ctx.fillStyle = night ? "rgba(140,190,235,.8)" : "rgba(80,140,190,.75)"; ctx.beginPath(); ctx.ellipse(px + 2, py - 2 + u * 7, 1.1, 1.6, 0, 0, 6.283); ctx.fill(); }
+      }
+      return hit([[sx - rx - 2, yt - 14], [sx + rx + 2, sy + 4]], o.tg);
+    }
+    case "bridge": {
+      const { x, y } = o, wood = night ? "#6a5a4a" : "#d2b48c";
+      box(x, y + 0.08, 1, 0.84, 2, wood, shade(toHex(wood), 0.12), shade(toHex(wood), -0.06), 1);
+      ctx.beginPath();
+      for (const v of [0.12, 0.88]) { const a = P(x, y + v, 7), b = P(x + 1, y + v, 7); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); for (const u of [0, 0.5, 1]) { const c2 = P(x + u, y + v, 3), e = P(x + u, y + v, 7); ctx.moveTo(c2[0], c2[1]); ctx.lineTo(e[0], e[1]); } }
+      ctx.stroke(); return;
+    }
+    case "reeds": {
+      const [bx, by] = P(o.x + 0.2, o.y + 0.2), r = rng(o.s);
+      ctx.save(); ctx.strokeStyle = night ? "#6f8f6a" : "#8fb07f"; ctx.lineWidth = line;
+      ctx.beginPath(); for (let i = 0; i < 5; i++) { const dx = (r() - 0.5) * 8, hh = 6 + r() * 6; ctx.moveTo(bx + dx, by); ctx.lineTo(bx + dx + (r() - 0.5) * 2, by - hh); } ctx.stroke(); ctx.restore();
+      ctx.fillStyle = night ? "#6a5040" : "#a87a52"; for (let i = 0; i < 2; i++) { ctx.beginPath(); ctx.ellipse(bx + (r() - 0.5) * 6, by - 9 - r() * 3, 1, 2.2, 0, 0, 6.283); ctx.fill(); }
+      return o.tg ? hit([[bx - 5, by - 12], [bx + 5, by]], o.tg) : undefined;
     }
     case "bench": { box(o.x, o.y, o.w, o.d, 3, night ? "#5a5048" : "#c9a982", night ? "#4a4038" : "#b39470", night ? "#6a5e52" : "#d9bd98"); if (o.tg) hit(flat(o.x - 1, o.y - 1, 3, 2), o.tg); return; }
     case "lantern": {
@@ -465,28 +677,74 @@ function drawObj(o: Obj, t: number) {
   }
 }
 
-/** The ground: a slab with the town's roads, paving and ponds, and a faint tile grid. */
-function drawGround() {
-  const pl = S.plan!, p = S.pal, { lo, hi, tlo, thi } = pl, n = hi + 1;
-  // the slab's two front edges
-  poly([P(lo, n), P(n, n), P(n, n, -7), P(lo, n, -7)], p.edge);
-  poly([P(n, lo), P(n, n), P(n, n, -7), P(n, lo, -7)], shade(toHex(p.edge.startsWith("#") ? p.edge : "#dcdfe4"), 0.06));
-  poly([P(lo, lo), P(n, lo), P(n, n), P(lo, n)], p.ground);
-  ctx.save(); ctx.lineWidth = line * 0.7; ctx.strokeStyle = p.grid;
+/** The island's ground as paths (built once per plan): land, roads, water, the shore, the cliff
+ *  faces we can see, and where the river spills over the edge. */
+type Ground = { plan: Plan; land: Path2D; road: Path2D; water: Path2D; shore: Path2D; coast: Path2D; sideL: Path2D; sideR: Path2D; falls: [number, number, "x" | "y"][]; ripples: [number, number, number][] };
+let groundCache: Ground | undefined;
+const CLIFF = 8;
+function ground(pl: Plan): Ground {
+  if (groundCache?.plan === pl) return groundCache;
+  const g: Ground = { plan: pl, land: new Path2D(), road: new Path2D(), water: new Path2D(), shore: new Path2D(), coast: new Path2D(), sideL: new Path2D(), sideR: new Path2D(), falls: [], ripples: [] };
+  const tile = (path: Path2D, x: number, y: number) => { const q = flat(x, y, 1, 1); path.moveTo(q[0][0], q[0][1]); for (let i = 1; i < 4; i++) path.lineTo(q[i][0], q[i][1]); path.closePath(); };
+  const edge = (path: Path2D, a: [number, number], b: [number, number]) => { path.moveTo(a[0], a[1]); path.lineTo(b[0], b[1]); };
+  for (let y = pl.lo; y <= pl.hi; y++) for (let x = pl.lo; x <= pl.hi; x++) {
+    const v = cellAt(pl, x, y);
+    if (v === VOID) continue;
+    tile(g.land, x, y);
+    const wet = v === WATER || v === BRIDGE;
+    if (v === ROAD) tile(g.road, x, y);
+    if (wet) { tile(g.water, x, y); if (h01(`rp${x},${y}`) < 0.12) g.ripples.push([x + 0.5, y + 0.5, h01(`rq${x},${y}`) * 6]); }
+    const n = [[0, -1], [1, 0], [0, 1], [-1, 0]].map(([dx, dy]) => cellAt(pl, x + dx, y + dy));
+    const corners: [number, number][] = [P(x, y), P(x + 1, y), P(x + 1, y + 1), P(x, y + 1)];
+    n.forEach((nv, i) => {
+      const a = corners[i], b = corners[(i + 1) % 4];
+      if (nv === VOID) edge(g.coast, a, b);
+      else if (wet !== (nv === WATER || nv === BRIDGE)) edge(g.shore, a, b);
+    });
+    // the cliff faces toward us: below the +y and +x edges where the island ends
+    if (n[2] === VOID) { const q: [number, number][] = [P(x, y + 1), P(x + 1, y + 1), P(x + 1, y + 1, -CLIFF), P(x, y + 1, -CLIFF)]; if (wet) g.falls.push([x, y, "y"]); else { g.sideL.moveTo(q[0][0], q[0][1]); q.slice(1).forEach((p) => g.sideL.lineTo(p[0], p[1])); g.sideL.closePath(); } }
+    if (n[1] === VOID) { const q: [number, number][] = [P(x + 1, y), P(x + 1, y + 1), P(x + 1, y + 1, -CLIFF), P(x + 1, y, -CLIFF)]; if (wet) g.falls.push([x, y, "x"]); else { g.sideR.moveTo(q[0][0], q[0][1]); q.slice(1).forEach((p) => g.sideR.lineTo(p[0], p[1])); g.sideR.closePath(); } }
+  }
+  return (groundCache = g);
+}
+/** The ground: the island's cliffs, land with a faint grid, the streets, paving, the lake and river. */
+function drawGround(t: number) {
+  const pl = S.plan!, p = S.pal, g = ground(pl), night = S.o!.dark, frozen = S.sea.name === "winter";
+  const edgeC = p.edge.startsWith("#") ? p.edge : "#dcdfe4";
+  ctx.fillStyle = edgeC; ctx.fill(g.sideL); ctx.stroke(g.sideL);
+  ctx.fillStyle = shade(edgeC, 0.08); ctx.fill(g.sideR); ctx.stroke(g.sideR);
+  // where the river leaves the island: a waterfall
+  const wat = frozen ? (night ? "#4a5a6e" : "#e2edf3") : p.water;
+  for (const [x, y, f] of g.falls) {
+    const q: [number, number][] = f === "y" ? [P(x, y + 1), P(x + 1, y + 1), P(x + 1, y + 1, -CLIFF - 6), P(x, y + 1, -CLIFF - 6)] : [P(x + 1, y), P(x + 1, y + 1), P(x + 1, y + 1, -CLIFF - 6), P(x + 1, y, -CLIFF - 6)];
+    poly(q, wat);
+    if (!S.still && !frozen) { ctx.save(); ctx.strokeStyle = "rgba(255,255,255,.7)"; for (let i = 0; i < 3; i++) { const u = (t * 1.2 + i / 3) % 1, a = q[0], b = q[1], m = [(a[0] + b[0]) / 2 + (i - 1) * 4, (a[1] + b[1]) / 2]; ctx.beginPath(); ctx.moveTo(m[0], m[1] + u * (CLIFF + 2)); ctx.lineTo(m[0], m[1] + u * (CLIFF + 2) + 4); ctx.stroke(); } ctx.restore(); }
+  }
+  ctx.fillStyle = p.ground; ctx.fill(g.land);
+  ctx.save(); ctx.clip(g.land); ctx.lineWidth = line * 0.7; ctx.strokeStyle = p.grid;
   ctx.beginPath();
-  for (let i = lo; i <= n; i++) { let a = P(i, lo), b = P(i, n); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); a = P(lo, i); b = P(n, i); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); }
-  ctx.stroke();
-  ctx.restore();
-  ctx.save(); ctx.strokeStyle = shade(toHex(p.road.startsWith("#") ? p.road : "#e2e3e6"), 0.08); ctx.lineWidth = line * 0.7;
-  for (let v = tlo; v <= thi; v += 7) { poly(flat(v, tlo, 1, thi - tlo + 1), p.road); poly(flat(tlo, v, thi - tlo + 1, 1), p.road); }
-  ctx.restore();
+  for (let i = pl.lo; i <= pl.hi + 1; i++) { let a = P(i, pl.lo), b = P(i, pl.hi + 1); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); a = P(pl.lo, i); b = P(pl.hi + 1, i); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); }
+  ctx.stroke(); ctx.restore();
+  ctx.fillStyle = p.road; ctx.fill(g.road);
   for (const [x, y, w, d] of pl.paving) poly(flat(x, y, w, d), p.pave, false);
-  ctx.save(); ctx.strokeStyle = S.o!.dark ? "#4a5a70" : "#b9cfdb"; ctx.lineWidth = line * 0.8;
-  for (const [x, y, w, d] of pl.water) { const [cx, cy] = P(x + w / 2, y + d / 2); ctx.beginPath(); ctx.ellipse(cx, cy, (w + d) * 7.6, (w + d) * 3.8, 0, 0, 6.283); ctx.fillStyle = p.water; ctx.fill(); ctx.stroke(); }
+  ctx.fillStyle = wat; ctx.fill(g.water);
+  ctx.save(); ctx.strokeStyle = night ? "#4a5a70" : "#a9c6d6"; ctx.lineWidth = line; ctx.stroke(g.shore); ctx.restore();
+  // ripples on open water; cracks in the ice
+  ctx.save(); ctx.strokeStyle = frozen ? (night ? "rgba(200,215,235,.35)" : "rgba(255,255,255,.9)") : night ? "rgba(170,200,230,.35)" : "rgba(255,255,255,.75)"; ctx.lineWidth = line * 0.8;
+  for (const [x, y, ph] of g.ripples) {
+    const [sx, sy] = P(x, y);
+    if (frozen) { ctx.beginPath(); ctx.moveTo(sx - 5, sy - 1); ctx.lineTo(sx, sy + 1); ctx.lineTo(sx + 4, sy - 2); ctx.stroke(); continue; }
+    const u = S.still ? 0.5 : (t * 0.25 + ph) % 1;
+    ctx.globalAlpha = Math.sin(u * Math.PI); ctx.beginPath(); ctx.ellipse(sx, sy, 3 + u * 6, (3 + u * 6) / 2, 0, Math.PI * 1.1, Math.PI * 1.9); ctx.stroke();
+  }
+  ctx.restore();
+  ctx.save(); ctx.strokeStyle = night ? "#4a5a70" : "#b9cfdb"; ctx.lineWidth = line * 0.8;
+  for (const [x, y, w, d] of pl.water) { const [cx, cy] = P(x + w / 2, y + d / 2); ctx.beginPath(); ctx.ellipse(cx, cy, (w + d) * 7.6, (w + d) * 3.8, 0, 0, 6.283); ctx.fillStyle = wat; ctx.fill(); ctx.stroke(); }
   ctx.restore();
   // the trail loop through the grove
-  ctx.save(); ctx.strokeStyle = S.o!.dark ? "#3a4252" : "#e3dccb"; ctx.lineWidth = 5; ctx.lineJoin = "round";
+  ctx.save(); ctx.strokeStyle = night ? "#3a4252" : "#e3dccb"; ctx.lineWidth = 5; ctx.lineJoin = "round";
   ctx.beginPath(); pl.loop.forEach(([x, y], i) => { const [sx, sy] = P(x, y); i ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy); }); ctx.closePath(); ctx.stroke(); ctx.restore();
+  ctx.save(); ctx.strokeStyle = p.line; ctx.globalAlpha = 0.55; ctx.stroke(g.coast); ctx.restore();
 }
 
 // ---------------------------------------------------------------- life
@@ -519,7 +777,7 @@ function syncWalkers() {
       // stand a little in front of the stall, toward the fountain
       const home: [number, number] = [sx + (11 - sx) * 0.28 + (r - 0.5) * 0.5, sy + (11 - sy) * 0.28 + (Math.random() - 0.5) * 0.5];
       const fresh = S.still || !S.last;
-      S.walkers.push({ ch, me, path: [[7.5, pl.gateY], [7.5, 10.5], [8.6, 10.5], home], i: 0, u: 0, speed: 1.1 + Math.random() * 0.5, state: fresh ? "stay" : "in", home, wob: Math.random() * 6, c: Math.floor(Math.random() * 5) });
+      S.walkers.push({ ch, me, path: [pl.gate, [7.5, 10.5], [8.6, 10.5], home], i: 0, u: 0, speed: 1.1 + Math.random() * 0.5, state: fresh ? "stay" : "in", home, wob: Math.random() * 6, c: Math.floor(Math.random() * 5) });
       if (fresh) S.walkers[S.walkers.length - 1].i = 3;
     }
   }
@@ -563,11 +821,18 @@ function frame(now: number) {
   line = 1.25 / Math.max(0.7, cam.z);
   ctx.lineWidth = line; ctx.lineJoin = "round"; ctx.strokeStyle = S.pal.line;
   S.hits = [];
-  drawGround();
+  drawGround(t);
   // what's on screen, with a margin for tall things
   const vx0 = cam.x - w / 2 / cam.z - 60, vx1 = cam.x + w / 2 / cam.z + 60, vy0 = cam.y - h / 2 / cam.z - 20, vy1 = cam.y + h / 2 / cam.z + 80;
   const live: { k: number; draw: () => void }[] = [];
   for (const wk of S.walkers) { const [x, y] = walkerAt(wk); live.push({ k: x + y, draw: () => { drawPerson(x, y, wk.me ? acc() : S.pal.person[wk.c], t, wk.state !== "stay"); const [px, py] = P(x, y); hit([[px - 4, py - 12], [px + 4, py + 2]], (wk.tg ??= { kind: "walker", channel: wk.ch, me: wk.me })); } }); }
+  // this week's newcomers play in the schoolyard
+  const [yx, yy, yw, yd] = S.plan.yard;
+  for (let i = 0; i < Math.min(12, S.data!.newcomers7d); i++) {
+    const a = t * 0.4 + i * 1.7, x = yx + 0.3 + ((i * 0.37) % 1) * (yw - 0.6) + (S.still ? 0 : Math.sin(a) * 0.25), y = yy + 0.3 + ((i * 0.61) % 1) * (yd - 0.6) + (S.still ? 0 : Math.cos(a * 0.8) * 0.2);
+    const hop = S.still ? 0 : Math.max(0, Math.sin(t * 5 + i * 2)) * 3;
+    live.push({ k: x + y, draw: () => drawPerson(x, y, S.pal.person[(i + 2) % 5], t, false, 0.72, hop) });
+  }
   for (const hk of S.hikers) { const [x, y] = loopAt(hk.u); live.push({ k: x + y, draw: () => drawPerson(x, y, S.pal.person[hk.c], t, true) }); }
   live.sort((a, b) => a.k - b.k);
   let li = 0;
@@ -576,7 +841,8 @@ function frame(now: number) {
     while (li < live.length && live[li].k < k) live[li++].draw();
     const [sx, sy] = P(o.x + o.w / 2, o.y + o.d / 2);
     if (sx < vx0 || sx > vx1 || sy < vy0 || sy > vy1) continue;
-    drawObj(o, t);
+    // one drawing that fails must not blank the rest of the town
+    try { drawObj(o, t); } catch (e) { if (!S.warned) { S.warned = true; console.warn("town: could not draw", o.k, e); } }
   }
   while (li < live.length) live[li++].draw();
   // speech bubbles over the stalls, at the channel's pace (sped up), and a cloud when it rained lately
@@ -654,7 +920,7 @@ function start() {
 // ---------------------------------------------------------------- the camera and input
 
 const worldBox = () => { const pl = S.plan!; const l = P(pl.lo, pl.hi + 1)[0], r = P(pl.hi + 1, pl.lo)[0], top = P(pl.lo, pl.lo)[1], bot = P(pl.hi + 1, pl.hi + 1)[1]; return { l, r, top, bot }; };
-const clampZ = (z: number) => Math.max(0.35, Math.min(2.5, z));
+const clampZ = (z: number) => Math.max(0.22, Math.min(2.5, z));
 function home() {
   const b = worldBox(), pl = S.plan!;
   if (S.o!.mode === "preview") {
@@ -664,9 +930,9 @@ function home() {
     S.cam = { x: cx, y: cy, z: clampZ(Math.min(S.w / 640, S.h / 300)) };
     return;
   }
-  // the town without most of the forest
-  const span = (pl.thi - pl.tlo + 4) * TW;
-  S.fit = clampZ(Math.min(S.w / span, S.h / (span / 2)) * 1.35);
+  // the whole island
+  const span = (pl.hi - pl.lo + 1) * TW;
+  S.fit = clampZ(Math.min(S.w / span, (S.h - 120) / (span / 2)) * 1.25);
   S.cam = { x: (b.l + b.r) / 2, y: (b.top + b.bot) / 2, z: S.fit };
 }
 /** The camera from the toolbar: zoom, recentre, or fly to a lot. */
@@ -786,7 +1052,7 @@ export function attachTown(canvas: HTMLCanvasElement, o: TownOpts) {
   S.sea = season(new Date());
   S.pal = palette(o.dark, S.sea.name);
   S.accent = accentOf(o.accent);
-  const sig = JSON.stringify([o.data.houses, o.data.mine, o.data.off, o.data.channels.map((c) => c.name), o.data.listings, o.data.discoveries]);
+  const sig = JSON.stringify([o.data.houses, o.data.mine, o.data.off, o.data.channels.map((c) => c.name), o.data.listings, o.data.spawned7d, o.data.building]);
   if (sig !== S.sig || !S.plan) { S.plan = layoutTown(o.data); S.sig = sig; }
   S.data = o.data;
   syncWalkers();

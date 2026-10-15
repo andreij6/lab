@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { blockAt, layoutTown, project, season, unproject, type TownData, type TownHouse } from "./town.ts";
+import { blockAt, cellAt, layoutTown, project, season, unproject, BRIDGE, LAND, ROAD, VOID, WATER, type TownData, type TownHouse } from "./town.ts";
 
-const town = (houses: TownHouse[], more: Partial<TownData> = {}): TownData => ({ at: 1, houses, people: houses.length, homes: houses.length, quiet: 0, channels: [{ name: "general", online: 2, messages24h: 5 }], postTopics: [], postsLive: 0, posts24h: 0, listings: 3, discoveries: 2, underReview: 0, rains24h: 0, hikers: 0, off: [], ...more });
-const house = (lot: number, agent = false): TownHouse => ({ lot, storeys: 1, size: lot % 4, lit: lot % 3, agent });
+const town = (houses: TownHouse[], more: Partial<TownData> = {}): TownData => ({ at: 1, houses, people: houses.length, homes: houses.length, quiet: 0, channels: [{ name: "general", online: 2, messages24h: 5 }], postTopics: [], postsLive: 0, posts24h: 0, listings: 3, rains24h: 0, hikers: 0, off: [], building: [], notebooks: houses.length, spawned24h: 0, spawned7d: 0, newcomers7d: 0, cycles: 0, burnPerDay: 0, fundraisersOpen: 0, raisedE8s: 0, ...more });
+const house = (lot: number): TownHouse => ({ lot, storeys: 1, size: lot % 4, lit: lot % 3 });
 const spot = (d: TownData) => new Map(layoutTown(d).objs.filter((o) => o.k === "house").map((o) => [o.h!.lot, [o.x, o.y]]));
 
 test("town: the same data gives the same plan", () => {
@@ -45,19 +45,50 @@ test("town: houses don't overlap each other or the roads", () => {
   }
 });
 
-test("town: agents move into the quarter, the 17th stays at its own lot", () => {
-  const agents = Array.from({ length: 17 }, (_, i) => house(i * 9, true));
-  const hs = layoutTown(town(agents)).objs.filter((o) => o.k === "house");
-  const inQuarter = hs.filter((o) => (o.x > -7 && o.x < 0 && o.y > 0 && o.y < 7) || (o.x > 0 && o.x < 7 && o.y > -7 && o.y < 0));
-  assert.equal(inQuarter.length, 16);
-  assert.ok(!inQuarter.some((o) => o.h!.lot === 16 * 9));
+test("town: an island, not a square: a lake, a river over the edge, a bridge on the road out", () => {
+  const pl = layoutTown(town([house(1), house(300)]));
+  const cells = [...pl.cells];
+  const count = (v: number) => cells.filter((c) => c === v).length;
+  assert.ok(count(VOID) > 0, "the corners of the grid are sea");
+  assert.ok(count(WATER) > 30 && count(BRIDGE) >= 1);
+  // the shore is uneven: rows of the grid end at different places
+  const ends = new Set<number>();
+  for (let y = pl.lo; y <= pl.hi; y++) { let x = pl.hi; while (x > pl.lo && cellAt(pl, x, y) === VOID) x--; ends.add(x); }
+  assert.ok(ends.size > 4);
+  // the river reaches the front edge of the island
+  assert.ok(Array.from({ length: pl.n }, (_, i) => pl.lo + i).some((x) => cellAt(pl, x, pl.hi) === WATER || (cellAt(pl, x, pl.hi - 1) === WATER && cellAt(pl, x, pl.hi) === VOID)));
+  // no house or building stands on water or a street
+  for (const o of pl.objs) if (["house", "hall", "factory", "school", "chapel", "tower", "market", "gazebo"].includes(o.k)) {
+    for (let x = Math.floor(o.x); x < o.x + o.w; x++) for (let y = Math.floor(o.y); y < o.y + o.d; y++) assert.equal(cellAt(pl, x, y), LAND, `${o.k} at ${x},${y}`);
+  }
+  assert.equal(cellAt(pl, 7, 7), ROAD);
+  // and no holes: every empty cell touches the edge through other empty cells
+  const seen = new Set<string>(), todo: [number, number][] = [];
+  for (let i = pl.lo; i <= pl.hi; i++) for (const [x, y] of [[i, pl.lo], [i, pl.hi], [pl.lo, i], [pl.hi, i]]) if (cellAt(pl, x, y) === VOID) todo.push([x, y]);
+  while (todo.length) { const [x, y] = todo.pop()!, k = `${x},${y}`; if (seen.has(k) || x < pl.lo || y < pl.lo || x > pl.hi || y > pl.hi || cellAt(pl, x, y) !== VOID) continue; seen.add(k); todo.push([x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]); }
+  assert.equal(seen.size, count(VOID));
+});
+
+test("town: the town grows block by block, not as a full square", () => {
+  const small = layoutTown(town([house(1)])), big = layoutTown(town([house(1), house(16 * 8 + 3)]));
+  const roads = (p: ReturnType<typeof layoutTown>) => [...p.cells].filter((c) => c === ROAD).length;
+  assert.ok(roads(big) > roads(small));
+  // ring 3 is only partly built: some of its block corners are still woods
+  const [bx, by] = blockAt(16 + 23);
+  assert.notEqual(cellAt(big, 7 * bx + 3, 7 * by), ROAD);
+});
+
+test("town: new notebooks are building sites", () => {
+  const objs = layoutTown(town([house(1)], { building: [1, 40] })).objs.filter((o) => o.k === "house" && o.building);
+  assert.deepEqual(objs.map((o) => o.h!.lot).sort((a, b) => a - b), [1, 40]);
 });
 
 test("town: switched-off spaces are not built", () => {
   const on = layoutTown(town([house(1)])).objs.map((o) => o.k);
-  const off = layoutTown(town([house(1)], { off: ["market", "journal"] })).objs.map((o) => o.k);
-  assert.ok(on.includes("market") && on.includes("observatory") && on.filter((k) => k === "obelisk").length === 2);
-  assert.ok(!off.includes("market") && !off.includes("observatory") && !off.includes("obelisk"));
+  const off = layoutTown(town([house(1)], { off: ["market"] })).objs.map((o) => o.k);
+  assert.ok(on.includes("market") && on.filter((k) => k === "crate").length === 3);
+  assert.ok(!off.includes("market"));
+  for (const k of ["hall", "factory", "school", "chapel", "tower", "fountain", "gazebo"] as const) assert.ok(off.includes(k), k);
 });
 
 test("town: your quiet notebook is an outlined plot", () => {
