@@ -69,7 +69,10 @@ shows nothing new, but puts it in one call; don't market it as anonymous. Trips 
 
 - A heap cache refreshed every 6 hours (10 s after an upgrade; when the flag is switched on): every notebook's
   `usage()` and `canister_status` (cycles, idle burn a day), 50 at a time; houses grouped by owner and bucketed by
-  `house_of`, capped at 600 (most lit first); fundraisers from chat messages.
+  `house_of`; at most 600 are drawn (`pick_houses`: grouped by size, storeys and how recently edited, taken a
+  group at a time in turn and in a scattered order, so a mix of every kind spread over the town). `town()` also
+  sends `homes` (all of them), `max_shown` and the caller's own `my_house`, which the app always draws. The HUD
+  says how many are shown when it is fewer than all.
 - `town()` query computes the rest live: per-channel online and 24-hour messages, posts, listings, rains, trips,
   building sites (notebooks made in 3 days → their owners' lots), notebooks made in 24 h and 7 days, newcomers.
 - Flag `town`, on by default; off, `town()` answers an error and the landing hides the preview.

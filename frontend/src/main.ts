@@ -3015,8 +3015,10 @@ function pageShell(crumb: string, body: string, bare = false): string {
 }
 // --- the town: Lab's activity as a small isometric town (registry town.rs, town.ts)
 
+const townHouse = (h: Town["houses"][number]) => ({ lot: h.lot, storeys: h.storeys, size: h.size, lit: h.lit, low: h.low });
+/** The town as the registry sends it, with your home added when it isn't among the ones drawn. */
 const townData = (t: Town): TownData => ({
-  at: Number(t.at / 1_000_000n), houses: t.houses.map((h) => ({ lot: h.lot, storeys: h.storeys, size: h.size, lit: h.lit, low: h.low })), people: t.people, homes: t.homes, quiet: t.quiet,
+  at: Number(t.at / 1_000_000n), houses: t.my_house && !t.houses.some((h) => h.lot === t.my_house!.lot) ? [...t.houses, t.my_house].map(townHouse).sort((a, b) => a.lot - b.lot) : t.houses.map(townHouse), people: t.people, homes: t.homes, maxShown: t.max_shown, quiet: t.quiet,
   mine: t.mine, myChannel: t.my_channel, channels: t.channels.map((c) => ({ name: c.name, online: c.online, messages24h: c.messages_24h })), postTopics: t.post_topics, postsLive: t.posts_live,
   posts24h: t.posts_24h, listings: t.listings, rains24h: t.rains_24h, lastRain: t.last_rain === undefined ? undefined : Number(t.last_rain / 1_000_000n), hikers: t.hikers, off: t.off,
   building: [...t.building], notebooks: t.notebooks, spawned24h: t.spawned_24h, spawned7d: t.spawned_7d, newcomers7d: t.newcomers_7d, cycles: Number(t.cycles), burnPerDay: Number(t.burn_per_day), fundraisersOpen: t.fundraisers_open, raisedE8s: Number(t.raised_e8s), campers: t.campers, meCamping: t.me_camping,
@@ -3027,7 +3029,7 @@ function demoTown(d: TownData): TownData {
   if (!devMode || !/town-demo/.test(location.search)) return d;
   const houses = Array.from({ length: 90 }, (_, i) => ({ lot: i * 2 + (i % 3), storeys: 1 + (i % 3), size: (i * 7) % 4, lit: (i * 5) % 3, low: i % 13 === 0 }));
   const mine = d.houses.find((h) => h.lot === d.mine);
-  return { ...d, houses: [...houses.filter((h) => h.lot !== d.mine), ...(mine ? [mine] : [])].sort((a, b) => a.lot - b.lot), homes: 82, people: 95, channels: d.channels.map((c, i) => ({ ...c, online: (i * 3) % 5, messages24h: c.messages24h + i * 12 })), postTopics: ["general", "study", "crypto", "help", "careers"], postsLive: 5, rains24h: 1, lastRain: Date.now() - 600e3, hikers: 3, listings: 4, off: [],
+  return { ...d, houses: [...houses.filter((h) => h.lot !== d.mine), ...(mine ? [mine] : [])].sort((a, b) => a.lot - b.lot), homes: 2400, people: 2600, channels: d.channels.map((c, i) => ({ ...c, online: (i * 3) % 5, messages24h: c.messages24h + i * 12 })), postTopics: ["general", "study", "crypto", "help", "careers"], postsLive: 5, rains24h: 1, lastRain: Date.now() - 600e3, hikers: 3, listings: 4, off: [],
     building: [33, 61, 120, 181], notebooks: 140, spawned24h: 2, spawned7d: 6, newcomers7d: 7, cycles: 412e12, burnPerDay: 1.9e12, fundraisersOpen: 2, raisedE8s: 3_450_000_000, campers: 9 };
 }
 let townTimer = 0;
@@ -3080,7 +3082,7 @@ function townHud(d: TownData): string {
   const card = (ic: string, big: string | number, small: string, title = "") => `<div class="town-card glass" ${title ? `title="${esc(title)}"` : ""}>${icon(ic)}<span><b>${big}</b><small>${small}</small></span></div>`;
   return [
     card("calendar", clock, `${date} · ${sea.name} · ${sea.next} in ${sea.days} day${sea.days === 1 ? "" : "s"}`),
-    card("town", d.homes, `home${d.homes === 1 ? "" : "s"} · ${n.today} lit today`, `People with a notebook edited in the last 30 days. ${d.quiet} quiet plot${d.quiet === 1 ? "" : "s"}.`),
+    card("town", d.homes, `home${d.homes === 1 ? "" : "s"}${d.homes > d.houses.length ? ` · ${d.houses.length} shown` : ""} · ${n.today} lit today`, `People with a notebook edited in the last 30 days. ${d.quiet} quiet plot${d.quiet === 1 ? "" : "s"}.${d.homes > d.houses.length ? ` The town draws at most ${d.maxShown} homes, a mix of every kind, and always yours.` : ""}`),
     card("users", n.online, "online now", "People in the community chat this minute"),
     card("chat", n.talk, "messages today", "Messages in the community in the last 24 hours"),
     ...(off.has("board") ? [] : [card("pin", d.postsLive, `post${d.postsLive === 1 ? "" : "s"} on the board`)]),
@@ -3094,6 +3096,7 @@ function townPage(): string {
   const n = townCounts(d), off = new Set(d.off), hud = townHud(d);
   const legend = t.legend ? `<div class="town-legend glass" role="note"><b>Reading the town</b>
     <span><i class="lg lg-house"></i>A home: someone with a notebook edited in the last 30 days. Bigger homes hold more notes; each storey is a notebook.</span>
+    <span><i class="lg lg-house"></i>The town draws at most ${d.maxShown} homes${d.homes > d.houses.length ? ` (${d.houses.length} of ${d.homes} now)` : ""}: when there are more, a mix of every kind, spread across town. Yours is always one of them.</span>
     <span><i class="lg lg-lit"></i>Lit windows (at night, in the dark theme): edited this week. Chimney smoke: edited today.</span>
     <span><i class="lg lg-person"></i>A person: someone in the community chat right now, at their channel's stall in the Square.</span>
     <span><i class="lg lg-build"></i>Scaffolding and a crane: a notebook made in the last three days. A red lamp by the door: a notebook with under 30 days of cycles left.</span>
@@ -3128,7 +3131,7 @@ function townTip(tg: TownTarget): string {
       return `<b>A home</b>${line(nbs)}${line(LIT_TEXT[h.lit])}${h.low ? line("Running low on cycles") : ""}`;
     }
     case "plot": return `<b>Your plot</b>${line("Your notebooks have been quiet for a month.")}${line("Write in one to light your home.")}`;
-    case "hall": return `<b>Town hall</b>${line(`Lab · pop. ${d.people}`)}${line(`${d.homes} home${d.homes === 1 ? "" : "s"} lit this month · ${d.quiet} quiet plot${d.quiet === 1 ? "" : "s"}`)}`;
+    case "hall": return `<b>Town hall</b>${line(`Lab · pop. ${d.people}`)}${line(`${d.homes} home${d.homes === 1 ? "" : "s"} lit this month · ${d.quiet} quiet plot${d.quiet === 1 ? "" : "s"}`)}${d.homes > d.houses.length ? line(`${d.houses.length} drawn: at most ${d.maxShown}, a mix of every kind, always yours`) : ""}`;
     case "stall": { const c = tg.channel; return `<b>#${esc(c.name)}</b>${line(`${c.online} here now · ${c.messages24h} message${c.messages24h === 1 ? "" : "s"} today`)}${go(S.identity ? "Click to open the channel" : "Sign in to join in")}`; }
     case "fountain": return `<b>The fountain</b>${line(d.off.includes("rain") ? "Rain is switched off: the fountain is frozen." : d.rains24h ? `${d.rains24h} rain${d.rains24h === 1 ? "" : "s"} today: the jets are running` : "No rain today. When someone makes it rain in chat, the jets run.")}`;
     case "board": return d.off.includes("board") ? `<b>The pavilion</b>${line("The board is closed.")}` : `<b>The board's pavilion</b>${line(`${d.postsLive} post${d.postsLive === 1 ? "" : "s"} pinned · ${d.posts24h} new today`)}${go(S.identity ? "Click to open the board" : "Sign in to read the board")}`;

@@ -34,7 +34,11 @@ pub struct Town {
     pub houses: Vec<TownHouse>,
     /// people who own a notebook
     pub people: u32,
+    /// every home in town; at most MAX_HOUSES of them are drawn (`houses`), a mix of every kind
     pub homes: u32,
+    pub max_shown: u32,
+    /// your home, even when it is not among those drawn
+    pub my_house: Option<TownHouse>,
     /// owners whose notebooks have all been quiet for 30 days
     pub quiet: u32,
     /// your lot (signed in, owning a notebook); no house there means your notebooks are quiet
@@ -82,6 +86,8 @@ const BUILDING_NS: u64 = 3 * DAY_NS;
 struct Counted {
     at: u64,
     houses: Vec<TownHouse>,
+    /// every home, by lot (so yours can always be shown)
+    all: std::collections::BTreeMap<u32, TownHouse>,
     people: u32,
     homes: u32,
     quiet: u32,
@@ -171,11 +177,37 @@ pub async fn refresh_town() {
     }
     let homes = houses.len() as u32;
     let quiet = people.saturating_sub(homes);
-    // the most lit first when there are too many to draw, then in street order
-    houses.sort_by_key(|h| (std::cmp::Reverse(h.lit), h.lot));
-    houses.truncate(MAX_HOUSES);
-    houses.sort_by_key(|h| h.lot);
-    TOWN.with_borrow_mut(|t| *t = Counted { at: now, houses, people, homes, quiet, cycles, burn, fundraisers_open, raised_e8s });
+    let all = houses.iter().map(|h| (h.lot, h.clone())).collect();
+    let houses = pick_houses(&houses, MAX_HOUSES);
+    TOWN.with_borrow_mut(|t| *t = Counted { at: now, houses, all, people, homes, quiet, cycles, burn, fundraisers_open, raised_e8s });
+}
+/// At most `max` homes to draw, a mix of every kind: grouped by size, storeys and how recently they were
+/// edited, then taken a group at a time in turn, each group in a scattered order so the homes shown spread
+/// over the whole town. Back in street order.
+pub fn pick_houses(houses: &[TownHouse], max: usize) -> Vec<TownHouse> {
+    if houses.len() <= max {
+        return houses.to_vec();
+    }
+    let scatter = |lot: u32| { let mut x = lot as u64 ^ 0x9e37_79b9_7f4a_7c15; x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9); x ^ (x >> 31) };
+    let mut groups: std::collections::BTreeMap<(u8, u8, u8), Vec<&TownHouse>> = Default::default();
+    for h in houses {
+        groups.entry((h.size, h.storeys, h.lit)).or_default().push(h);
+    }
+    let mut groups: Vec<Vec<&TownHouse>> = groups.into_values().map(|mut g| { g.sort_by_key(|h| std::cmp::Reverse(scatter(h.lot))); g }).collect();
+    let mut out = Vec::with_capacity(max);
+    while out.len() < max {
+        for g in groups.iter_mut() {
+            if let Some(h) = g.pop() {
+                out.push(h.clone());
+                if out.len() == max {
+                    break;
+                }
+            }
+        }
+        groups.retain(|g| !g.is_empty());
+    }
+    out.sort_by_key(|h| h.lot);
+    out
 }
 /// Every notebook's cycles and what it burns a day while idle (the registry controls them all).
 async fn status_all(nbs: &[Notebook]) -> Vec<Option<(u128, u128)>> {
@@ -302,12 +334,26 @@ fn town() -> Result<Town, String> {
     let me_camping = me != Principal::anonymous() && !owners.contains(&me) && VISITORS.with_borrow(|v| v.contains_key(&me));
     let week = now.saturating_sub(7 * DAY_NS);
     let newcomers_7d = MEMBERS.with_borrow(|m| m.iter().filter(|e| e.value().0.joined_at >= week).count()) as u32;
-    Ok(TOWN.with_borrow(|t| Town { at: t.at, homes: t.homes, houses: t.houses.clone(), people: t.people, quiet: t.quiet, mine, my_channel, channels, post_topics, posts_live, posts_24h, listings, rains_24h, last_rain, hikers, off, building, notebooks, spawned_24h, spawned_7d, newcomers_7d, cycles: Nat::from(t.cycles), burn_per_day: Nat::from(t.burn), campers, me_camping, fundraisers_open: t.fundraisers_open, raised_e8s: t.raised_e8s }))
+    Ok(TOWN.with_borrow(|t| Town { at: t.at, homes: t.homes, max_shown: MAX_HOUSES as u32, my_house: mine.and_then(|l| t.all.get(&l).cloned()), houses: t.houses.clone(), people: t.people, quiet: t.quiet, mine, my_channel, channels, post_topics, posts_live, posts_24h, listings, rains_24h, last_rain, hikers, off, building, notebooks, spawned_24h, spawned_7d, newcomers_7d, cycles: Nat::from(t.cycles), burn_per_day: Nat::from(t.burn), campers, me_camping, fundraisers_open: t.fundraisers_open, raised_e8s: t.raised_e8s }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_mix_of_every_kind() {
+        let houses: Vec<TownHouse> = (0..5000u32).map(|i| TownHouse { lot: i, storeys: if i % 50 == 0 { 3 } else { 1 }, size: if i % 97 == 0 { 3 } else { 0 }, lit: if i % 7 == 0 { 2 } else { 0 }, low: false }).collect();
+        let shown = pick_houses(&houses, 600);
+        assert_eq!(shown.len(), 600);
+        assert!(shown.windows(2).all(|w| w[0].lot < w[1].lot), "street order, no repeats");
+        // the rare kinds are all there, not crowded out by the common one
+        let rare = houses.iter().filter(|h| h.size == 3).count();
+        assert_eq!(shown.iter().filter(|h| h.size == 3).count(), rare);
+        assert!(shown.iter().filter(|h| h.storeys == 3).count() >= 90);
+        // and spread over the town, not bunched at the start
+        assert!(shown.iter().any(|h| h.lot > 4000) && shown.iter().any(|h| h.lot < 1000));
+        assert_eq!(pick_houses(&houses[..10], 600).len(), 10);
+    }
     const D: u64 = DAY_NS;
     #[test]
     fn houses_from_buckets() {

@@ -275,6 +275,9 @@ type Town = record {
   rains_24h : nat32;
   // fundraisers in chat that are still open, and what they raised (the chapel)
   fundraisers_open : nat32;
+  // your home, even when it is not among those drawn
+  my_house : opt TownHouse;
+  // every home in town; at most MAX_HOUSES of them are drawn (`houses`), a mix of every kind
   homes : nat32;
   // people who own a notebook
   people : nat32;
@@ -293,6 +296,7 @@ type Town = record {
   channels : vec TownChannel;
   // the topics of the newest live posts
   post_topics : vec text;
+  max_shown : nat32;
   // cycles every notebook holds, and what they burn a day between them (the water tower)
   cycles : nat;
   my_channel : opt text;

@@ -13,7 +13,7 @@ import { accentOf, hashOf, hex, mix, rgba, rng, skyColours, still, type RGB } fr
 export type TownHouse = { lot: number; storeys: number; size: number; lit: number; low?: boolean };
 export type TownChan = { name: string; online: number; messages24h: number };
 export type TownData = {
-  at: number; houses: TownHouse[]; people: number; homes: number; quiet: number; mine?: number; myChannel?: string;
+  at: number; houses: TownHouse[]; people: number; homes: number; maxShown: number; quiet: number; mine?: number; myChannel?: string;
   channels: TownChan[]; postTopics: string[]; postsLive: number; posts24h: number; listings: number; rains24h: number; lastRain?: number; hikers: number; off: string[];
   building: number[]; notebooks: number; spawned24h: number; spawned7d: number; newcomers7d: number; cycles: number; burnPerDay: number; fundraisersOpen: number; raisedE8s: number;
   campers: number; meCamping: boolean;
