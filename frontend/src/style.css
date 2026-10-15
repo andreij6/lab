@@ -690,3 +690,17 @@ body .wsbar, body .topbar { padding-right: 50px; } /* keep the corner clear for 
 .kit-band-icon svg { width: 22px; height: 22px; }
 @keyframes band-in { from { opacity: 0; transform: translateY(4px); } }
 @media (prefers-reduced-motion: reduce) { .kit-band.enter { animation: none; } }
+/* the frame as glass: a soft glow of the accent behind the shell, seen blurred through the top and left bars */
+.shell { position: relative; isolation: isolate; --glass: color-mix(in srgb, var(--bg-1) 42%, transparent); --glass-edge: color-mix(in srgb, var(--fg) 13%, transparent); --glass-shine: color-mix(in srgb, #fff 12%, transparent); }
+.shell::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none; background:
+  radial-gradient(46vw 16vh at 10% 0%, color-mix(in srgb, var(--accent) 60%, transparent), transparent 75%),
+  radial-gradient(40vw 14vh at 64% 0%, color-mix(in srgb, #8b5cf6 45%, transparent), transparent 75%),
+  radial-gradient(9vw 60vh at 0% 62%, color-mix(in srgb, #22d3ee 40%, transparent), transparent 75%),
+  radial-gradient(9vw 40vh at 0% 18%, color-mix(in srgb, var(--accent) 30%, transparent), transparent 75%),
+  var(--bg); }
+.shell .wsbar, .shell .panebar, .shell .ribbon, .shell .mobilebar { background: var(--glass); -webkit-backdrop-filter: blur(18px) saturate(170%); backdrop-filter: blur(18px) saturate(170%); }
+.shell .wsbar { border-bottom-color: var(--glass-edge); box-shadow: inset 0 1px 0 var(--glass-shine); }
+.shell .panebar { border-bottom-color: var(--glass-edge); }
+.shell .ribbon { border-right-color: var(--glass-edge); box-shadow: inset -1px 0 0 var(--glass-shine); }
+.shell .mobilebar { border-top-color: var(--glass-edge); }
+@supports not (backdrop-filter: blur(1px)) { .shell .wsbar, .shell .panebar, .shell .ribbon, .shell .mobilebar { background: var(--bg-1); } }
