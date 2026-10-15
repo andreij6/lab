@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { blockAt, cellAt, layoutTown, project, season, unproject, BRIDGE, LAND, ROAD, VOID, WATER, type TownData, type TownHouse } from "./town.ts";
+import { blockAt, cellAt, DISTRICTS, homeBlock, layoutTown, project, season, unproject, BRIDGE, LAND, ROAD, VOID, WATER, type TownData, type TownHouse } from "./town.ts";
 
 const town = (houses: TownHouse[], more: Partial<TownData> = {}): TownData => ({ at: 1, houses, people: houses.length, homes: houses.length, quiet: 0, channels: [{ name: "general", online: 2, messages24h: 5 }], postTopics: [], postsLive: 0, posts24h: 0, listings: 3, rains24h: 0, hikers: 0, off: [], building: [], notebooks: houses.length, spawned24h: 0, spawned7d: 0, newcomers7d: 0, cycles: 0, burnPerDay: 0, fundraisersOpen: 0, raisedE8s: 0, ...more });
 const house = (lot: number): TownHouse => ({ lot, storeys: 1, size: lot % 4, lit: lot % 3 });
@@ -76,6 +76,18 @@ test("town: the town grows block by block, not as a full square", () => {
   // ring 3 is only partly built: some of its block corners are still woods
   const [bx, by] = blockAt(16 + 23);
   assert.notEqual(cellAt(big, 7 * bx + 3, 7 * by), ROAD);
+});
+
+test("town: districts hold their landmarks, and homes are never built there", () => {
+  const pl = layoutTown(town(Array.from({ length: 200 }, (_, i) => house(i))));
+  const held = new Set(DISTRICTS.flatMap((d) => d.blocks.map((b) => b.join())));
+  for (let b = 0; b < 40; b++) assert.ok(!held.has(homeBlock(b).join()), `home block ${b}`);
+  const ids = pl.objs.flatMap((o) => (o.tg?.kind === "landmark" ? [o.tg.landmark.id] : []));
+  assert.deepEqual(ids.sort(), ["dominic", "icpswap", "nns", "oisy", "soon"]);
+  for (const o of pl.objs.filter((o) => o.k === "house")) assert.ok(!held.has([Math.floor((o.x - 1) / 7), Math.floor((o.y - 1) / 7)].join()), `a home in a district at ${o.x},${o.y}`);
+  // every district is named on a sign
+  assert.deepEqual(new Set(pl.objs.filter((o) => o.k === "sign" && o.s === 1).map((o) => (o.tg as { district: { id: string } }).district.id)), new Set(DISTRICTS.map((d) => d.id)));
+  for (const d of DISTRICTS) for (const l of d.landmarks) assert.ok(d.blocks.some((b) => b.join() === l.block.join()), `${l.id} sits in its district`);
 });
 
 test("town: new notebooks are building sites", () => {

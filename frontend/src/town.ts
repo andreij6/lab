@@ -20,10 +20,51 @@ export type TownData = {
 export type Target =
   | { kind: "house"; house: TownHouse; mine: boolean; building: boolean } | { kind: "plot" } | { kind: "hall" } | { kind: "stall"; channel: TownChan }
   | { kind: "fountain" } | { kind: "board" } | { kind: "market" } | { kind: "factory" } | { kind: "school" } | { kind: "chapel" } | { kind: "tower" }
-  | { kind: "park" } | { kind: "trail" } | { kind: "lake" } | { kind: "walker"; channel: string; me: boolean };
-type Kind = "house" | "plot" | "garden" | "tree" | "pine" | "poplar" | "bush" | "rock" | "hall" | "stall" | "fountain" | "gazebo" | "market" | "crate" | "factory" | "school" | "chapel" | "tower" | "bench" | "lantern" | "bridge" | "reeds";
+  | { kind: "park" } | { kind: "trail" } | { kind: "lake" } | { kind: "walker"; channel: string; me: boolean }
+  | { kind: "landmark"; landmark: Landmark } | { kind: "district"; district: District };
+type Kind = "bank" | "exchange" | "capitol" | "statue" | "launchpad" | "office" | "sign" | "house" | "plot" | "garden" | "tree" | "pine" | "poplar" | "bush" | "rock" | "hall" | "stall" | "fountain" | "gazebo" | "market" | "crate" | "factory" | "school" | "chapel" | "tower" | "bench" | "lantern" | "bridge" | "reeds";
 export type Obj = { k: Kind; x: number; y: number; w: number; d: number; s: number; tg?: Target; h?: TownHouse; face?: "x" | "y" | ""; ch?: TownChan; mine?: boolean; building?: boolean };
 /** Ground cells: nothing (beyond the shore), land, water, road, a bridge over water. */
+// ---------------------------------------------------------------- districts and landmarks
+
+/** A place in the town for something beyond Lab: it links out. `at` is [x, y, w, d] in tiles from
+ *  the corner of its district block (a block is 6×6 tiles). `office` is the plain building for
+ *  anything new: give it a `color` and it needs no drawing code of its own. */
+export type Landmark = { id: string; kind: "bank" | "exchange" | "capitol" | "statue" | "launchpad" | "office"; title: string; blurb: string; url: string; block: [number, number]; at: [number, number, number, number]; color?: string };
+/** A district: blocks set aside (homes are never built there) for landmarks of a kind; the room
+ *  left over is for the next ones. */
+export type District = { id: string; name: string; blurb: string; blocks: [number, number][]; landmarks: Landmark[] };
+export const DISTRICTS: District[] = [
+  {
+    id: "finance", name: "The financial district", blurb: "Where money on the Internet Computer is kept and traded.", blocks: [[2, -1], [2, 0]],
+    landmarks: [
+      { id: "oisy", kind: "bank", title: "OISY Wallet", blurb: "The bank: a wallet for ICP, Bitcoin, Ethereum and more, and how every payment in Lab is made.", url: "https://oisy.com", block: [2, -1], at: [0.3, 3.4, 2.8, 2.3] },
+      { id: "icpswap", kind: "exchange", title: "ICPSwap", blurb: "The exchange: swap ICP and other tokens on the Internet Computer.", url: "https://www.icpswap.com", block: [2, -1], at: [3.2, 3.3, 2.6, 2.5] },
+    ],
+  },
+  {
+    id: "icp", name: "The ICP quarter", blurb: "The Internet Computer's government, and the people who built it.", blocks: [[1, -2]],
+    landmarks: [
+      { id: "nns", kind: "capitol", title: "The NNS", blurb: "The Network Nervous System: the Internet Computer's government, where ICP neurons vote on every proposal.", url: "https://nns.internetcomputer.org/", block: [1, -2], at: [0.2, 0.2, 5.6, 2.6] },
+      { id: "dominic", kind: "statue", title: "Dominic Williams", blurb: "Founder and chief scientist of DFINITY, who set out to build the Internet Computer.", url: "https://x.com/dominic_w", block: [1, -2], at: [1.5, 3, 3, 2.9] },
+    ],
+  },
+  {
+    id: "spaceport", name: "The spaceport", blurb: "Launchpads for what is next on the Internet Computer.", blocks: [[2, -2]],
+    landmarks: [
+      { id: "soon", kind: "launchpad", title: "SOON launchpad", blurb: "A launchpad on the Internet Computer. Watch for the next launch.", url: "https://soonlaunchpad.fun/", block: [2, -2], at: [0.5, 0.5, 5, 5] },
+    ],
+  },
+];
+const reserved = new Set(DISTRICTS.flatMap((d) => d.blocks.map(([x, y]) => `${x},${y}`)));
+const homeBlocks: [number, number][] = [];
+let spiralSeen = 0;
+/** Homes' block `b`: the spiral of blocks, skipping the ones districts hold. */
+export function homeBlock(b: number): [number, number] {
+  while (homeBlocks.length <= b) { const c = blockAt(spiralSeen++); if (!reserved.has(c.join())) homeBlocks.push(c); }
+  return homeBlocks[b];
+}
+
 export const VOID = 0, LAND = 1, WATER = 2, ROAD = 3, BRIDGE = 4;
 export type Plan = {
   R: number; lo: number; hi: number; n: number; cells: Uint8Array; objs: Obj[]; water: number[][]; paving: number[][];
@@ -55,7 +96,7 @@ export function blockAt(b: number): [number, number] {
   const k = m === 0 ? r : m % 2 ? r - (m + 1) / 2 : r + m / 2;
   return side === 0 ? [-r + k, -r] : side === 1 ? [r, -r + k] : side === 2 ? [r - k, r] : [-r, r - k];
 }
-const ringOf = (b: number) => { const [x, y] = blockAt(b); return Math.max(Math.abs(x), Math.abs(y)); };
+const ringOf = (b: number) => { const [x, y] = homeBlock(b); return Math.max(Math.abs(x), Math.abs(y)); };
 /** The 2×2 tiles of slot `slot` in block (bx, by), and the side it faces the road on that we can see. */
 function lotTiles(bx: number, by: number, slot: number): { x: number; y: number; face: "x" | "y" | "" } {
   const [cx, cy] = SLOTS[slot];
@@ -77,7 +118,8 @@ export function layoutTown(t: TownData): Plan {
   const blocks: [number, number][] = [];
   for (let x = -1; x <= 1; x++) for (let y = -1; y <= 1; y++) blocks.push([x, y]);
   const homesBlocks: number[] = [];
-  for (let b = 0; b < 16 || b <= maxBlock; b++) { homesBlocks.push(b); blocks.push(blockAt(b)); }
+  for (const d of DISTRICTS) blocks.push(...d.blocks);
+  for (let b = 0; ringOf(b) <= 2 || b <= maxBlock; b++) { homesBlocks.push(b); blocks.push(homeBlock(b)); }
   const R = Math.max(...blocks.map(([x, y]) => Math.max(Math.abs(x), Math.abs(y))));
   const tlo = -7 * R, thi = 7 * R + 7, lo = tlo - BELT, hi = thi + BELT, n = hi - lo + 1;
   const cells = new Uint8Array(n * n);
@@ -140,9 +182,28 @@ export function layoutTown(t: TownData): Plan {
     else if (r < 0.9) put({ k: "rock", x: x + 0.7, y: y + 0.8, w: 0.5, d: 0.4, s: hashOf(key) });
   };
   for (const b of homesBlocks) {
-    const [bx, by] = blockAt(b);
+    const [bx, by] = homeBlock(b);
     for (let s = 0; s < 8; s++) lot(bx, by, s, b * 8 + s);
     tree(7 * bx + 4, 7 * by + 4, `court${bx},${by}`, "tree");
+  }
+  // the districts: their landmarks, a sign, and room for more
+  for (const dist of DISTRICTS) {
+    for (const [bx, by] of dist.blocks) paving.push([7 * bx + 1, 7 * by + 1, 6, 6]);
+    for (const lm of dist.landmarks) { const [ox, oy, w, d] = lm.at; put({ k: lm.kind, x: 7 * lm.block[0] + 1 + ox, y: 7 * lm.block[1] + 1 + oy, w, d, s: hashOf(lm.id), tg: { kind: "landmark", landmark: lm } }); }
+    // every 3×3 corner of a district block nobody holds yet: grass, a tree, a sign saying it is free
+    // (the first carries the district's name, the next says there is room; the rest are just green)
+    let named = false, roomy = false;
+    for (const [bx, by] of dist.blocks) for (const [cx, cy] of [[0, 0], [3, 0], [0, 3], [3, 3]]) {
+      const x0 = 7 * bx + 1 + cx, y0 = 7 * by + 1 + cy;
+      const taken = dist.landmarks.some((lm) => { const [ox, oy, w, d] = lm.at, lx = 7 * lm.block[0] + 1 + ox, ly = 7 * lm.block[1] + 1 + oy; return lx < x0 + 3 && lx + w > x0 && ly < y0 + 3 && ly + d > y0; });
+      if (taken) continue;
+      tree(x0 + 0.7, y0 + 0.8, `ds${x0},${y0}`, "tree"); tree(x0 + 2.3, y0 + 0.6, `dt${x0},${y0}`, "bush");
+      if (!named || !roomy) put({ k: "sign", x: x0 + 1.3, y: y0 + 2.0, w: 0.3, d: 0.1, s: named ? 0 : 1, tg: { kind: "district", district: dist } });
+      if (named) roomy = true;
+      named = true;
+    }
+    // a district with no room left: its name at the front corner of its first block
+    if (!named) { const [bx, by] = dist.blocks[0]; put({ k: "sign", x: 7 * bx + 5.9, y: 7 * by + 6.2, w: 0.3, d: 0.1, s: 1, tg: { kind: "district", district: dist } }); }
   }
   // the civic centre: the town hall
   paving.push([1, 1, 6, 6]);
@@ -284,6 +345,8 @@ const shade = (c: string, t: number) => { const m = mix(hex(c.startsWith("#") ? 
 const toHex = (c: string) => { const m = /rgb\((\d+),(\d+),(\d+)\)/.exec(c); return m ? "#" + [m[1], m[2], m[3]].map((v) => (+v).toString(16).padStart(2, "0")).join("") : c; };
 /** A channel's latest counts (the plan keeps the ones it was laid out with). */
 const chan = (name: string) => S.data!.channels.find((c) => c.name === name) ?? { name, online: 0, messages24h: 0 };
+/** The Internet Computer's colours, for the NNS flag and the rocket's band. */
+const ICP = ["#29abe2", "#522785", "#ed1e79", "#f15a24", "#fbb03b"];
 const acc = () => `rgb(${S.accent.map((v) => v | 0).join(",")})`;
 function hit(pts: [number, number][], tg?: Target) {
   if (!tg) return;
@@ -665,6 +728,147 @@ function drawObj(o: Obj, t: number) {
       ctx.beginPath(); for (let i = 0; i < 5; i++) { const dx = (r() - 0.5) * 8, hh = 6 + r() * 6; ctx.moveTo(bx + dx, by); ctx.lineTo(bx + dx + (r() - 0.5) * 2, by - hh); } ctx.stroke(); ctx.restore();
       ctx.fillStyle = night ? "#6a5040" : "#a87a52"; for (let i = 0; i < 2; i++) { ctx.beginPath(); ctx.ellipse(bx + (r() - 0.5) * 6, by - 9 - r() * 3, 1, 2.2, 0, 0, 6.283); ctx.fill(); }
       return o.tg ? hit([[bx - 5, by - 12], [bx + 5, by]], o.tg) : undefined;
+    }
+    case "capitol": {
+      // the NNS: a long hall, a portico of columns under a pediment, a dome with the ICP colours flying
+      const { x, y, w, d } = o, h = 15, stone = night ? "#5f6578" : "#f6f4ee", stoneR = shade(toHex(stone), 0.08);
+      for (let i = 0; i < 3; i++) box(x + 1.3 - i * 0.18, y + d + 0.15 + i * 0.22, w - 2.6 + i * 0.36, 0.22, 2.2 - i * 0.7, stone, stoneR, shade(toHex(stone), 0.03));
+      box(x, y, w, d, h, stone, stoneR, shade(toHex(stone), 0.04));
+      for (const f of ["y", "x"] as const) { const n = f === "y" ? 8 : 4, len = f === "y" ? w : d; for (let i = 0; i < n; i++) { const u = 0.35 + i * ((len - 0.7) / (n - 1)); onFace(f, x, y, w, d, u - 0.12, u + 0.12, 5, 11, night ? p.lit : p.win); } }
+      // the portico
+      const px0 = x + w / 2 - 1.4, pw = 2.8, py = y + d + 0.05;
+      box(px0, py, pw, 0.55, 1.5, stone, stoneR, shade(toHex(stone), 0.03));
+      for (let i = 0; i < 5; i++) box(px0 + 0.1 + i * ((pw - 0.3) / 4), py + 0.3, 0.12, 0.12, h - 1.5, stone, stoneR, undefined, 1.5);
+      poly([P(px0 - 0.1, py + 0.55, h), P(px0 + pw + 0.1, py + 0.55, h), P(px0 + pw / 2, py + 0.55, h + 6)], stone);
+      poly([P(px0 - 0.1, py, h), P(px0 - 0.1, py + 0.55, h), P(px0 + pw / 2, py + 0.55, h + 6), P(px0 + pw / 2, py, h + 6)], shade(toHex(stone), 0.06));
+      // the dome on its drum
+      const cx = x + w / 2, cy = y + d / 2;
+      box(cx - 0.7, cy - 0.7, 1.4, 1.4, 6, stone, stoneR, undefined, h);
+      const [sx, sy] = P(cx, cy, h + 6);
+      ctx.beginPath(); ctx.ellipse(sx, sy, 22, 11, 0, Math.PI, 0); ctx.bezierCurveTo(sx + 22, sy - 26, sx - 22, sy - 26, sx - 22, sy); ctx.closePath();
+      ctx.fillStyle = night ? "#6d7894" : "#dfe6ef"; ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(sx, sy - 20); ctx.lineTo(sx, sy - 40); ctx.stroke();
+      const wave = S.still ? 0 : Math.sin(t * 3) * 1.2;
+      ICP.forEach((c, i) => poly([[sx, sy - 40 + i * 1.6], [sx + 13, sy - 39 + i * 1.6 + wave], [sx + 13, sy - 37.4 + i * 1.6 + wave], [sx, sy - 38.4 + i * 1.6]], c, false));
+      poly([[sx, sy - 40], [sx + 13, sy - 39 + wave], [sx + 13, sy - 31 + wave], [sx, sy - 32]], undefined);
+      return hit([P(x, y, 0), P(x + w, y + d + 0.8, 0), P(x, y + d + 0.8, 0), P(x + w, y, 0), [sx, sy - 42]], o.tg);
+    }
+    case "bank": {
+      // OISY: a stone bank, four columns, a gold coin in the pediment and its name over the door
+      const { x, y, w, d } = o, h = 13, stone = night ? "#5a6276" : "#f1eee6", stoneR = shade(toHex(stone), 0.08), blue = "#3d5afe";
+      box(x - 0.1, y + d, w + 0.2, 0.35, 1.2, stone, stoneR, shade(toHex(stone), 0.03));
+      box(x, y, w, d, h, stone, stoneR, shade(toHex(stone), 0.04));
+      for (let i = 0; i < 4; i++) { const u = 0.35 + i * ((w - 0.7) / 3); box(x + u - 0.08, y + d + 0.05, 0.16, 0.16, h - 2.5, stone, stoneR, undefined, 1.2); }
+      onFace("y", x, y, w, d, w / 2 - 0.3, w / 2 + 0.3, 0, 6.5, shade(toHex(stone), 0.35));
+      for (let i = 0; i < 3; i++) onFace("x", x, y, w, d, 0.35 + i * 0.6, 0.6 + i * 0.6, 4, 9, night ? p.lit : p.win);
+      poly([P(x - 0.1, y + d + 0.2, h), P(x + w + 0.1, y + d + 0.2, h), P(x + w / 2, y + d + 0.2, h + 7)], stone);
+      poly([P(x - 0.1, y, h), P(x - 0.1, y + d + 0.2, h), P(x + w / 2, y + d + 0.2, h + 7), P(x + w / 2, y, h + 7)], shade(toHex(stone), 0.07));
+      poly([P(x + w + 0.1, y, h), P(x + w + 0.1, y + d + 0.2, h), P(x + w / 2, y + d + 0.2, h + 7), P(x + w / 2, y, h + 7)], stoneR);
+      const [cx, cy] = P(x + w / 2, y + d + 0.2, h + 2.8);
+      ctx.beginPath(); ctx.ellipse(cx, cy, 3, 2.4, 0, 0, 6.283); ctx.fillStyle = "#f5c542"; ctx.fill(); ctx.stroke();
+      const [tx, ty] = P(x + w / 2, y + d + 0.2, h - 1.8);
+      ctx.save(); ctx.font = "800 6px Inter, system-ui, sans-serif"; ctx.textAlign = "center"; ctx.fillStyle = night ? "#9fb0ff" : blue; ctx.fillText("OISY", tx, ty + 2); ctx.restore();
+      return hit([P(x, y, 0), P(x + w, y + d + 0.4, 0), P(x, y + d + 0.4, 0), P(x + w, y, 0), P(x + w / 2, y + d, h + 8)], o.tg);
+    }
+    case "exchange": {
+      // ICPSwap: a trading house with a board of candles that tick up and down, and swap arrows on top
+      const { x, y, w, d } = o, h = 17, wall = night ? "#4c5568" : "#eef1f6", wallR = shade(toHex(wall), 0.08);
+      box(x, y, w, d, h, wall, wallR, shade(toHex(wall), 0.04));
+      onFace("y", x, y, w, d, w / 2 - 0.3, w / 2 + 0.3, 0, 7, shade(toHex(wall), 0.35));
+      for (let i = 0; i < 3; i++) onFace("x", x, y, w, d, 0.3 + i * 0.75, 0.6 + i * 0.75, 4, 9, night ? p.lit : p.win);
+      // the board over the door
+      onFace("y", x, y, w, d, 0.2, w - 0.2, 9, 15.5, "#1d2230");
+      for (let i = 0; i < 9; i++) {
+        const u = 0.35 + i * ((w - 0.7) / 8), k = Math.sin(i * 1.7 + (S.still ? 0 : Math.floor(t * 1.5)) * 0.9), up = k > -0.15;
+        const z0 = 11 + Math.sin(i * 2.3) * 1.2, z1 = z0 + 1 + Math.abs(k) * 2.4;
+        onFace("y", x, y, w, d, u - 0.06, u + 0.06, z0, z1, up ? "#34d399" : "#f87171", false);
+      }
+      // two arrows chasing each other: a swap
+      const [ax, ay] = P(x + w / 2, y + d / 2, h + 9), turn = S.still ? 0 : t * 0.8;
+      ctx.save(); ctx.translate(ax, ay); ctx.scale(1, 0.55); ctx.rotate(turn); ctx.lineWidth = line * 2.2;
+      for (const [c, a0] of [["#29abe2", 0], ["#ed1e79", Math.PI]] as const) {
+        ctx.strokeStyle = c; ctx.beginPath(); ctx.arc(0, 0, 8, a0 + 0.3, a0 + Math.PI - 0.3); ctx.stroke();
+        const ex = Math.cos(a0 + Math.PI - 0.3) * 8, ey = Math.sin(a0 + Math.PI - 0.3) * 8; ctx.fillStyle = c;
+        ctx.beginPath(); ctx.moveTo(ex - 3, ey); ctx.lineTo(ex + 3, ey); ctx.lineTo(ex + (a0 ? 0 : 0), ey + (a0 ? -4 : 4)); ctx.fill();
+      }
+      ctx.restore();
+      const [sx2, sy2] = P(x + w / 2, y + d / 2, h);
+      ctx.beginPath(); ctx.moveTo(sx2, sy2); ctx.lineTo(ax, ay + 4); ctx.stroke();
+      return hit([P(x, y, 0), P(x + w, y + d, 0), P(x, y + d, 0), P(x + w, y, 0), [ax, ay - 8]], o.tg);
+    }
+    case "statue": {
+      // a figure on a plinth, an arm raised to the sky, in a ring of hedges; lit from below at night
+      const { x, y, w, d } = o, cx = x + w / 2, cy = y + d / 2, [sx, sy] = P(cx, cy), bronze = night ? "#7c9a8e" : "#8fb9a8";
+      ctx.beginPath(); ctx.ellipse(sx, sy, 40, 20, 0, 0, 6.283); ctx.fillStyle = p.pave; ctx.fill(); ctx.save(); ctx.globalAlpha = 0.5; ctx.stroke(); ctx.restore();
+      for (let i = 0; i < 8; i++) { const a = (i / 8) * 6.283 + 0.4; if (i === 2) continue; const [hx, hy] = P(cx + Math.cos(a) * 1.25, cy + Math.sin(a) * 1.25); ctx.beginPath(); ctx.ellipse(hx, hy - 3, 5, 3.5, 0, 0, 6.283); ctx.fillStyle = toHex(p.pine); ctx.fill(); ctx.stroke(); }
+      if (night) { const g = ctx.createRadialGradient(sx, sy - 18, 0, sx, sy - 18, 34); g.addColorStop(0, "rgba(255,230,180,.28)"); g.addColorStop(1, "rgba(255,230,180,0)"); ctx.fillStyle = g; ctx.fillRect(sx - 34, sy - 52, 68, 68); }
+      box(cx - 0.42, cy - 0.42, 0.84, 0.84, 2, shade(toHex(p.wall.startsWith("#") ? p.wall : "#fdfdfc"), 0.1), shade(toHex(p.wall.startsWith("#") ? p.wall : "#fdfdfc"), 0.18), p.wall);
+      box(cx - 0.3, cy - 0.3, 0.6, 0.6, 9, p.wall, p.wallR, shade(toHex(p.wall.startsWith("#") ? p.wall : "#fdfdfc"), 0.04), 2);
+      onFace("y", cx - 0.3, cy - 0.3, 0.6, 0.6, 0.12, 0.48, 5, 8, "#d9b98e");
+      const [fx, fy] = P(cx, cy, 11);
+      ctx.save(); ctx.lineWidth = line * 1.2;
+      poly([[fx - 3.2, fy], [fx - 1, fy], [fx - 0.6, fy - 9], [fx - 2.6, fy - 9]], shade(toHex(bronze), 0.1));
+      poly([[fx + 1, fy], [fx + 3.2, fy], [fx + 2.6, fy - 9], [fx + 0.6, fy - 9]], bronze);
+      poly([[fx - 4, fy - 8], [fx + 4, fy - 8], [fx + 3.2, fy - 19], [fx - 3.2, fy - 19]], bronze);
+      poly([[fx + 3, fy - 18], [fx + 4.4, fy - 17.4], [fx + 8, fy - 28], [fx + 6.6, fy - 28.6]], bronze);
+      poly([[fx - 3, fy - 18], [fx - 4.4, fy - 17.4], [fx - 5.2, fy - 10], [fx - 3.8, fy - 10]], shade(toHex(bronze), 0.1));
+      ctx.beginPath(); ctx.arc(fx, fy - 22.5, 3.3, 0, 6.283); ctx.fillStyle = bronze; ctx.fill(); ctx.stroke();
+      ctx.restore();
+      return hit([[sx - 22, fy - 30], [sx + 22, sy + 8]], o.tg);
+    }
+    case "launchpad": {
+      // SOON: a pad with hazard stripes, a lattice gantry, fuel tanks, and a rocket that goes up now and then
+      const { x, y, w, d } = o, cx = x + w / 2, cy = y + d / 2, conc = night ? "#4a5062" : "#dfe1e6";
+      box(x + 0.6, y + 0.6, w - 1.2, d - 1.2, 2.5, shade(toHex(conc), 0.06), shade(toHex(conc), 0.14), conc);
+      for (let i = 0; i < 10; i++) { const u = x + 0.6 + (i * (w - 1.2)) / 10; poly([P(u, y + d - 0.6, 2.5), P(u + (w - 1.2) / 20, y + d - 0.6, 2.5), P(u + (w - 1.2) / 20, y + d - 0.6, 0.5), P(u, y + d - 0.6, 0.5)], i % 2 ? "#2a2d36" : "#f5c542", false); }
+      ctx.beginPath(); ctx.ellipse(...P(cx, cy, 2.5), 16, 8, 0, 0, 6.283); ctx.fillStyle = night ? "#2f3442" : "#c3c7cf"; ctx.fill(); ctx.stroke();
+      for (const [u, v] of [[x + 0.1, y + d - 1.4], [x + 0.1, y + d - 0.4]]) { const [tx, ty] = P(u + 0.4, v + 0.4, 6); ctx.beginPath(); ctx.arc(tx, ty, 6.5, 0, 6.283); ctx.fillStyle = p.wall; ctx.fill(); ctx.stroke(); }
+      // the gantry
+      const gx = cx - 1.6, gy = cy - 1.6, gh = 66;
+      ctx.save(); ctx.strokeStyle = night ? "#c96456" : "#d9604c"; ctx.lineWidth = line * 1.2;
+      const g0 = P(gx, gy, 2.5), g1 = P(gx + 0.6, gy, 2.5), g2 = P(gx, gy + 0.6, 2.5);
+      ctx.beginPath();
+      for (const q of [g0, g1, g2]) { ctx.moveTo(q[0], q[1]); ctx.lineTo(q[0], q[1] - gh); }
+      for (let z = 0; z < gh; z += 8) { ctx.moveTo(g0[0], g0[1] - z); ctx.lineTo(g1[0], g1[1] - z - 8); ctx.moveTo(g0[0], g0[1] - z); ctx.lineTo(g2[0], g2[1] - z - 8); }
+      ctx.stroke(); ctx.restore();
+      // the rocket: on the pad, then up in fire and smoke every couple of minutes
+      const cyc = S.still ? 0 : (t + 25) % 120, rising = cyc > 100 && cyc < 112, gone = cyc >= 112;
+      const lift = rising ? (cyc - 100) ** 2 * 5 : 0, [rx, ry0] = P(cx, cy, 3), ry = ry0 - lift;
+      if (!rising && !gone) { const [ax, ay] = P(gx + 0.3, gy + 0.3, 46); ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(rx - 4, ry - 46); ctx.stroke(); }
+      if (rising || (cyc > 96 && !gone)) {
+        for (let i = 0; i < 8; i++) { const u = ((t * 0.7 + i / 8) % 1); ctx.fillStyle = `rgba(${night ? "200,205,220" : "235,236,240"},${0.75 * (1 - u)})`; ctx.beginPath(); ctx.arc(rx + (i - 3.5) * 6 * (0.4 + u), ry0 + 2 - u * 6, 4 + u * 9, 0, 6.283); ctx.fill(); }
+      }
+      if (!gone) {
+        ctx.save(); ctx.globalAlpha = rising ? Math.max(0, 1 - lift / 900) : 1;
+        if (rising) { const fl = 10 + Math.sin(t * 40) * 3; poly([[rx - 4, ry], [rx + 4, ry], [rx, ry + fl + 8]], "#ffb347", false); poly([[rx - 2, ry], [rx + 2, ry], [rx, ry + fl]], "#fff3c4", false); }
+        poly([[rx - 9, ry - 2], [rx - 5, ry - 12], [rx - 5, ry - 2]], "#e07a6a"); poly([[rx + 9, ry - 2], [rx + 5, ry - 12], [rx + 5, ry - 2]], "#c96456");
+        poly([[rx - 5, ry], [rx + 5, ry], [rx + 5, ry - 40], [rx - 5, ry - 40]], "#fbfbfa");
+        ICP.forEach((c, i) => poly([[rx - 5, ry - 18 - i * 1.6], [rx + 5, ry - 18 - i * 1.6], [rx + 5, ry - 19.6 - i * 1.6], [rx - 5, ry - 19.6 - i * 1.6]], c, false));
+        poly([[rx + 1.5, ry], [rx + 5, ry], [rx + 5, ry - 40], [rx + 1.5, ry - 40]], "rgba(0,0,0,.07)", false);
+        poly([[rx - 5, ry], [rx + 5, ry], [rx + 5, ry - 40], [rx - 5, ry - 40]], undefined);
+        poly([[rx - 5, ry - 40], [rx + 5, ry - 40], [rx, ry - 54]], "#e07a6a");
+        ctx.beginPath(); ctx.arc(rx, ry - 30, 2, 0, 6.283); ctx.fillStyle = night ? "#9cc8f0" : "#8cc3e3"; ctx.fill(); ctx.stroke();
+        ctx.restore();
+      }
+      return hit([P(x, y, 0), P(x + w, y + d, 0), P(x, y + d, 0), P(x + w, y, 0), [rx, ry0 - 70]], o.tg);
+    }
+    case "office": {
+      // a plain building for whatever comes next: glass on the front, a banner in its colour
+      const { x, y, w, d } = o, h = 22, c = o.tg?.kind === "landmark" ? o.tg.landmark.color ?? "#6d7cff" : "#6d7cff";
+      box(x, y, w, d, h, p.wall, p.wallR, shade(toHex(p.wall.startsWith("#") ? p.wall : "#fdfdfc"), 0.05));
+      for (let r = 0; r < 3; r++) onFace("y", x, y, w, d, 0.2, w - 0.2, 4 + r * 6, 8 + r * 6, night ? p.lit : "#cfe3f1");
+      onFace("x", x, y, w, d, 0.2, 0.6, 2, h - 2, c);
+      return hit([P(x, y, 0), P(x + w, y + d, 0), P(x, y + d, 0), P(x + w, y, 0), P(x, y, h)], o.tg);
+    }
+    case "sign": {
+      // a signpost: the district's name, or a lot waiting for the next landmark
+      const [bx, by] = P(o.x + o.w / 2, o.y + o.d / 2), big = o.s === 1, text = big && o.tg?.kind === "district" ? o.tg.district.name : "Room for more";
+      ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx, by - (big ? 20 : 12)); ctx.stroke();
+      ctx.font = `${big ? 700 : 600} ${big ? 9 : 7}px Inter, system-ui, sans-serif`;
+      const tw = ctx.measureText(text).width + 8, top = by - (big ? 30 : 20);
+      ctx.fillStyle = big ? acc() : night ? "#3a4252" : "#ffffff"; ctx.beginPath(); ctx.roundRect(bx - tw / 2, top, tw, big ? 13 : 10, 3); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = big ? "#ffffff" : night ? "#c8d0e0" : "#5a6276"; ctx.textAlign = "center"; ctx.fillText(text, bx, top + (big ? 9.5 : 7.5)); ctx.textAlign = "start";
+      return hit([[bx - tw / 2, top], [bx + tw / 2, by]], o.tg);
     }
     case "bench": { box(o.x, o.y, o.w, o.d, 3, night ? "#5a5048" : "#c9a982", night ? "#4a4038" : "#b39470", night ? "#6a5e52" : "#d9bd98"); if (o.tg) hit(flat(o.x - 1, o.y - 1, 3, 2), o.tg); return; }
     case "lantern": {

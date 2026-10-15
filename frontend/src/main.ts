@@ -3138,6 +3138,8 @@ function townTip(tg: TownTarget): string {
     case "chapel": return d.off.includes("fundraisers") ? `<b>The chapel</b>${line("Fundraisers are switched off: the bell is still.")}` : `<b>The chapel</b>${line(d.fundraisersOpen ? `${d.fundraisersOpen} fundraiser${d.fundraisersOpen === 1 ? "" : "s"} open: the bell is ringing` : "No fundraiser open")}${line(`${icp(BigInt(d.raisedE8s))} ICP given to keep notebooks running`)}`;
     case "tower": { const n = townCounts(d); return `<b>The water tower</b>${line(`${cyclesText(d.cycles)} of cycles held by ${d.notebooks} notebook${d.notebooks === 1 ? "" : "s"}`)}${line(`${cyclesText(d.burnPerDay)} burned a day${n.days !== undefined ? `: about ${n.days} days at this rate` : ""}`)}${line("Each notebook pays its own way; top yours up in Manage")}`; }
     case "lake": return `<b>The lake</b>${line("The river runs from it off the edge of the island.")}`;
+    case "landmark": { const l = tg.landmark; return `<b>${esc(l.title)}</b>${line(esc(l.blurb))}${go(`Click to open ${esc(new URL(l.url).host)}`)}`; }
+    case "district": { const dd = tg.district; return `<b>${esc(dd.name)}</b>${line(esc(dd.blurb))}${line(`${dd.landmarks.length} landmarks, room for more`)}`; }
     case "park": return `<b>The park</b>${line("A bench by the pond.")}`;
     case "trail": return `<b>The trailhead</b>${line(d.hikers ? `${d.hikers} out on a trip right now, on time` : "Nobody out on a trip right now")}${line("Trips with a check-in contact, from the Trips kit")}`;
     case "walker": return `<b>${tg.me ? "You" : "Someone"}</b>${line(`in #${esc(tg.channel)}`)}`;
@@ -3153,6 +3155,8 @@ function townOpen(tg: TownTarget) {
     case "board": if (!S.town.data?.off.includes("board")) { if (S.identity) location.hash = "#/board"; else signin(); } return;
     case "market": if (S.identity) location.hash = "#/market"; else signin(); return;
     case "factory": location.hash = "#/"; return;
+    // another app: a new tab, never handing it this page
+    case "landmark": window.open(tg.landmark.url, "_blank", "noopener,noreferrer"); return;
     case "school": { if (!S.identity) return signin(); store("nb-chat-channel", "help"); location.hash = "#/community"; return; }
   }
 }
