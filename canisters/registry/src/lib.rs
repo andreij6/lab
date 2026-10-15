@@ -16,9 +16,11 @@ use ic_stable_structures::{storable::Bound, DefaultMemoryImpl, StableBTreeMap, S
 use std::borrow::Cow;
 use std::cell::RefCell;
 
+mod problems;
 mod sponsors;
 mod stats;
 mod town;
+use problems::{AttemptView, ClaimView, DiscoveryView, EventView, ProblemCard, ProblemStatus, ProblemView, PublishInput, TrackRecord};
 use sponsors::{SponsorInput, SponsorView};
 use stats::AppStats;
 use town::Town;
@@ -266,6 +268,7 @@ fn init() {
     seed_channels();
     seed_developers();
     seed_kit_channels();
+    seed_field_channels();
     seed_sections();
     start_timers();
 }
@@ -275,6 +278,7 @@ fn post_upgrade() {
     seed_channels();
     seed_developers();
     seed_kit_channels();
+    seed_field_channels();
     seed_sections();
     start_timers();
 }
@@ -392,10 +396,12 @@ async fn sweep_fees() -> Result<Nat, String> {
         .map_err(|e| e.to_string())?
         .candid()
         .map_err(|e| e.to_string())?;
-    if bal.e8s() < 1_000_000 {
+    // ICP held for problem bounties is not Lab's: it stays on the account until it is paid out
+    let free = bal.e8s().saturating_sub(problems::bounty_held());
+    if free < 1_000_000 {
         return Err("under 0.01 ICP on the account".into());
     }
-    let args = TransferArgs { memo: MEMO_TOP_UP_CANISTER, amount: Tokens::from_e8s(bal.e8s() - ICP_FEE), fee: DEFAULT_FEE, from_subaccount: Some(DEFAULT_SUBACCOUNT), to: AccountIdentifier::new(&CMC, &cmc_subaccount(me)), created_at_time: None };
+    let args = TransferArgs { memo: MEMO_TOP_UP_CANISTER, amount: Tokens::from_e8s(free - ICP_FEE), fee: DEFAULT_FEE, from_subaccount: Some(DEFAULT_SUBACCOUNT), to: AccountIdentifier::new(&CMC, &cmc_subaccount(me)), created_at_time: None };
     let r: TransferResult = Call::unbounded_wait(LEDGER, "transfer").with_arg(&args).await.map_err(|e| e.to_string())?.candid().map_err(|e| e.to_string())?;
     let block_index = r.map_err(|e| e.to_string())?;
     let res: Result<Nat, candid::Reserved> = Call::unbounded_wait(CMC, "notify_top_up").with_arg(&NotifyTopUp { block_index, canister_id: me }).await.map_err(|e| e.to_string())?.candid().map_err(|e| e.to_string())?;
@@ -959,8 +965,9 @@ struct CyclesWithdraw {
     created_at_time: Option<u64>,
 }
 
-/// ICP already on the registry's account -> the minting canister -> the notebook's cycles.
-async fn mint_for(canister: Principal, e8s: u64) -> Result<Nat, String> {
+/// ICP already on the registry's account -> the minting canister, for `canister`; the block is kept
+/// in PENDING until `notify` settles it. Ok means the ICP has left the account.
+async fn send_to_cmc(canister: Principal, e8s: u64) -> Result<u64, String> {
     if e8s <= ICP_FEE * 2 {
         return Err("too little ICP to mint".into());
     }
@@ -968,6 +975,11 @@ async fn mint_for(canister: Principal, e8s: u64) -> Result<Nat, String> {
     let r: TransferResult = Call::unbounded_wait(LEDGER, "transfer").with_arg(&args).await.map_err(|e| e.to_string())?.candid().map_err(|e| e.to_string())?;
     let block_index = r.map_err(|e| e.to_string())?;
     PENDING.with_borrow_mut(|p| p.insert(block_index, canister));
+    Ok(block_index)
+}
+/// ICP already on the registry's account -> the minting canister -> the notebook's cycles.
+async fn mint_for(canister: Principal, e8s: u64) -> Result<Nat, String> {
+    let block_index = send_to_cmc(canister, e8s).await?;
     notify(block_index, canister).await.ok_or_else(|| format!("the ICP reached the minting canister (block {block_index}); minting is retried every hour"))
 }
 
@@ -1021,20 +1033,17 @@ async fn set_freezing_threshold(canister: Principal, secs: u64) -> Result<(), St
     mgmt::update_settings(&mgmt::UpdateSettingsArgs { canister_id: canister, settings }).await.map_err(|e| format!("update_settings: {e:?}"))
 }
 
-/// Top up a notebook you own through the registry, so it works while the notebook is frozen and
-/// cannot take calls itself: `amount_e8s` is pulled from `payer`'s ICRC-2 allowance for the
-/// registry (the caller when `payer` is empty; an OISY wallet otherwise), sent to the cycles
-/// minting canister for the notebook, and minted into its cycles. Returns the cycles minted.
+/// Top up a notebook through the registry, so it works while the notebook is frozen and cannot
+/// take calls itself: `amount_e8s` is pulled from `payer`'s ICRC-2 allowance for the registry
+/// (the caller when `payer` is empty; an OISY wallet otherwise), sent to the cycles minting
+/// canister for the notebook, and minted into its cycles. Returns the cycles minted. Any
+/// registered notebook, from anyone: team members chip in, and a problem's backers grant compute
+/// to the agents working on it; it is the payer's ICP and the notebook only gains.
 #[update]
 async fn top_up_notebook(canister: Principal, amount_e8s: u64, payer: Option<Principal>) -> Result<Nat, String> {
     let caller = msg_caller();
-    // the owner, or someone the notebook says may edit all of it (a team member chipping in)
-    if owns(caller, canister).is_err() {
-        // the notebook's Role enum (canisters/notebook: View, Comment, Edit); anyone it knows may pay its bills
-        #[derive(CandidType, Deserialize, PartialEq)]
-        enum NbRole { View, Comment, Edit }
-        let role: Option<NbRole> = Call::bounded_wait(canister, "role_of").with_arg(caller).await.ok().and_then(|r| r.candid().ok()).flatten();
-        if role.is_none() { return Err("not your notebook".into()); }
+    if notebook(canister).is_none() {
+        return Err("unknown notebook".into());
     }
     let payer = payer.unwrap_or(caller);
     if payer == Principal::anonymous() {
@@ -1269,6 +1278,15 @@ fn seed_kit_channels() {
         CHANNELS.with_borrow_mut(|c| c.insert(name.into(), C(Channel { name: name.into(), topic: topic.into(), created_by: canister_self(), created_at: time(), gate: None, section: Some("Lab".into()) })));
     }
 }
+/// A channel per field, where people and agents talk about the problems in it (section "Fields").
+fn seed_field_channels() {
+    for (name, topic) in problems::FIELDS {
+        if CHANNELS.with_borrow(|c| c.contains_key(&name.to_string())) {
+            continue;
+        }
+        CHANNELS.with_borrow_mut(|c| c.insert(name.to_string(), C(Channel { name: name.to_string(), topic: topic.to_string(), created_by: canister_self(), created_at: time(), gate: None, section: Some("Fields".into()) })));
+    }
+}
 fn gate_of(channel: &str) -> Option<String> {
     CHANNELS.with_borrow(|c| c.get(&channel.to_string()).and_then(|x| x.0.gate))
 }
@@ -1288,7 +1306,7 @@ thread_local! {
     /// the wallet a person pays from when it is not their sign-in principal (their OISY account)
     static WALLETS: RefCell<StableBTreeMap<Principal, Principal, Mem>> = RefCell::new(StableBTreeMap::init(MM.with_borrow(|m| m.get(MemoryId::new(32)))));
     static NEXT_WATCH: RefCell<ic_stable_structures::StableCell<u64, Mem>> = RefCell::new(ic_stable_structures::StableCell::init(MM.with_borrow(|m| m.get(MemoryId::new(31))), 1));
-    // MemoryIds 33-38 are retired (a journal that never shipped): leave them unused. 39: town.rs VISITORS; 41-43: sponsors.rs; 44: AI_FEES; start new maps at 45
+    // MemoryIds 33-38 are retired (a journal that never shipped): leave them unused. 39: town.rs VISITORS; 41-43: sponsors.rs; 44: AI_FEES; 45-53: problems.rs; start new maps at 54
     /// cycles Lab has earned from model answers, all time
     pub static AI_FEES: RefCell<ic_stable_structures::StableCell<u128, Mem>> = RefCell::new(ic_stable_structures::StableCell::init(MM.with_borrow(|m| m.get(MemoryId::new(44))), 0));
     /// owner -> the notebook that pays for what they do in the community (none set: their oldest)
@@ -1416,6 +1434,7 @@ const FLAG_DEFAULTS: &[(&str, bool, &str)] = &[
     ("fundraisers", true, "Fundraisers in chat: notebook cycles and AI plans"),
     ("town", true, "The town: Lab's activity as a small living town, on the landing page and at #/town"),
     ("sponsors", true, "Sponsored buildings in the town: projects pay ICP by the month, admins approve"),
+    ("problems", false, "Problems: open problems by field, claims others check, attempts the owner merges, bounties, discoveries"),
 ];
 #[derive(CandidType, Deserialize, Clone, Debug)]
 pub struct Flag {

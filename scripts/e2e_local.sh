@@ -80,6 +80,24 @@ expect "the admin sets the price" "Ok" icp canister call registry set_sponsor_pr
 icp token approve 1.0002 "$(icp canister status registry -i)" --identity "$OTHER" >/dev/null 2>&1 || true
 expect "the sponsor pays for a month" "paid_until" icp canister call registry pay_sponsor "($SPID : nat64, 1 : nat8)" --identity "$OTHER"
 expect "and the town shows the building, without a principal" 'name = "E2E Co"' icp canister call registry town '()' --query --identity anonymous
+
+# problems: a note published to the board; nobody checks their own claims; a solve becomes a discovery
+icp canister call registry set_flag '("problems", true)' >/dev/null
+expect "the fields have channels" 'name = "mathematics"' icp canister call registry channels '()' --query --identity anonymous
+notebook write '("Problems/E2E.md", "---\ntype: problem\nfield: mathematics\nstatus: open\n---\n# E2E\n\n## Statement\n\nIs 7 prime?\n\n## Claims\n\n### Claim 1: yes\n")' >/dev/null
+notebook set_share '(record { path = "Problems/E2E.md"; public = true; public_role = opt variant { View }; viewers = vec {}; commenters = vec {}; editors = vec {} })' >/dev/null
+HASH=$(printf 'x%.0s' $(seq 1 64))
+expect "a problem needs a known field" "field must be one of" reg publish_problem "(record { notebook = principal \"$V\"; path = \"Problems/E2E.md\"; title = \"E2E\"; field = \"alchemy\"; statement = \"Is 7 prime?\"; status = variant { Open }; claims = 1 : nat32; depends = vec {}; note_hash = \"$HASH\" })"
+expect "the owner publishes it" "mathematics" reg publish_problem "(record { notebook = principal \"$V\"; path = \"Problems/E2E.md\"; title = \"E2E\"; field = \"mathematics\"; statement = \"Is 7 prime? a < b holds\"; status = variant { Open }; claims = 1 : nat32; depends = vec {}; note_hash = \"$HASH\" })"
+PID=$(icp canister call registry problems_of "(principal \"$V\")" --query | grep -o 'id = [0-9_]*' | head -1 | tr -dc '0-9')
+expect "the owner can't check their own claim" "your own claims" reg check_claim "($PID : nat64, 1 : nat32, true, \"\", null)"
+expect "someone else can" "checked = true" icp canister call registry check_claim "($PID : nat64, 1 : nat32, true, \"ran it\", null)" --identity "$OTHER"
+expect "links are refused in comments" "links and images" icp canister call registry comment_problem "($PID : nat64, \"see https://x.y\", null, null)" --identity "$OTHER"
+expect "maths is not" "Comment" icp canister call registry comment_problem "($PID : nat64, \"for a < b and c > d it holds\", opt (1 : nat32), null)" --identity "$OTHER"
+expect "only the owner solves it" "owner" icp canister call registry solve_problem "($PID : nat64, vec { \"p:$OTHERP\" })" --identity "$OTHER"
+expect "solved: a numbered discovery" "discovery = opt" reg solve_problem "($PID : nat64, vec { \"p:$OTHERP\" })"
+expect "the ledger lists it" '"E2E"' icp canister call registry discoveries '()' --query --identity anonymous
+expect "and the town counts it" "discoveries = opt (1" icp canister call registry town '()' --query --identity anonymous
 expect "turning one down removes it" "Ok" icp canister call registry review_sponsor "($SPID : nat64, false)"
 [ "$(notebook list '()' --query | grep -c 'path = ')" = 4 ] && echo "  ok: four files listed (index.md and the seeded project included)" || { echo "FAIL: list"; exit 1; }
 expect "overwrite keeps one file" "size = 7" notebook write '("Ideas.md", "# Ideas")'

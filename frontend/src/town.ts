@@ -19,14 +19,17 @@ export type TownData = {
   building: number[]; notebooks: number; spawned24h: number; spawned7d: number; newcomers7d: number; cycles: number; burnPerDay: number; fundraisersOpen: number; raisedE8s: number;
   campers: number; meCamping: boolean;
   sponsors: TownSponsor[]; myQuests?: [number, number, number];
+  /** open problems and numbered discoveries (obelisks on the green); undefined while problems are off */
+  problemsOpen?: number; discoveries?: number;
 };
 export type Target =
   | { kind: "house"; house: TownHouse; mine: boolean; building: boolean; model?: boolean } | { kind: "plot" } | { kind: "hall" } | { kind: "stall"; channel: TownChan }
   | { kind: "fountain" } | { kind: "board" } | { kind: "market" } | { kind: "factory" } | { kind: "school" } | { kind: "chapel" } | { kind: "tower" }
   | { kind: "park" } | { kind: "trail" } | { kind: "lake" } | { kind: "walker"; channel: string; me: boolean }
-  | { kind: "landmark"; landmark: Landmark } | { kind: "district"; district: District } | { kind: "station" } | { kind: "visitor"; mine: boolean };
-type Kind = "swiss" | "fence" | "station" | "canopy" | "buffer" | "trestle" | "news" | "datacentre" | "credentials" | "bank" | "exchange" | "capitol" | "statue" | "launchpad" | "office" | "sign" | "house" | "plot" | "garden" | "tree" | "pine" | "poplar" | "bush" | "rock" | "hall" | "stall" | "fountain" | "gazebo" | "market" | "crate" | "factory" | "school" | "chapel" | "tower" | "bench" | "lantern" | "bridge" | "reeds";
-export type Obj = { k: Kind; x: number; y: number; w: number; d: number; s: number; tg?: Target; h?: TownHouse; face?: "x" | "y" | ""; ch?: TownChan; mine?: boolean; building?: boolean; model?: boolean };
+  | { kind: "landmark"; landmark: Landmark } | { kind: "district"; district: District } | { kind: "station" } | { kind: "visitor"; mine: boolean }
+  | { kind: "obelisk"; n: number; more: boolean };
+type Kind = "obelisk" | "swiss" | "fence" | "station" | "canopy" | "buffer" | "trestle" | "news" | "datacentre" | "credentials" | "bank" | "exchange" | "capitol" | "statue" | "launchpad" | "office" | "sign" | "house" | "plot" | "garden" | "tree" | "pine" | "poplar" | "bush" | "rock" | "hall" | "stall" | "fountain" | "gazebo" | "market" | "crate" | "factory" | "school" | "chapel" | "tower" | "bench" | "lantern" | "bridge" | "reeds";
+export type Obj = { k: Kind; x: number; y: number; w: number; d: number; s: number; n?: number; tg?: Target; h?: TownHouse; face?: "x" | "y" | ""; ch?: TownChan; mine?: boolean; building?: boolean; model?: boolean };
 /** Ground cells: nothing (beyond the shore), land, water, road, a bridge over water, railway. */
 // ---------------------------------------------------------------- districts and landmarks
 
@@ -298,6 +301,14 @@ export function layoutTown(t: TownData): Plan {
   put({ k: "garden", x: -2.6, y: -5.4, w: 1.2, d: 1.2, s: 3 });
   for (const [x, y] of [[-5.6, -1.6], [-1.6, -5.6], [-1.4, -1.4], [-3.6, -1.2], [-1.2, -3.4], [-5.5, -2.6]]) tree(x, y, `gr${x}${y}`, "tree");
   put({ k: "bench", x: -4.6, y: -2.2, w: 1, d: 0.35, s: 0, tg: { kind: "park" } });
+  // the avenue of discoveries along the green's back and right edges: an obelisk for each solved
+  // problem, the last one taller and numbered when there are more than fit
+  const spots: [number, number][] = [[-0.6, -5.0], [-0.6, -4.3], [-0.6, -2.7], [-0.6, -2.0], [-3.3, -5.85], [-2.6, -5.85], [-1.9, -5.85], [-1.2, -5.85]];
+  const disc = t.discoveries ?? 0, shown = Math.min(disc, spots.length);
+  for (let i = 0; i < shown; i++) {
+    const more = i === shown - 1 && disc > spots.length;
+    put({ k: "obelisk", x: spots[i][0], y: spots[i][1], w: 0.4, d: 0.4, s: more ? 2 : 1, n: more ? disc : i + 1, tg: { kind: "obelisk", n: more ? disc : i + 1, more } });
+  }
   // the school (back left), its yard full of this week's newcomers
   put({ k: "school", x: -5.6, y: 1.4, w: 3.8, d: 2.0, s: 0, tg: { kind: "school" } });
   paving.push([-6, 4, 5, 2.6]);
@@ -1258,6 +1269,17 @@ function drawObj(o: Obj, t: number) {
       ctx.fillStyle = big ? "#ffffff" : night ? "#c8d0e0" : "#5a6276"; ctx.textAlign = "center"; ctx.fillText(text, bx, top + (big ? 9.5 : 7.5)); ctx.textAlign = "start";
       return hit([[bx - tw / 2, top], [bx + tw / 2, by]], o.tg);
     }
+    case "obelisk": {
+      // a plinth, a slim shaft, a pointed cap with a light in the accent: one discovery each
+      const big = o.s === 2, h = big ? 30 : 20, { x, y, w, d } = o, c = night ? "#6e7896" : "#e6e9ef", m = big ? 0.1 : 0.13;
+      box(x - 0.04, y - 0.04, w + 0.08, d + 0.08, 3, shade(c, 0.04), shade(c, 0.12), c);
+      box(x + m, y + m, w - 2 * m, d - 2 * m, h - 4, c, shade(c, 0.1), undefined, 3);
+      const ap = P(x + w / 2, y + d / 2, h + 3);
+      poly([P(x + m, y + d - m, h - 1), P(x + w - m, y + d - m, h - 1), ap], c); poly([P(x + w - m, y + m, h - 1), P(x + w - m, y + d - m, h - 1), ap], shade(c, 0.1));
+      ctx.fillStyle = rgba(S.accent, 0.9); ctx.beginPath(); ctx.arc(ap[0], ap[1] - 2, big ? 2.4 : 1.7, 0, 6.283); ctx.fill();
+      if (big && o.n) { ctx.fillStyle = night ? "#dfe4ee" : "#3b4253"; ctx.font = "bold 7px system-ui"; ctx.textAlign = "center"; ctx.fillText(String(o.n), ap[0], ap[1] + 10); }
+      return hit([P(x, y, 0), P(x + w, y + d, 0), [ap[0] - 6, ap[1] - 4], [ap[0] + 6, ap[1]]], o.tg);
+    }
     case "bench": { box(o.x, o.y, o.w, o.d, 3, night ? "#5a5048" : "#c9a982", night ? "#4a4038" : "#b39470", night ? "#6a5e52" : "#d9bd98"); if (o.tg) hit(flat(o.x - 1, o.y - 1, 3, 2), o.tg); return; }
     case "lantern": {
       const [lx, ly] = P(o.x + 0.1, o.y + 0.1);
@@ -1736,7 +1758,7 @@ export function attachTown(canvas: HTMLCanvasElement, o: TownOpts) {
   S.sea = season(new Date());
   S.pal = palette(o.dark, S.sea.name);
   S.accent = accentOf(o.accent);
-  const sig = JSON.stringify([o.data.houses, o.data.mine, o.data.off, o.data.channels.map((c) => c.name), o.data.listings, o.data.spawned7d, o.data.building, o.data.campers, o.data.meCamping, o.data.sponsors]);
+  const sig = JSON.stringify([o.data.houses, o.data.mine, o.data.off, o.data.channels.map((c) => c.name), o.data.listings, o.data.spawned7d, o.data.building, o.data.campers, o.data.meCamping, o.data.sponsors, o.data.discoveries]);
   if (sig !== S.sig || !S.plan) { S.plan = layoutTown(o.data); S.sig = sig; }
   S.data = o.data;
   syncWalkers();

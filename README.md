@@ -23,6 +23,7 @@ evidence pointers, are in [`docs/REVERSE_ENGINEERING.md`](docs/REVERSE_ENGINEERI
 | App: sign in, notebook cards, folder tree with right-click menu, editor + preview, backlinks with context, tags, search, quick switcher, knowledge graph, local graph, Cycles screen | [`frontend/src/main.ts`](frontend/src/main.ts) |
 | Knowledge graph: force-directed layout on a canvas (drag, zoom, hover, click to open) | [`frontend/src/graph.ts`](frontend/src/graph.ts) |
 | The town: a pure layout (tested) and a canvas renderer; the registry's `town()` query and its six-hourly count | [`frontend/src/town.ts`](frontend/src/town.ts), [`town.rs`](canisters/registry/src/town.rs) |
+| Problems: open problems by field, claims others check, attempts the owner merges, bounties in ICP, numbered discoveries; agents through the notebook API | [`problems.rs`](canisters/registry/src/problems.rs), [`problems.ts`](frontend/src/problems.ts), [`docs/PROBLEMS.md`](docs/PROBLEMS.md) |
 | Pure note logic (links, tags, resolution, index, search, tree, fuzzy switcher, graph data) with `node:test` tests | [`frontend/src/notes.ts`](frontend/src/notes.ts), [`notes.test.ts`](frontend/src/notes.test.ts) |
 | Obsidian Flavored Markdown renderer (callouts, embeds, math, footnotes, highlighting, Mermaid, block ids) | [`markdown.ts`](frontend/src/markdown.ts) |
 | Excalidraw: both file formats parsed and written back, lazy editor mount, SVG embeds, tested | [`excalidraw.ts`](frontend/src/excalidraw.ts) |

@@ -747,3 +747,19 @@ body .wsbar, body .topbar { padding-right: 50px; } /* keep the corner clear for 
 /* the tour's card, above the dock */
 .town-tour { position: absolute; left: 50%; bottom: 84px; transform: translateX(-50%); width: min(520px, calc(100% - 24px)); padding: 14px 16px 12px; display: grid; gap: 8px; }
 .town-tour p { margin: 0; font-size: .9rem; line-height: 1.5; } .town-tour .row .grow { flex: 1; }
+
+/* problems: the strip above a problem note, the problem page, the credit dialog */
+.problem-strip { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 16px 6px; padding: 8px 12px; border-radius: 10px; background: color-mix(in srgb, var(--accent) 9%, var(--bg)); font-size: 13px; }
+.problem-strip > span:first-child { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.problem-strip svg { width: 15px; height: 15px; }
+.post-view.problem { padding-left: 14px; padding-right: 14px; } .post-view.problem .pane-title { margin-top: 18px; padding-left: 0; } .post-view.problem .pc-form { margin-left: 0; margin-right: 0; }
+.problem-strip .row-actions { flex: none; } .problem-strip .btn { white-space: nowrap; }
+.post-view.problem .claims .run, .post-view.problem > .run { padding: 6px 0; border-bottom: 1px solid var(--line); }
+.post-view.problem .pbody { white-space: pre-wrap; }
+.post-view.problem details.gist summary { cursor: pointer; list-style: none; }
+.post-view.problem details.gist summary::-webkit-details-marker { display: none; }
+.pcard { text-decoration: none; color: inherit; }
+.pcard:hover .ptitle { text-decoration: underline; }
+.modal .checks { display: grid; gap: 6px; margin: 8px 0 14px; }
+.modal .check { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.chat-head .segmented.sub a.tab { text-decoration: none; color: inherit; }

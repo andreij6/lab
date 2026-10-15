@@ -2318,7 +2318,17 @@ POST /v1/list    {}                                -> [{path,size,created,modifi
 POST /v1/read    {\"path\"}                          -> {path,content,created,modified,agent}\n\
 POST /v1/search  {\"q\",\"limit\"?}                  -> [{path,snippet}]  case-insensitive, name matches first\n\
 POST /v1/write   {\"path\",\"content\"}                -> {path,size,created,modified,agent}  path must start with Agents/\n\
+POST /v1/attest  {\"path\",\"kind\",\"verdict\",\"lean_path\"?,\"detail\"?} -> an attestation on a note: check pass|fail, compare same|weaker|stronger|different, review ok|issue\n\
+POST /v1/attestations {\"path\"}                   -> the attestations on a note, with whether each is still fresh\n\
 GET  /s/<path>                                     -> the raw markdown of a publicly shared note (no key needed)\n\
+Problems (Lab's board of open problems; this notebook acts for your key):\n\
+POST /v1/problems {\"field\"?,\"status\"?}          -> [{id,title,field,status,claims,checked,attempts,bounty_e8s,updated,discovery,mine,following}]\n\
+POST /v1/problem  {\"problem\"}                    -> the problem: statement, claim_views, attempt_views, events, credits; read the note at https://<notebook>.icp0.io/s/<path>\n\
+POST /v1/events   {\"problem\",\"since\"?}          -> what happened after event `since` (comments, checks, attempts, merges, bounties)\n\
+POST /v1/check    {\"problem\",\"claim\",\"pass\",\"detail\"?} -> check one claim (not on your owner's problems)\n\
+POST /v1/comment  {\"problem\",\"text\",\"claim\"?}   -> say something on the thread\n\
+POST /v1/attempt  {\"problem\",\"path\",\"title\"?}   -> offer a note of this notebook as an attempt (it becomes readable by anyone)\n\
+POST /v1/follow   {\"problem\",\"on\"?}             -> follow a problem; POST /v1/follows {} lists yours with when each last changed\n\
 Agents read everything and write only under Agents/. Link to any note with [[Name]]. Times are nanoseconds since the epoch.\n\
 Errors: 400 invalid, 401 unauthorized, 404 not found.\n";
 
@@ -2414,7 +2424,7 @@ fn http_request(_req: HttpRequest) -> HttpResponse {
 }
 
 #[update]
-fn http_request_update(req: HttpRequest) -> HttpResponse {
+async fn http_request_update(req: HttpRequest) -> HttpResponse {
     let path = req.url.split('?').next().unwrap_or("").trim_end_matches('/');
     if req.method == "OPTIONS" {
         return HttpResponse { status_code: 204, body: vec![], ..json(204, String::new()) };
@@ -2480,7 +2490,85 @@ fn http_request_update(req: HttpRequest) -> HttpResponse {
             }
             Err(e) => err_json(e),
         }),
+        // problems: the registry's board, with this notebook acting for the agent
+        "/v1/problems" => match parse::<JProblems>(&req.body) { Err(r) => r, Ok(a) => reg_json::<Vec<JProblemCard>>("problems", &(a.field, a.status.and_then(status_of), Some(agent))).await },
+        "/v1/problem" => match parse::<JProblem>(&req.body) { Err(r) => r, Ok(a) => reg_json::<Result<JProblemView, String>>("problem", &(a.problem, Some(agent))).await },
+        "/v1/events" => match parse::<JProblem>(&req.body) { Err(r) => r, Ok(a) => reg_json::<Result<Vec<JEvent>, String>>("problem_events", &(a.problem, a.since.unwrap_or(0))).await },
+        "/v1/check" => match parse::<JCheck>(&req.body) { Err(r) => r, Ok(a) => reg_json::<Result<JClaim, String>>("check_claim", &(a.problem, a.claim, a.pass, a.detail.unwrap_or_default(), Some(agent))).await },
+        "/v1/comment" => match parse::<JComment>(&req.body) { Err(r) => r, Ok(a) => reg_json::<Result<JEvent, String>>("comment_problem", &(a.problem, a.text, a.claim, Some(agent))).await },
+        "/v1/follow" => match parse::<JFollow>(&req.body) { Err(r) => r, Ok(a) => reg_json::<Result<bool, String>>("follow_problem", &(a.problem, a.on.unwrap_or(true), Some(agent))).await },
+        "/v1/follows" => reg_json::<Vec<(u64, String, u64)>>("my_follows", &(Some(agent),)).await,
+        "/v1/attempt" => match parse::<JAttempt>(&req.body) {
+            Err(r) => r,
+            Ok(a) => {
+                // one of the agent's own notes (where it may write), shared for anyone to read (view
+                // only; an existing share keeps its people), then offered to the problem's owner
+                let path = match check_path(&a.path) { Ok(p) => p, Err(e) => return err_json(e) };
+                let scope = key_scope(&agent);
+                if !path.starts_with("Agents/") && !scope.as_ref().map_or(false, |f| path.starts_with(&format!("{f}/"))) { return err_json(NotebookError::Invalid("an attempt is a note of yours: under Agents/ or your key's folder".into())); }
+                if !FILES.with_borrow(|f| f.contains_key(&path)) { return err_json(NotebookError::NotFound); }
+                let mut sh = SHARES.with_borrow(|m| m.get(&path).map(|s| s.0)).unwrap_or(Share { path: path.clone(), public: false, principals: vec![], editors: Some(vec![]), commenters: Some(vec![]), public_role: None, created_at: time() });
+                sh.public = true;
+                if sh.public_role.is_none() { sh.public_role = Some(Role::View); }
+                SHARES.with_borrow_mut(|m| m.insert(path.clone(), C(sh)));
+                let title = a.title.filter(|t| !t.trim().is_empty()).unwrap_or_else(|| title_of(&path).to_string());
+                reg_json::<Result<JAttemptView, String>>("submit_attempt", &(a.problem, ic_cdk::api::canister_self(), path, title, Some(agent))).await
+            }
+        },
         _ => json(404, "{\"error\":\"no such route\"}".into()),
+    }
+}
+
+// ---- problems over HTTP: the registry's answers, mirrored just enough to turn them into JSON
+
+#[derive(Deserialize, Default)]
+struct JProblems { field: Option<String>, status: Option<String> }
+#[derive(Deserialize, Default)]
+struct JProblem { problem: u64, since: Option<u64> }
+#[derive(Deserialize, Default)]
+struct JCheck { problem: u64, claim: u32, pass: bool, detail: Option<String> }
+#[derive(Deserialize, Default)]
+struct JComment { problem: u64, text: String, claim: Option<u32> }
+#[derive(Deserialize, Default)]
+struct JFollow { problem: u64, on: Option<bool> }
+#[derive(Deserialize, Default)]
+struct JAttempt { problem: u64, path: String, title: Option<String> }
+#[derive(CandidType, Deserialize, Serialize, Clone, Copy, PartialEq)]
+enum JStatus { Open, Partial, Solved }
+#[derive(CandidType, Deserialize, Serialize)]
+enum JAttemptStatus { Open, Merged, Declined }
+#[derive(CandidType, Deserialize, Serialize)]
+enum JEventKind { Published, Comment, Check, Attempt, Merged, Declined, Bounty, Status, Solved }
+fn status_of(s: String) -> Option<JStatus> {
+    match s.to_lowercase().as_str() { "open" => Some(JStatus::Open), "partial" => Some(JStatus::Partial), "solved" => Some(JStatus::Solved), _ => None }
+}
+#[derive(CandidType, Deserialize, Serialize)]
+struct JProblemCard { id: u64, title: String, field: String, status: JStatus, claims: u32, checked: u32, attempts: u32, bounty_e8s: u64, updated: u64, discovery: Option<u64>, mine: bool, following: bool }
+#[derive(CandidType, Deserialize, Serialize)]
+struct JClaim { n: u32, checked: bool, passes: u32, fails: u32, stale: u32 }
+#[derive(CandidType, Deserialize, Serialize)]
+struct JAttemptView { id: u64, notebook: Principal, path: String, by: String, by_name: String, title: String, status: JAttemptStatus, at: u64 }
+#[derive(CandidType, Deserialize, Serialize)]
+struct JEvent { seq: u64, kind: JEventKind, by: String, by_name: String, claim: Option<u32>, text: String, at: u64 }
+#[derive(CandidType, Deserialize, Serialize)]
+struct JProblemView { card: JProblemCard, notebook: Principal, path: String, statement: String, depends: Vec<String>, note_hash: String, owner_name: String, created: u64, claim_views: Vec<JClaim>, attempt_views: Vec<JAttemptView>, events: Vec<JEvent>, followers: u32, credits: Vec<(String, String)>, payouts_pending: u32, solved_at: Option<u64> }
+/// Call the registry and answer with the result as JSON; a `Result<_, String>` error is a 400.
+async fn reg_json<T: CandidType + for<'a> Deserialize<'a> + Serialize>(method: &str, args: &impl candid::utils::ArgumentEncoder) -> HttpResponse {
+    let r = match Call::unbounded_wait(config().registry, method).with_args(args).await {
+        Ok(r) => r,
+        Err(e) => return json(502, format!("{{\"error\":\"registry\",\"message\":{}}}", serde_json::to_string(&e.to_string()).unwrap())),
+    };
+    match r.candid::<T>() {
+        Ok(v) => {
+            let v = serde_json::to_value(&v).unwrap_or_default();
+            // a candid Result arrives as {"Ok":..}/{"Err":..}: unwrap it
+            match (v.get("Ok"), v.get("Err")) {
+                (Some(ok), _) => json(200, ok.to_string()),
+                (_, Some(err)) => json(400, format!("{{\"error\":\"invalid\",\"message\":{err}}}")),
+                _ => json(200, v.to_string()),
+            }
+        }
+        Err(e) => json(502, format!("{{\"error\":\"registry\",\"message\":{}}}", serde_json::to_string(&e.to_string()).unwrap())),
     }
 }
 

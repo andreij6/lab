@@ -6,9 +6,10 @@ import { Actor, HttpAgent, type Identity } from "@icp-sdk/core/agent";
 import { safeGetCanisterEnv } from "@icp-sdk/core/agent/canister-env";
 import { IDL } from "@icp-sdk/core/candid";
 import { Ed25519KeyIdentity } from "@icp-sdk/core/identity";
-import { createActor as registryActor, type Rain, type Channel, type Member, type Message, type Post, type PostComment, type Flag, type Watch, type Online, type Attestation, type ListingView, type Token, type Health, type Bug, type BugStatus, type Registry, type Town, type SponsorView, type Notebook as NotebookRec, type AppStats } from "./bindings/registry";
+import { createActor as registryActor, type Rain, type Channel, type Member, type Message, type Post, type PostComment, type Flag, type Watch, type Online, type Attestation, type ListingView, type Token, type Health, type Bug, type BugStatus, type Registry, type Town, type SponsorView, type Notebook as NotebookRec, type AppStats, type ProblemCard, type ProblemView, type EventView, type DiscoveryView, type TrackRecord, ProblemStatus, EventKind, AttemptStatus } from "./bindings/registry";
 import { createActor as notebookActor, type AttestationView, type Attempt, Role, type DepositState, type AgentKey, type Comment, type Info, type Note, type Revision, type Share, type TopUp, type Notebook as NotebookApi, type NotebookError } from "./bindings/notebook";
 import type { SnapshotInfo } from "./bindings/registry";
+import { FIELDS, fieldLabel, isProblemNote, mergeAttempt, noteHash, parseProblem, problemTemplate } from "./problems.ts";
 import { Principal } from "@icp-sdk/core/principal";
 import { continueList, indentLines, toggleTask } from "./editor";
 import { canvasSvg, mountCanvasPanZoom } from "./canvasview";
@@ -171,7 +172,7 @@ function tracked<T extends object>(actor: T): T {
 }
 /** A feature flag from the registry; unknown or not yet loaded flags count as on, except the market. */
 /** Off until the registry says otherwise: the market ships switched off. */
-const OFF_BY_DEFAULT = ["market"];
+const OFF_BY_DEFAULT = ["market", "problems"];
 const flag = (name: string): boolean => { const f = S.flags.find((x) => x.name === name); return f ? f.on : !OFF_BY_DEFAULT.includes(name); };
 const registry = (): Registry => tracked(registryActor(REGISTRY, { agentOptions: { identity: S.identity, rootKey: env.IC_ROOT_KEY } }));
 const notebookOf = (id: string): NotebookApi => tracked(notebookActor(id, { agentOptions: { identity: S.identity, rootKey: env.IC_ROOT_KEY } }));
@@ -274,6 +275,10 @@ const S = {
   usage: undefined as NbUsage | undefined,
 
   town: undefined as { data?: TownData; legend: boolean; tour?: number } | undefined,
+  /** the problems pages: the board by field, one problem, the discoveries ledger, track records */
+  problems: undefined as { tab: ProblemsTab; field?: string; status: "open" | "solved" | "all"; cards: ProblemCard[]; open?: ProblemView; note?: string; noteError?: string; discoveries?: DiscoveryView[]; records?: TrackRecord[]; loading: boolean } | undefined,
+  /** "canister/path" -> the problem published from that note, for the strip above it */
+  myProblems: new Map<string, ProblemCard>(),
   /** buildings that went up in the town since it was last looked at: a dot on its icon */
   townNews: 0,
   /** the landing page's town: null when it is switched off or did not load */
@@ -455,6 +460,7 @@ const ICONS: Record<string, string> = {
   house: '<path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/>',
   award: '<circle cx="12" cy="9" r="6"/><path d="M8.5 13.9 7 22l5-3 5 3-1.5-8.1"/>',
   town: '<path d="M3 20v-8l5-4 5 4v8"/><path d="M13 20V9l4-3 4 3v11"/><path d="M2 20h20"/><path d="M7 20v-3h2v3"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/>',
   compass: '<circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/>',
   heart: '<path d="M12 20s-7.5-4.6-9.2-9.3A4.8 4.8 0 0 1 12 6.6a4.8 4.8 0 0 1 9.2 4.1C19.5 15.4 12 20 12 20z"/>',
   users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14a6.5 6.5 0 0 1 3.5 6"/>',
@@ -949,11 +955,13 @@ function routeSheet(el: HTMLElement) {
   const routes: R[] = !S.identity ? [
     { label: "Lab", icon: "list", on: !S.town, go: () => { location.hash = "#/"; } },
     ...(flag("town") ? [{ label: "Town", icon: "town", on: !!S.town, go: () => { location.hash = "#/town"; } } as R] : []),
+    ...(flag("problems") ? [{ label: "Problems", icon: "target", on: !!S.problems, go: () => { location.hash = "#/problems"; } } as R] : []),
   ] : [
-    { label: "Your notebooks", icon: "list", on: !S.notebook && !S.community && !S.board && !S.market && !S.admin && !S.town, go: () => { location.hash = "#/"; } },
+    { label: "Your notebooks", icon: "list", on: !S.notebook && !S.community && !S.board && !S.market && !S.admin && !S.town && !S.problems, go: () => { location.hash = "#/"; } },
     ...(S.notebook ? [{ label: S.notebook.name, icon: "notebook", on: inNb && S.tab === "notes", go: () => { if (!inNb) location.hash = `#/notebook/${nbId}`; else { const i = document.createElement("i"); i.dataset.tab = "notes"; void onAction("tab", i, new MouseEvent("click")); } } } as R, ...FEATURES.map((f) => tab(f.id, f.label, f.icon)), tab("manage", "Manage", "cog")].filter((r) => !r.hidden) : []),
     { label: "Community", icon: "users", on: !!S.community, go: () => { location.hash = "#/community"; } },
     ...(flag("board") ? [{ label: "Board", icon: "pin", on: !!S.board, go: () => { location.hash = "#/board"; } } as R] : []),
+    ...(flag("problems") ? [{ label: "Problems", icon: "target", on: !!S.problems, go: () => { location.hash = "#/problems"; } } as R] : []),
     ...(flag("town") ? [{ label: "Town", icon: "town", on: !!S.town, go: () => { location.hash = "#/town"; } } as R] : []),
     ...(flag("market") ? [{ label: "Market", icon: "tag", on: !!S.market, go: () => { location.hash = "#/market"; } } as R] : []),
     ...(S.isAdmin ? [{ label: "Admin", icon: "bug", on: !!S.admin, go: () => { location.hash = "#/admin"; } } as R] : []),
@@ -993,6 +1001,7 @@ function moreMenu(el: HTMLElement) {
   if (!S.market && flag("market")) items.push({ label: "Notebook market", icon: "tag", action: go("#/market") });
   if (!S.board) items.push({ label: "Board", icon: "pin", action: go("#/board") });
   if (!S.town && flag("town")) items.push({ label: "Town", icon: "town", action: go("#/town") });
+  if (!S.problems && flag("problems")) items.push({ label: "Problems", icon: "target", action: go("#/problems") });
   if (S.isAdmin && !S.admin) items.push({ label: "Admin · reports and ideas", icon: "bug", action: go("#/admin") });
   items.push("-", { label: "Help and support", icon: "help", action: () => void onAction("help", el, new MouseEvent("click")) }, ...(themeAllowed() ? [{ label: "Appearance", icon: "palette", action: () => void onAction("theme-menu", el, new MouseEvent("click")) } as MenuItem] : []), "-", { label: "Sign out", icon: "out", action: () => void onAction("sign-out", el, new MouseEvent("click")) });
   contextMenu(Math.max(8, r.right - 220), r.bottom + 4, "", items);
@@ -1109,7 +1118,7 @@ function shell(body: string): string {
 /** The vertical icon bar: sections of the open notebook on top, the app-wide places at the bottom. From a page without a notebook, a section opens the last notebook. */
 function ribbonHtml(i?: Info, low = false): string {
   if (S.mobile) return "";
-  const inNb = !!S.notebook && !S.community && !S.board && !S.market && !S.admin && !S.town;
+  const inNb = !!S.notebook && !S.community && !S.board && !S.market && !S.admin && !S.town && !S.problems;
   const rb = (tab: Tab, label: string, ic: string, extra = "") => !featureOn(tab) ? "" : `<button type="button" class="rb ${inNb && S.tab === tab ? "on" : ""}" data-action="ribbon-tab" data-tab="${tab}" title="${label}" aria-label="${label}" aria-pressed="${inNb && S.tab === tab}">${icon(ic)}${extra}</button>`;
   const tripLate = S.trips.watching.some((w) => w.overdue && !w.closed);
   const tip: Partial<Record<Tab, string>> = {
@@ -1122,7 +1131,7 @@ function ribbonHtml(i?: Info, low = false): string {
   const badge: Partial<Record<Tab, string>> = { study: dueTotal() ? `<i class="rb-count">${dueTotal()}</i>` : "", work: overdueCount() ? `<i class="rb-count danger">${overdueCount()}</i>` : "", trips: tripLate ? `<i class="rb-dot"></i>` : "" };
   return `<nav class="ribbon" aria-label="Sections">
       <div class="rb-group">${rb("notes", "Notes", "file")}${S.notebook ? FEATURES.map((f) => rb(f.id, tip[f.id] ?? f.label, f.icon, badge[f.id] ?? "")).join("") : ""}</div>
-      <div class="rb-group bottom">${rb("manage", `Manage${i ? ` · ${tc(i.cycles)}` : ""}`, "cog", low ? `<i class="rb-dot"></i>` : "")}<a class="rb ${S.community ? "on" : ""}" href="#/community" data-action="nav" title="Community${S.mentions ? ` · ${S.mentions} new mention${S.mentions === 1 ? "" : "s"}` : ""}" aria-label="Community">${icon("users")}${S.mentions ? `<i class="rb-badge">${S.mentions > 9 ? "9+" : S.mentions}</i>` : ""}</a>${flag("board") ? `<a class="rb ${S.board ? "on" : ""}" href="#/board" data-action="nav" title="Board: posts and discussion" aria-label="Board">${icon("pin")}</a>` : ""}${flag("town") ? `<a class="rb ${S.town ? "on" : ""}" href="#/town" data-action="nav" title="Town: Lab right now${S.townNews ? ` · ${S.townNews} new building${S.townNews === 1 ? "" : "s"}` : ""}" aria-label="Town">${icon("town")}${S.townNews ? `<i class="rb-dot" title="New buildings in town"></i>` : ""}</a>` : ""}${flag("market") ? `<a class="rb ${S.market ? "on" : ""}" href="#/market" data-action="nav" title="Notebook market" aria-label="Notebook market">${icon("tag")}</a>` : ""}${S.isAdmin ? `<a class="rb ${S.admin ? "on" : ""}" href="#/admin" data-action="nav" title="Reports and ideas" aria-label="Reports and ideas">${icon("bug")}</a>` : ""}<button type="button" class="rb" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="rb" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button><button type="button" class="rb" data-action="sign-out" title="Sign out" aria-label="Sign out">${icon("out")}</button></div>
+      <div class="rb-group bottom">${rb("manage", `Manage${i ? ` · ${tc(i.cycles)}` : ""}`, "cog", low ? `<i class="rb-dot"></i>` : "")}<a class="rb ${S.community ? "on" : ""}" href="#/community" data-action="nav" title="Community${S.mentions ? ` · ${S.mentions} new mention${S.mentions === 1 ? "" : "s"}` : ""}" aria-label="Community">${icon("users")}${S.mentions ? `<i class="rb-badge">${S.mentions > 9 ? "9+" : S.mentions}</i>` : ""}</a>${flag("board") ? `<a class="rb ${S.board ? "on" : ""}" href="#/board" data-action="nav" title="Board: posts and discussion" aria-label="Board">${icon("pin")}</a>` : ""}${flag("problems") ? `<a class="rb ${S.problems ? "on" : ""}" href="#/problems" data-action="nav" title="Problems: open problems, claims, attempts, bounties and discoveries" aria-label="Problems">${icon("target")}</a>` : ""}${flag("town") ? `<a class="rb ${S.town ? "on" : ""}" href="#/town" data-action="nav" title="Town: Lab right now${S.townNews ? ` · ${S.townNews} new building${S.townNews === 1 ? "" : "s"}` : ""}" aria-label="Town">${icon("town")}${S.townNews ? `<i class="rb-dot" title="New buildings in town"></i>` : ""}</a>` : ""}${flag("market") ? `<a class="rb ${S.market ? "on" : ""}" href="#/market" data-action="nav" title="Notebook market" aria-label="Notebook market">${icon("tag")}</a>` : ""}${S.isAdmin ? `<a class="rb ${S.admin ? "on" : ""}" href="#/admin" data-action="nav" title="Reports and ideas" aria-label="Reports and ideas">${icon("bug")}</a>` : ""}<button type="button" class="rb" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="rb" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button><button type="button" class="rb" data-action="sign-out" title="Sign out" aria-label="Sign out">${icon("out")}</button></div>
     </nav>`;
 }
 function shellBody(body: string, i: Info | undefined, low: boolean, alert: string, mobileNav: string): string {
@@ -1353,6 +1362,7 @@ function editorBody(p: Pane): string {
       </span>
     </div>
     <div class="path-hint">${esc(c)}</div>
+    ${c.endsWith(".md") && flag("problems") && isProblemNote(d.text) ? problemStrip(c, d.text) : ""}
     ${c.endsWith(".md") && !locked && p.view !== "preview" ? propsEditor(c, d.text) : ""}
     <div class="editor-panes view-${p.view}">
       <div class="cm-host" data-cm="${esc(c)}" data-pane="${p.id}" ${locked ? 'data-readonly="1"' : ""}></div>
@@ -3052,6 +3062,312 @@ function pageShell(crumb: string, body: string, bare = false): string {
   const right = S.mobile ? moreBtn() : S.identity ? "" : `<button type="button" class="btn btn-primary" data-action="sign-in">Sign in</button>`;
   return `<div class="shell ${S.mobile ? "is-mobile" : ""} ${S.identity ? "" : "single"}">${S.identity ? ribbonHtml() : ""}<div class="shell-main"><header class="wsbar">${brand()}<span class="crumb">${crumb}</span><span class="right">${right}</span></header>${bare ? `<section class="main">${body}</section>` : `<section class="main" style="overflow:auto"><div class="page wide">${body}</div></section>`}</div></div>`;
 }
+// --- problems: open problems by field, claims others check, attempts the owner merges, bounties, discoveries (registry problems.rs, problems.ts)
+
+type ProblemsTab = "problems" | "discoveries" | "agents";
+const icpText = (e8s: bigint | number) => `${(Number(e8s) / 1e8).toLocaleString(undefined, { maximumFractionDigits: 4 })} ICP`;
+const problemRoute = () => /^#\/(problems|discoveries|agents)(?:\/(\d+))?$/.exec(location.hash);
+async function loadProblems(tab: ProblemsTab, id?: bigint) {
+  // a direct link at boot arrives before the flags do
+  if (!S.flags.length) { try { S.flags = await registry().flags(); } catch { /* the default decides */ } }
+  if (!flag("problems")) { toast("Problems are not open yet.", "info"); location.hash = "#/"; return; }
+  const p = S.problems ?? (S.problems = { tab, status: (store("nb-problems-status") as "open" | "solved" | "all") || "open", field: store("nb-problems-field") || undefined, cards: [], loading: true });
+  p.tab = tab; p.loading = true; p.open = id === undefined ? undefined : p.open?.card.id === id ? p.open : undefined; p.note = id === undefined ? undefined : p.note;
+  S.community = undefined; clearInterval(chatTimer); S.board = undefined;
+  render();
+  try {
+    if (id !== undefined) {
+      const r = await registry().problem(id, null);
+      if (r.__kind__ === "Err") { toast(r.Err, "error"); location.hash = "#/problems"; return; }
+      if (S.problems !== p) return;
+      const was = p.open;
+      p.open = r.Ok;
+      if (!was || was.note_hash !== r.Ok.note_hash || p.note === undefined) {
+        const n = await notebookOf(r.Ok.notebook.toText()).read_shared(r.Ok.path).catch(() => undefined);
+        p.note = n?.__kind__ === "Ok" ? n.Ok.content : undefined;
+        p.noteError = n?.__kind__ === "Ok" ? undefined : "The note is not shared publicly any more; the statement below is what was published.";
+      }
+    } else if (tab === "discoveries") p.discoveries = await registry().discoveries();
+    else if (tab === "agents") p.records = await registry().track_records(100);
+    else p.cards = await registry().problems(p.field ?? null, p.status === "all" ? null : p.status === "open" ? null : ProblemStatus.Solved, null);
+  } catch (e) { toast(errMsg(e), "error"); }
+  if (S.problems !== p) return;
+  p.loading = false;
+  render();
+}
+const statusPill = (s: ProblemStatus) => `<span class="pill ${s === ProblemStatus.Solved ? "ok" : s === ProblemStatus.Partial ? "low" : ""}">${s === ProblemStatus.Solved ? "solved" : s === ProblemStatus.Partial ? "partly solved" : "open"}</span>`;
+function problemCardHtml(c: ProblemCard): string {
+  return `<a href="#/problems/${c.id}" class="prow pcard" data-action="nav"><div class="prow-main"><span class="ptitle">${c.discovery !== undefined ? `<span class="pill ok" title="Discovery">№${c.discovery}</span> ` : ""}${esc(c.title)}${c.mine ? ` <span class="pill">yours</span>` : ""}${c.following ? ` <span class="pill" title="You follow this">${icon("eye")}</span>` : ""}</span>
+    <div class="small muted">${esc(fieldLabel(c.field))} · ${statusPill(c.status)} · ${c.checked}/${c.claims} claim${c.claims === 1 ? "" : "s"} checked · ${c.attempts} attempt${c.attempts === 1 ? "" : "s"}${c.bounty_e8s ? ` · <b>${icpText(c.bounty_e8s)}</b> bounty` : ""} · ${ago(c.updated)}</div></div></a>`;
+}
+const EVENT_TEXT: Record<EventKind, (e: EventView) => string> = {
+  [EventKind.Published]: () => "published the problem",
+  [EventKind.Comment]: (e) => esc(e.text),
+  [EventKind.Check]: (e) => `${e.text.startsWith("pass") ? `${icon("check")}<b>checked claim ${e.claim}: passes</b>` : `${icon("bolt")}<b>checked claim ${e.claim}: fails</b>`}${e.text.replace(/^(pass|fail):\s*/, "") ? ` — ${esc(e.text.replace(/^(pass|fail):\s*/, ""))}` : ""}`,
+  [EventKind.Attempt]: (e) => `sent an attempt: <i>${esc(e.text)}</i>`,
+  [EventKind.Merged]: (e) => `${icon("check")}merged the attempt <i>${esc(e.text)}</i>`,
+  [EventKind.Declined]: (e) => `declined the attempt <i>${esc(e.text)}</i>`,
+  [EventKind.Bounty]: (e) => `${icon("coin")}added <b>${esc(e.text)}</b> to the bounty`,
+  [EventKind.Status]: (e) => `set the status to ${esc(e.text)}`,
+  [EventKind.Solved]: (e) => `${icon("award")}<b>called it solved</b> — ${esc(e.text)}`,
+};
+const actorNotebook = (actor: string): string | undefined => actor.startsWith("a:") ? actor.slice(2).split("/")[0] : undefined;
+function problemView(v: ProblemView, note: string | undefined, noteError: string | undefined): string {
+  const c = v.card, me = S.identity, solved = c.status === ProblemStatus.Solved;
+  const canAct = !!me && !c.mine && !solved;
+  const grant = (nbId: string | undefined, who: string) => nbId && me ? `<button type="button" class="btn btn-ghost" data-action="problem-grant" data-nb="${esc(nbId)}" data-who="${esc(who)}" title="Top up this notebook's cycles so its agent can keep working: ICP from your wallet, minted straight into it">${icon("bolt")}<span class="small lbl">Grant cycles</span></button>` : "";
+  const claims = v.claim_views.length ? `<div class="claims">${v.claim_views.map((k) => `<div class="run"><span><b>Claim ${k.n}</b> <span class="claim ${k.checked ? "ok" : k.fails ? "bad" : k.stale && !k.passes ? "stale" : "none"}">${k.checked ? `${icon("check")}checked by ${k.passes}` : k.fails ? `${icon("bolt")}${k.fails} check${k.fails === 1 ? "" : "s"} fail` : k.stale ? "changed since the last check" : "not checked yet"}</span></span>
+      <span class="row-actions">${canAct ? `<button type="button" class="btn btn-ghost" data-action="problem-check" data-claim="${k.n}" data-pass="1">${icon("check")}Passes</button><button type="button" class="btn btn-ghost" data-action="problem-check" data-claim="${k.n}" data-pass="0">${icon("bolt")}Fails</button>` : ""}</span></div>`).join("")}</div>` : `<p class="small muted">No claims yet: add <code>### Claim 1: …</code> headings under <code>## Claims</code> in the note.</p>`;
+  const attempts = v.attempt_views.length ? v.attempt_views.map((a) => `<div class="run"><span><a href="#/notebook/${a.notebook.toText()}/${esc(encodeURIComponent(a.path))}" data-action="nav">${esc(a.title)}</a> <span class="small muted">by ${esc(a.by_name)} · ${ago(a.at)}</span> ${a.status === AttemptStatus.Merged ? `<span class="pill ok">merged</span>` : a.status === AttemptStatus.Declined ? `<span class="pill">declined</span>` : `<span class="pill low">open</span>`}</span>
+    <span class="row-actions">${c.mine && a.status === AttemptStatus.Open && !solved ? `<button type="button" class="btn btn-ghost" data-action="problem-merge" data-id="${a.id}" data-ok="1" title="Copy it into the note under Attempts and credit the author">${icon("check")}Merge</button><button type="button" class="btn btn-ghost" data-action="problem-merge" data-id="${a.id}" data-ok="0">Decline</button>` : ""}${grant(a.notebook.toText(), a.by_name)}</span></div>`).join("") : `<p class="small muted">No attempts yet.</p>`;
+  const credits = v.credits.length ? `<div class="run"><span>${icon("award")}<b>Discovery №${c.discovery}</b> · credited to ${v.credits.map(([, n]) => esc(n)).join(", ")}${v.payouts_pending ? ` · <span class="muted">${v.payouts_pending} payout${v.payouts_pending === 1 ? "" : "s"} pending</span> ${c.mine || S.isAdmin ? `<button type="button" class="btn btn-ghost" data-action="problem-pay">Retry</button>` : ""}` : ""}</span></div>` : "";
+  const events = v.events.length ? [...v.events].reverse().map((e) => `<div class="pcomment"><div class="pc-head"><b>${esc(e.by_name)}</b>${e.by.startsWith("a:") ? `<span class="pill agent">${icon("bot")}agent</span>` : ""}<span class="small muted">${ago(e.at)}</span>${e.claim !== undefined && e.kind !== EventKind.Check ? `<span class="small muted">· claim ${e.claim}</span>` : ""}${grant(actorNotebook(e.by), e.by_name)}</div><div class="mtext">${EVENT_TEXT[e.kind](e)}</div></div>`).join("") : `<p class="muted small">Nothing yet.</p>`;
+  const composer = me ? `<div class="pc-form top"><textarea class="input" name="problem-text" rows="2" placeholder="Say something, or ask a question about a claim…"></textarea><div class="row tight"><select class="input" name="problem-claim" style="max-width:160px"><option value="">Whole problem</option>${v.claim_views.map((k) => `<option value="${k.n}">Claim ${k.n}</option>`).join("")}</select><button type="button" class="btn btn-primary" data-action="problem-comment">${icon("send")}Comment</button></div></div>` : `<p class="small muted">Sign in to comment, check claims or send an attempt.</p>`;
+  const tools = `<span class="right-actions">
+    ${me ? `<button type="button" class="btn btn-ghost ${c.following ? "on" : ""}" data-action="problem-follow" aria-pressed="${c.following}" title="Follow: it shows up first in your list; agents poll it">${icon("eye")}<span class="small lbl">${c.following ? "Following" : "Follow"}</span></button>` : ""}
+    ${me && !solved ? `<button type="button" class="btn btn-ghost" data-action="problem-fund" title="Put ICP on it, held by the registry until it is solved, then minted as cycles into the solvers' notebooks">${icon("coin")}<span class="small lbl">Add to the bounty</span></button>` : ""}
+    ${me && !solved ? `<button type="button" class="btn btn-ghost" data-action="problem-fork" title="Copy the note into one of your notebooks to work on">${icon("copy")}<span class="small lbl">Fork</span></button><button type="button" class="btn btn-ghost" data-action="problem-attempt" title="Offer a note of yours as an attempt">${icon("send")}<span class="small lbl">Send an attempt</span></button>` : ""}
+    ${c.mine && !solved ? `<button type="button" class="btn btn-primary" data-action="problem-solve">${icon("award")}Call it solved</button>` : ""}
+    ${c.mine ? `<a class="btn btn-ghost" href="#/notebook/${v.notebook.toText()}/${esc(encodeURIComponent(v.path))}" data-action="nav" title="Open the note">${icon("edit")}</a>` : ""}</span>`;
+  return `<div class="chat-head"><a href="#/problems" class="btn btn-ghost" data-action="nav" title="Back to the list">${icon("chevron")}<span class="small lbl">Problems</span></a><span class="small muted">${esc(fieldLabel(c.field))}</span>${tools}</div>
+    <div class="post-view problem">
+      <h2 class="ptitle">${esc(c.title)}</h2>
+      <div class="small muted">${statusPill(c.status)} · by ${esc(v.owner_name)} · ${when(v.created)} · ${v.followers} follower${v.followers === 1 ? "" : "s"}${c.bounty_e8s ? ` · bounty <b>${icpText(c.bounty_e8s)}</b>` : ""}${v.depends.length ? ` · builds on ${v.depends.map((d) => `<code>${esc(d)}</code>`).join(", ")}` : ""}</div>
+      ${credits}
+      <div class="pane-title">Statement</div><div class="mtext pbody">${esc(v.statement)}</div>
+      <div class="pane-title">Claims <span class="count">${c.claims}</span></div>${claims}
+      <details class="gist"><summary class="gist-head">${icon("file")}<b>The note</b><span class="small muted">${esc(v.path)} · hash ${esc(v.note_hash.slice(0, 10))}…</span></summary>${note ? `<div class="gist-body md">${gistMd(note)}</div>` : `<p class="small muted" style="padding:8px">${esc(noteError ?? "Loading…")}</p>`}</details>
+      <div class="pane-title">Attempts <span class="count">${v.attempt_views.length}</span></div>${attempts}
+      <div class="pane-title">Thread</div>${composer}<div class="pcomments">${events}</div>
+    </div>`;
+}
+function problemsPage(): string {
+  const p = S.problems!;
+  const tabs = `<span class="segmented sub">${(["problems", "discoveries", "agents"] as const).map((t) => `<a class="tab ${p.tab === t && !p.open ? "on" : ""}" href="#/${t}" data-action="nav">${t[0].toUpperCase()}${t.slice(1)}</a>`).join("")}</span>`;
+  let main: string;
+  if (p.open) main = problemView(p.open, p.note, p.noteError);
+  else if (p.tab === "discoveries") main = `<div class="chat-head"><b>Discoveries</b><span class="small muted">Solved problems, numbered for good, crediting everyone merged or checked</span>${tabs}</div>
+    <div class="plist">${p.loading && !p.discoveries ? `<p class="muted small" style="padding:12px">Loading…</p>` : p.discoveries?.length ? p.discoveries.map((d) => `<a href="#/problems/${d.problem}" class="prow pcard" data-action="nav"><div class="prow-main"><span class="ptitle"><span class="pill ok">№${d.n}</span> ${esc(d.title)}</span><div class="small muted">${esc(fieldLabel(d.field))} · ${d.credits.map(([, n]) => esc(n)).join(", ")} · ${when(d.at)} · note ${esc(d.note_hash.slice(0, 10))}…</div></div></a>`).join("") : `<div class="chat-empty">${icon("award")}<h3>No discoveries yet</h3><p class="muted small">When a problem's owner calls it solved, it is numbered here with everyone credited, and an obelisk goes up on the town green.</p></div>`}</div>`;
+  else if (p.tab === "agents") main = `<div class="chat-head"><b>Track records</b><span class="small muted">People and agents, by what they have checked, sent and solved</span>${tabs}</div>
+    <div class="plist">${p.loading && !p.records ? `<p class="muted small" style="padding:12px">Loading…</p>` : p.records?.length ? `<table class="table"><thead><tr><th>Who</th><th>Checks</th><th>Attempts</th><th>Merged</th><th>Solved</th><th>Problems</th><th>Since</th></tr></thead><tbody>${p.records.map((r) => `<tr><td>${esc(r.name)}${r.agent ? ` <span class="pill agent">${icon("bot")}agent</span>` : ""}</td><td>${r.checks}</td><td>${r.attempts}</td><td>${r.merged}</td><td>${r.solved}</td><td>${r.problems}</td><td class="small muted">${ago(r.since)}</td></tr>`).join("")}</tbody></table>` : `<div class="chat-empty">${icon("bot")}<h3>Nobody yet</h3><p class="muted small">Check a claim, send an attempt or publish a problem to appear here. Agents act through their notebook's API: see the agent skill.</p></div>`}</div>`;
+  else {
+    const side = `<div class="pane-head"><span class="pane-title" style="padding:0">Fields</span></div>
+      <div class="chans"><button type="button" class="chan ${!p.field ? "on" : ""}" data-action="problems-field" data-field=""><span class="hash">∗</span>all</button>${FIELDS.map(([v, l]) => `<button type="button" class="chan ${p.field === v ? "on" : ""}" data-action="problems-field" data-field="${v}"><span class="hash">#</span>${esc(l)}</button>`).join("")}</div>
+      <div class="wallet"><div class="pane-title">Publishing</div><div class="small muted">A problem is a note: make one with New › Problem, write the statement and its claims, and publish it from the note. Checks, attempts and bounties come to you here; agents join through your notebook's API.</div>${S.identity ? `<div class="nudge"><button type="button" class="btn btn-primary" data-action="problem-new">${icon("plus")}New problem</button></div>` : ""}</div>`;
+    main = `<div class="chat-head"><b>${p.field ? esc(fieldLabel(p.field)) : "All fields"}</b><span class="small muted">${p.status === "solved" ? "solved" : p.status === "all" ? "open and solved" : "open"}</span><span class="right-actions"><span class="segmented sub">${(["open", "solved", "all"] as const).map((k) => `<button type="button" class="tab ${p.status === k ? "on" : ""}" data-action="problems-status" data-status="${k}">${k[0].toUpperCase()}${k.slice(1)}</button>`).join("")}</span>${tabs}</span></div>
+      <div class="plist">${p.loading && !p.cards.length ? `<p class="muted small" style="padding:12px">Loading…</p>` : p.cards.filter((c) => p.status !== "open" || c.status !== ProblemStatus.Solved).length ? p.cards.filter((c) => p.status !== "open" || c.status !== ProblemStatus.Solved).map(problemCardHtml).join("") : `<div class="chat-empty">${icon("target")}<h3>No problems ${p.status === "solved" ? "solved" : "open"}${p.field ? ` in ${esc(fieldLabel(p.field))}` : ""} yet</h3><p class="muted small">Publish one from a problem note. Claims get checked by other people and their agents; attempts come back for you to merge; a bounty waits for whoever solves it.</p></div>`}</div>`;
+    return pageShell(`<b>Problems</b>${p.field ? `<span class="faint">/</span><span>${esc(fieldLabel(p.field))}</span>` : ""}`, `<div class="workspace community ${S.mobile ? "m-note" : ""}"><nav class="side" aria-label="Fields">${side}</nav><section class="main chatpane board">${main}</section></div>`, true);
+  }
+  return pageShell(`<b>Problems</b>${p.open ? `<span class="faint">/</span><span>${esc(p.open.card.title)}</span>` : ""}`, `<div class="workspace community no-side ${S.mobile ? "m-note" : ""}"><section class="main chatpane board">${main}</section></div>`, true);
+}
+/** Publish (or refresh) a problem note on the board: shared publicly, read-only, then registered with its hash and claims. */
+async function publishProblem(notebook: Principal, path: string, content: string, quiet = false): Promise<ProblemCard | undefined> {
+  const pr = parseProblem(content);
+  if (!pr.statement) { if (!quiet) toast("Write the statement under “## Statement” first.", "error"); return; }
+  const a = notebookOf(notebook.toText());
+  const share = S.notebook?.canister.toText() === notebook.toText() ? S.shares.find((x) => x.path === path) : undefined;
+  if (!share?.public) { unwrap(await a.set_share({ path, public: true, public_role: Role.View, viewers: [], commenters: [], editors: [] })); if (S.notebook?.canister.toText() === notebook.toText()) await refreshShares(); }
+  const r = await registry().publish_problem({ notebook, path, title: title(path), field: FIELDS.some(([v]) => v === pr.field) ? pr.field : "open-problems", statement: pr.statement, status: pr.status === "partial" ? ProblemStatus.Partial : ProblemStatus.Open, claims: pr.claims.length, depends: pr.depends, note_hash: await noteHash(content) });
+  if (r.__kind__ === "Err") { if (!quiet) toast(r.Err, "error"); return; }
+  S.myProblems.set(`${notebook.toText()}/${path}`, r.Ok.card);
+  return r.Ok.card;
+}
+/** After a save: a published problem note is refreshed on the board (its hash, claims and statement change). */
+function republishProblem(path: string, content: string) {
+  if (!S.notebook || !flag("problems") || !isProblemNote(content) || !S.myProblems.has(`${S.notebook.canister.toText()}/${path}`)) return;
+  void publishProblem(S.notebook.canister, path, content, true).then(() => render());
+}
+/** The strip above a problem note: what the board sees, and the button that puts it there. */
+function problemStrip(path: string, text: string): string {
+  const pr = parseProblem(text), card = S.myProblems.get(`${S.notebook!.canister.toText()}/${path}`);
+  const lean = pr.claims.filter((c) => c.lean).length;
+  return `<div class="problem-strip"><span>${icon("target")}<b>Problem</b> · ${esc(fieldLabel(pr.field))} · ${pr.claims.length} claim${pr.claims.length === 1 ? "" : "s"}${lean ? ` (${lean} with Lean)` : ""}${card ? ` · ${statusPill(card.status)} · ${card.checked}/${card.claims} checked · ${card.attempts} attempt${card.attempts === 1 ? "" : "s"}${card.bounty_e8s ? ` · ${icpText(card.bounty_e8s)} bounty` : ""}` : ""}</span>
+    <span class="row-actions">${card ? `<a class="btn btn-ghost" href="#/problems/${card.id}" data-action="nav">${icon("out")}<span class="small lbl">On the board</span></a>` : `<button type="button" class="btn btn-primary" data-action="problem-publish" data-path="${esc(path)}" title="Share the note publicly (read-only) and list it under its field">${icon("send")}Publish to the board</button>`}</span></div>`;
+}
+async function newProblem(folder?: string) {
+  const v = await fieldsDialog("New problem", "A problem is a note others can check, fork and send attempts to. Publish it to the board when the statement is ready.", [
+    { name: "title", label: "Title", placeholder: "Twin primes", required: true, wide: true },
+    { name: "field", label: "Field", kind: "choice", choices: FIELDS.map(([value, label]) => ({ value, label })), value: "mathematics" },
+    { name: "statement", label: "Statement", kind: "area", placeholder: "What is being asked, precisely" },
+  ], "Create");
+  if (!v) return;
+  const name = v.title.replace(/[#^[\]|\\/:]/g, " ").trim();
+  if (!name) return;
+  const dir = folder ?? "Problems";
+  await newNote(uniquePath(`${dir}/${name}.md`), dir, undefined, problemTemplate(name, v.field, v.statement));
+}
+/** New…: every kind of note, so nobody has to remember a `type:`. */
+function newMenu(el: HTMLElement, folder?: string) {
+  const r = el.getBoundingClientRect();
+  const items: MenuItem[] = [
+    { label: "Note", icon: "file", action: () => void newNote(undefined, folder) },
+    { label: "Daily note", icon: "calendar", action: () => void openDaily() },
+    ...(flag("problems") ? [{ label: "Problem · claims others check", icon: "target", action: () => void newProblem(folder) } as MenuItem] : []),
+    { label: "Meeting", icon: "users", action: () => void newMeeting() },
+    { label: "Person", icon: "user", action: () => void onAction("new-person", el) },
+    { label: "From a template…", icon: "template", action: () => void newFromTemplate(folder) },
+    "-",
+    { label: "Kanban board", icon: "board", action: () => void newBoard(folder) },
+    { label: "Spreadsheet", icon: "columns", action: () => void newSheetNote(folder) },
+    { label: "Dashboard", icon: "graph", action: () => void newDashNote(folder) },
+    { label: "Drawing", icon: "edit", action: () => void newDrawing(folder) },
+    { label: "Python notebook", icon: "command", action: () => void newPyNotebook(folder) },
+    { label: "Flashcards", icon: "check", action: () => void newQuiz("cards", folder) },
+    { label: "Quiz", icon: "list", action: () => void newQuiz("choice", folder) },
+  ];
+  contextMenu(r.left, r.bottom + 4, folder ? `New in ${folder}` : "New", items);
+}
+async function pickNotebook(title: string): Promise<NotebookRec | undefined> {
+  if (!S.notebooks) await loadNotebooks();
+  const nbs = S.notebooks ?? [];
+  if (!nbs.length) { toast("Create a notebook first.", "info"); return; }
+  if (nbs.length === 1) return nbs[0];
+  const v = await ask({ title, label: "Notebook", choices: nbs.map((n) => ({ value: n.canister.toText(), label: n.name })), value: S.notebook?.canister.toText() ?? nbs[0].canister.toText(), ok: "Choose" });
+  return v ? nbs.find((n) => n.canister.toText() === v) : undefined;
+}
+async function problemAction(action: string, el: HTMLElement) {
+  const p = S.problems, v = p?.open;
+  const signin = () => { toast("Sign in to join in.", "info"); return undefined; };
+  const reload = () => (v ? loadProblems(p!.tab, v.card.id) : loadProblems(p?.tab ?? "problems"));
+  const fail = (e: unknown) => toast(errMsg(e), "error");
+  switch (action) {
+    case "problems-field": store("nb-problems-field", el.dataset.field ?? ""); p!.field = el.dataset.field || undefined; return loadProblems("problems");
+    case "problems-status": store("nb-problems-status", el.dataset.status ?? "open"); p!.status = (el.dataset.status as "open" | "solved" | "all") ?? "open"; return loadProblems("problems");
+    case "problem-new": { const n = await pickNotebook("Which notebook holds the problem?"); if (!n) return; if (S.notebook?.canister.toText() !== n.canister.toText()) await openNotebook(n.canister.toText()); location.hash = `#/notebook/${n.canister.toText()}`; return newProblem(); }
+    case "problem-publish": {
+      const path = el.dataset.path!;
+      if (!S.notebook) return;
+      await save(path);
+      if (draftOf(path).dirty) return toast("Still saving; try again in a moment.", "info");
+      try { const c = await publishProblem(S.notebook.canister, path, draftOf(path).text); if (c) { toast("On the board. Checks, attempts and bounties will show here and on the problem's page.", "ok"); render(); } } catch (e) { fail(e); }
+      return;
+    }
+    case "problem-follow": { if (!S.identity || !v) return signin(); try { const r = await registry().follow_problem(v.card.id, !v.card.following, null); if (r.__kind__ === "Err") throw new Error(r.Err); } catch (e) { fail(e); } return reload(); }
+    case "problem-check": {
+      if (!S.identity || !v) return signin();
+      const pass = el.dataset.pass === "1", claim = Number(el.dataset.claim);
+      const detail = await ask({ title: `Claim ${claim} ${pass ? "passes" : "fails"}`, body: pass ? "What you checked and how (a Lean run, a reading of the proof). Stamped with the note's current hash: if the note changes, the check shows as stale." : "Where it fails: the step, the gap, the counterexample.", label: "Detail", multiline: true, placeholder: pass ? "Lean 4.12, no sorry, compiles against Mathlib…" : "Step 2 assumes n > 0 but…", ok: pass ? "Passes" : "Fails" });
+      if (detail === null) return;
+      try { const r = await registry().check_claim(v.card.id, claim, pass, detail, null); if (r.__kind__ === "Err") throw new Error(r.Err); toast("Recorded.", "ok"); } catch (e) { fail(e); }
+      return reload();
+    }
+    case "problem-comment": {
+      if (!S.identity || !v) return signin();
+      const ta = document.querySelector<HTMLTextAreaElement>('textarea[name="problem-text"]'), sel = document.querySelector<HTMLSelectElement>('select[name="problem-claim"]');
+      const text = ta?.value.trim();
+      if (!text) return;
+      try { const r = await registry().comment_problem(v.card.id, text, sel?.value ? Number(sel.value) : null, null); if (r.__kind__ === "Err") throw new Error(r.Err); if (ta) ta.value = ""; } catch (e) { fail(e); }
+      return reload();
+    }
+    case "problem-fund": {
+      if (!S.identity || !v) return signin();
+      const a = await ask({ title: "Add to the bounty", body: "ICP from your wallet, held by the registry until the owner calls the problem solved; then it is minted as cycles into the notebooks of everyone credited. It is not refunded.", label: "ICP", value: "1", ok: "Add" });
+      if (a === null) return;
+      const n = Number(a);
+      if (!(n >= 0.1)) return toast("Minimum is 0.1 ICP.", "error");
+      const amount = BigInt(Math.round(n * 1e8));
+      try { await approvePayment(Principal.fromText(REGISTRY), amount + ICP_FEE); const r = await registry().fund_bounty(v.card.id, amount); if (r.__kind__ === "Err") throw new Error(r.Err); toast(`${icpText(amount)} added. Thank you.`, "ok"); } catch (e) { fail(e); }
+      return reload();
+    }
+    case "problem-grant": {
+      if (!S.identity) return signin();
+      const nbId = el.dataset.nb!, who = el.dataset.who ?? "them";
+      const a = await ask({ title: `Grant cycles to ${who}`, body: "The ICP leaves your wallet and is minted straight into their notebook's cycles, so the agent can keep working; nobody holds it on the way.", label: "ICP", value: "0.5", ok: "Grant" });
+      if (a === null) return;
+      const n = Number(a);
+      if (!(n >= 0.01)) return toast("Minimum is 0.01 ICP.", "error");
+      const amount = BigInt(Math.round(n * 1e8));
+      try { await approvePayment(Principal.fromText(REGISTRY), amount + ICP_FEE); const r = await registry().top_up_notebook(Principal.fromText(nbId), amount, null); if (r.__kind__ === "Err") throw new Error(r.Err); toast(`Granted: ${tc(r.Ok)} of runway for ${who}.`, "ok"); } catch (e) { fail(e); }
+      return;
+    }
+    case "problem-fork": {
+      if (!S.identity || !v) return signin();
+      const n = await pickNotebook("Fork into which notebook?");
+      if (!n) return;
+      const src = p!.note ?? `# ${v.card.title}\n\n## Statement\n\n${v.statement}\n`;
+      let content = setProperty(setProperty(src, "type", "attempt"), "attempt_of", String(v.card.id));
+      content = setProperty(content, "problem", `[[${v.card.title}]]`);
+      const path = `Problems/${v.card.title.replace(/[#^[\]|\\/:]/g, " ")} — attempt.md`;
+      try {
+        // the open notebook keeps its list in step; another one is written to directly and opened by its link
+        if (S.notebook?.canister.toText() === n.canister.toText() && S.notes) { await createQuiet(path, content); reindex(); } else unwrap(await notebookOf(n.canister.toText()).write(path, content));
+        toast("Forked. Work on it, then send it back as an attempt.", "ok");
+        location.hash = `#/notebook/${n.canister.toText()}/${encodeURIComponent(path)}`;
+      } catch (e) { fail(e); }
+      return;
+    }
+    case "problem-attempt": {
+      if (!S.identity || !v) return signin();
+      const n = await pickNotebook("Which notebook holds your attempt?");
+      if (!n) return;
+      const f = await fieldsDialog("Send an attempt", "The note is shared publicly (read-only) so the owner can read and merge it; merging credits you.", [
+        { name: "path", label: "Note", value: `Problems/${v.card.title.replace(/[#^[\]|\\/:]/g, " ")} — attempt.md`, required: true, wide: true },
+        { name: "title", label: "Title", value: `Attempt: ${v.card.title}`, required: true, wide: true },
+      ], "Send");
+      if (!f) return;
+      try {
+        const a = notebookOf(n.canister.toText());
+        unwrap(await a.set_share({ path: f.path, public: true, public_role: Role.View, viewers: [], commenters: [], editors: [] }));
+        const r = await registry().submit_attempt(v.card.id, n.canister, f.path, f.title, null);
+        if (r.__kind__ === "Err") throw new Error(r.Err);
+        toast("Sent. The owner can merge it into the problem.", "ok");
+      } catch (e) { fail(e); }
+      return reload();
+    }
+    case "problem-merge": {
+      if (!v) return;
+      const id = BigInt(el.dataset.id!), ok = el.dataset.ok === "1";
+      const a = v.attempt_views.find((x) => x.id === id);
+      if (!a) return;
+      try {
+        if (ok) {
+          const att = unwrap(await notebookOf(a.notebook.toText()).read_shared(a.path));
+          const me = notebookOf(v.notebook.toText());
+          const cur = unwrap(await me.read(v.path));
+          const merged = mergeAttempt(cur.content, a.by_name, a.title, att.content);
+          unwrap(await me.write(v.path, merged));
+          if (S.notebook?.canister.toText() === v.notebook.toText()) { const n = note(v.path); if (n) n.content = merged; const d = S.drafts.get(v.path); if (d && !d.dirty) d.text = merged; }
+          await publishProblem(v.notebook, v.path, merged, true);
+        }
+        const r = await registry().merge_attempt(id, ok);
+        if (r.__kind__ === "Err") throw new Error(r.Err);
+        toast(ok ? "Merged into the note and credited." : "Declined.", "ok");
+      } catch (e) { fail(e); }
+      return reload();
+    }
+    case "problem-solve": {
+      if (!v) return;
+      // ticked by default: merged attempts' authors and checkers whose latest check passes; the rest are listed unticked
+      const people = new Map<string, string>(), did = new Set<string>();
+      for (const a of v.attempt_views) { people.set(a.by, a.by_name); if (a.status === AttemptStatus.Merged) did.add(a.by); }
+      const latest = new Map<string, boolean>();
+      for (const e of v.events) if (e.kind === EventKind.Check) { people.set(e.by, e.by_name); latest.set(`${e.by}#${e.claim}`, e.text.startsWith("pass")); }
+      for (const [k, pass] of latest) if (pass) did.add(k.split("#")[0]);
+      people.set(`p:${S.principal}`, "you");
+      const chosen = await pickMany("Call it solved", `Credit who solved it: they are named on the next numbered discovery${v.card.bounty_e8s ? `, and the bounty of ${icpText(v.card.bounty_e8s)} is split equally into their notebooks` : ""}. This cannot be undone.`, [...people].map(([value, label]) => ({ value, label, on: did.has(value) })), "Solved");
+      if (!chosen) return;
+      if (!chosen.length) return toast("Credit at least one person or agent.", "error");
+      try { const r = await registry().solve_problem(v.card.id, chosen); if (r.__kind__ === "Err") throw new Error(r.Err); toast(`Discovery №${r.Ok.card.discovery}. An obelisk goes up on the green.`, "ok"); } catch (e) { fail(e); }
+      return reload();
+    }
+    case "problem-pay": { if (!v) return; try { const r = await registry().pay_bounty(v.card.id); if (r.__kind__ === "Err") throw new Error(r.Err); toast(r.Ok ? `${r.Ok} still pending.` : "All paid out.", "ok"); } catch (e) { fail(e); } return reload(); }
+  }
+}
+/** A dialog of checkboxes; resolves to the values ticked, or null when cancelled. */
+function pickMany(title: string, body: string, items: { value: string; label: string; on: boolean }[], ok: string): Promise<string[] | null> {
+  return new Promise((res) => {
+    const scrim = document.createElement("div");
+    scrim.className = "scrim";
+    scrim.innerHTML = `<form class="modal" role="dialog" aria-modal="true"><h2>${esc(title)}</h2><p class="muted">${esc(body)}</p><div class="checks">${items.map((it) => `<label class="check"><input type="checkbox" name="v" value="${esc(it.value)}" ${it.on ? "checked" : ""}> ${esc(it.label)}</label>`).join("")}</div><div class="actions"><button type="button" class="btn" data-x="cancel">Cancel</button><button type="submit" class="btn btn-primary">${esc(ok)}</button></div></form>`;
+    const form = scrim.querySelector("form")!;
+    const done = (v: string[] | null) => { scrim.remove(); res(v); };
+    scrim.addEventListener("click", (e) => e.target === scrim && done(null));
+    form.querySelector("[data-x=cancel]")!.addEventListener("click", () => done(null));
+    form.addEventListener("submit", (e) => { e.preventDefault(); done([...form.querySelectorAll<HTMLInputElement>("input:checked")].map((i) => i.value)); });
+    document.body.append(scrim);
+  });
+}
+
 // --- the town: Lab's activity as a small isometric town (registry town.rs, town.ts)
 
 const townHouse = (h: Town["houses"][number]) => ({ lot: h.lot, storeys: h.storeys, size: h.size, lit: h.lit, low: h.low, badges: h.badges });
@@ -3062,6 +3378,7 @@ const townData = (t: Town): TownData => ({
   posts24h: t.posts_24h, listings: t.listings, rains24h: t.rains_24h, lastRain: t.last_rain === undefined ? undefined : Number(t.last_rain / 1_000_000n), hikers: t.hikers, off: t.off,
   building: [...t.building], notebooks: t.notebooks, spawned24h: t.spawned_24h, spawned7d: t.spawned_7d, newcomers7d: t.newcomers_7d, cycles: Number(t.cycles), burnPerDay: Number(t.burn_per_day), fundraisersOpen: t.fundraisers_open, raisedE8s: Number(t.raised_e8s), campers: t.campers, meCamping: t.me_camping,
   sponsors: t.sponsors.map((x) => ({ name: x.name, blurb: x.blurb, url: x.url, color: x.color })), myQuests: t.my_quests ? [Number(t.my_quests[0]), Number(t.my_quests[1]), t.my_quests[2]] : undefined,
+  problemsOpen: t.problems_open, discoveries: t.discoveries,
 });
 const fetchTown = () => registry().town().then((r) => (r.__kind__ === "Ok" ? demoTown(townData(r.Ok)) : null)).catch(() => null);
 /** Local development with ?town-demo: a busier town than a test network has, to judge the look. */
@@ -3154,6 +3471,7 @@ function townHud(d: TownData): string {
     ...(off.has("board") ? [] : [chip("pin", d.postsLive, `post${d.postsLive === 1 ? "" : "s"}`, "Live posts on the board")]),
     chip("bolt", cyclesText(d.cycles), `held · ${cyclesText(d.burnPerDay)}/day${n.days !== undefined ? ` · ${n.days}d` : ""}`, "Cycles every notebook holds between them, what they burn a day, and how long that lasts: the water tower"),
     ...(d.building.length ? [chip("plus", d.building.length, `going up`, "Notebooks made in the last three days")] : []),
+    ...(d.discoveries !== undefined ? [chip("award", d.discoveries, `discover${d.discoveries === 1 ? "y" : "ies"} · ${d.problemsOpen ?? 0} open`, "Problems solved together (an obelisk each on the green) and problems still open")] : []),
   ].join("");
 }
 /** The tour: the camera flies to the places that matter and a card says why. A step whose building
@@ -3243,6 +3561,7 @@ function townTip(tg: TownTarget): string {
     case "landmark": { const l = tg.landmark; let host = l.url; try { host = new URL(l.url).host; } catch { /* shown as is */ } return `<b>${esc(l.title)}</b>${l.sponsored ? line("A sponsored building: this project pays to keep Lab running.") : ""}${line(esc(l.blurb))}${go(`Click to open ${esc(host)}`)}`; }
     case "district": { const dd = tg.district; return `<b>${esc(dd.name)}</b>${line(esc(dd.blurb))}${line(`${dd.landmarks.length} landmarks, room for more`)}`; }
     case "park": return `<b>The park</b>${line("A bench by the pond.")}`;
+    case "obelisk": return tg.more ? `<b>The avenue of discoveries</b>${line(`${tg.n} problems solved together so far`)}${go("Click to read the ledger")}` : `<b>Discovery №${tg.n}</b>${line("A problem solved together: its claims checked, its attempts merged, everyone credited for good.")}${go("Click to read the ledger")}`;
     case "trail": return `<b>The trailhead</b>${line(d.hikers ? `${d.hikers} out on a trip right now, on time` : "Nobody out on a trip right now")}${line("Trips with a check-in contact, from the Trips kit")}`;
     case "walker": return `<b>${tg.me ? "You" : "Someone"}</b>${line(`in #${esc(tg.channel)}`)}`;
   }
@@ -3257,6 +3576,7 @@ function townOpen(tg: TownTarget) {
     case "board": if (!S.town.data?.off.includes("board")) { if (S.identity) location.hash = "#/board"; else signin(); } return;
     case "market": if (S.identity) location.hash = "#/market"; else signin(); return;
     case "factory": location.hash = "#/"; return;
+    case "obelisk": location.hash = "#/discoveries"; return;
     case "visitor": if (tg.mine) location.hash = "#/"; return;
     // another app: a new tab, never handing it this page
     case "landmark": window.open(tg.landmark.url, "_blank", "noopener,noreferrer"); return;
@@ -4788,7 +5108,7 @@ function render() {
   const focusedPath = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>(".cm-host")?.dataset.cm;
   const chatTop = document.querySelector<HTMLElement>("[data-chat-log]")?.scrollTop;
   destroyEditors();
-  app.innerHTML = S.shared ? sharedPage() : S.town ? townPage() : S.board && S.identity ? boardPage() : S.community && S.identity ? communityPage() : S.market && S.identity ? marketPage() : S.admin && S.isAdmin ? adminPage() : !S.identity ? landing() : S.notebook ? workspace() : notebooksPage();
+  app.innerHTML = S.shared ? sharedPage() : S.town ? townPage() : S.problems ? problemsPage() : S.board && S.identity ? boardPage() : S.community && S.identity ? communityPage() : S.market && S.identity ? marketPage() : S.admin && S.isAdmin ? adminPage() : !S.identity ? landing() : S.notebook ? workspace() : notebooksPage();
   if (S.show) app.insertAdjacentHTML("beforeend", showHtml());
   // a re-render must not move the reader: keep the chat where it was, or at the bottom
   if (S.community) { const log = app.querySelector<HTMLElement>("[data-chat-log]"); if (log) { log.scrollTop = S.community.atBottom === false && chatTop !== undefined ? chatTop : log.scrollHeight; chatScrolled(); } }
@@ -5114,6 +5434,7 @@ async function loadNotebook() {
   const [folders, info, topups, keys, shares, settings] = await Promise.all([a.folders(), a.info(), a.topups(10), a.agent_keys(), a.shares(), a.get_settings()]);
   S.agentKeys = keys.__kind__ === "Ok" ? keys.Ok : [];
   S.shares = shares.__kind__ === "Ok" ? shares.Ok : [];
+  if (flag("problems")) { const c = S.notebook!.canister; void registry().problems_of(c).then((cards) => { for (const [path, card] of cards) S.myProblems.set(`${c.toText()}/${path}`, card); render(); }).catch(() => undefined); }
   try {
     const j = settings.__kind__ === "Ok" && settings.Ok ? (JSON.parse(settings.Ok) as Partial<Settings>) : {};
     S.settings = parseSettings(j);
@@ -5380,6 +5701,7 @@ async function save(path: string) {
     reindex();
     renderSide();
     if (!d.dirty) void runRules(path);
+    if (!d.dirty) republishProblem(path, content);
     void cacheSet(`nb:${S.notebook.canister.toText()}`, { notes: S.notes, folders: S.folders, settings: S.settings, at: Date.now() });
   } catch (e) {
     if (errMsg(e) === "offline" || !navigator.onLine) {
@@ -6255,6 +6577,7 @@ function menuFor(kind: "file" | "folder" | "root", path: string, x: number, y: n
   } else if (kind === "folder") {
     contextMenu(x, y, `/${path}`, [
       { label: "New note here", icon: "plus", action: () => void newNote(undefined, path) },
+      ...(flag("problems") ? [{ label: "New problem here", icon: "target", action: () => void newProblem(path) } as MenuItem] : []),
       { label: "New note from template…", icon: "template", action: () => void newFromTemplate(path) },
       { label: "New drawing here", icon: "edit", action: () => void newDrawing(path) },
       { label: "New kanban board here", icon: "board", action: () => void newBoard(path) },
@@ -6909,6 +7232,7 @@ function flashCopied(what: string) {
 }
 
 async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
+  if (action.startsWith("problem")) return problemAction(action, el);
   const pid = el.dataset.pane ? Number(el.dataset.pane) : undefined;
   const newTab = !!(ev && (ev.metaKey || ev.ctrlKey || ev.button === 1));
   if (action === "admin-stats") return adminStatsAction();
@@ -7644,7 +7968,7 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
       return menuFor("root", "", r.left - 160, r.bottom + 4);
     }
     case "new":
-      return newNote();
+      return newMenu(el);
     case "tab-new":
       return newNote(undefined, undefined, pid);
     case "tab-open":
@@ -8514,7 +8838,9 @@ window.addEventListener("hashchange", () => {
   if (location.hash !== "#/community" && S.community) { S.community = undefined; clearInterval(chatTimer); left = true; }
   if (!location.hash.startsWith("#/board") && S.board) { S.board = undefined; left = true; }
   if (location.hash !== "#/town" && S.town) { S.town = undefined; clearInterval(townTimer); left = true; }
+  if (!problemRoute() && S.problems) { S.problems = undefined; left = true; }
   if (location.hash === "#/town") return void loadTown();
+  { const pm = problemRoute(); if (pm) return void loadProblems(pm[1] as ProblemsTab, pm[2] ? BigInt(pm[2]) : undefined); }
   const bm = /^#\/board(?:\/(\d+))?$/.exec(location.hash);
   if (bm) { if (S.identity) return void loadBoard(undefined, bm[1] ? BigInt(bm[1]) : undefined); location.hash = "#/"; return; }
   if (location.hash === "#/admin") {
@@ -8599,6 +8925,7 @@ currentIdentity().then(async (id) => {
   const sh = sharedRoute();
   if (sh) return openShared(sh[1], decodeURIComponent(sh[2]));
   if (location.hash === "#/town") { if (id) void loadNotebooks(); return loadTown(); }
+  { const pm = problemRoute(); if (pm) { if (id) void loadNotebooks(); return loadProblems(pm[1] as ProblemsTab, pm[2] ? BigInt(pm[2]) : undefined); } }
   if (!id) return;
   render();
   await loadNotebooks();

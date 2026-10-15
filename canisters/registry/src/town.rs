@@ -88,6 +88,9 @@ pub struct Town {
     pub sponsors: Vec<TownSponsor>,
     /// your own quests, from your notebooks: notes, links, best streak
     pub my_quests: Option<(u64, u64, u32)>,
+    /// open problems and numbered discoveries (obelisks on the green); None while problems are off
+    pub problems_open: Option<u32>,
+    pub discoveries: Option<u32>,
 }
 
 const DAY_NS: u64 = 24 * HOUR_NS;
@@ -358,7 +361,8 @@ fn town() -> Result<Town, String> {
     let me_camping = me != Principal::anonymous() && !owners.contains(&me) && VISITORS.with_borrow(|v| v.contains_key(&me));
     let week = now.saturating_sub(7 * DAY_NS);
     let newcomers_7d = MEMBERS.with_borrow(|m| m.iter().filter(|e| e.value().0.joined_at >= week).count()) as u32;
-    Ok(TOWN.with_borrow(|t| Town { at: t.at, homes: t.homes, max_shown: MAX_HOUSES as u32, my_house: mine.and_then(|l| t.all.get(&l).cloned()), houses: t.houses.clone(), people: t.people, quiet: t.quiet, mine, my_channel, channels, post_topics, posts_live, posts_24h, listings, rains_24h, last_rain, hikers, off, building, notebooks, spawned_24h, spawned_7d, newcomers_7d, cycles: Nat::from(t.cycles), burn_per_day: Nat::from(t.burn), campers, me_camping, fundraisers_open: t.fundraisers_open, raised_e8s: t.raised_e8s, sponsors, my_quests: t.quests.get(&me).copied() }))
+    let pr = flag_on("problems").then(crate::problems::counts);
+    Ok(TOWN.with_borrow(|t| Town { at: t.at, homes: t.homes, max_shown: MAX_HOUSES as u32, my_house: mine.and_then(|l| t.all.get(&l).cloned()), houses: t.houses.clone(), people: t.people, quiet: t.quiet, mine, my_channel, channels, post_topics, posts_live, posts_24h, listings, rains_24h, last_rain, hikers, off, building, notebooks, spawned_24h, spawned_7d, newcomers_7d, cycles: Nat::from(t.cycles), burn_per_day: Nat::from(t.burn), campers, me_camping, fundraisers_open: t.fundraisers_open, raised_e8s: t.raised_e8s, sponsors, my_quests: t.quests.get(&me).copied(), problems_open: pr.map(|c| c.0), discoveries: pr.map(|c| c.1) }))
 }
 
 #[cfg(test)]

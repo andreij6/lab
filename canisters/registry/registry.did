@@ -16,6 +16,17 @@ type AppStats = record {
   // cycles earned from model answers, all time
   ai_fees_cycles : nat;
 };
+type AttemptStatus = variant { Open; Merged; Declined };
+type AttemptView = record {
+  at : nat64;
+  by : text;
+  id : nat64;
+  status : AttemptStatus;
+  title : text;
+  by_name : text;
+  path : text;
+  notebook : principal;
+};
 // The judge's verdict on a notebook, attached to its listing.
 type Attestation = record {
   at : nat64;
@@ -54,6 +65,42 @@ type Channel = record {
   section : opt text;
   created_at : nat64;
   created_by : principal;
+};
+type ClaimView = record {
+  n : nat32;
+  checked : bool;
+  stale : nat32;
+  passes : nat32;
+  fails : nat32;
+};
+type DiscoveryView = record {
+  n : nat64;
+  at : nat64;
+  field : text;
+  title : text;
+  credits : vec record { text; text };
+  note_hash : text;
+  problem : nat64;
+};
+type EventKind = variant {
+  Status;
+  Merged;
+  Comment;
+  Solved;
+  Bounty;
+  Declined;
+  Check;
+  Published;
+  Attempt;
+};
+type EventView = record {
+  at : nat64;
+  by : text;
+  seq : nat64;
+  kind : EventKind;
+  claim : opt nat32;
+  by_name : text;
+  "text" : text;
 };
 type Flag = record {
   on : bool;
@@ -199,6 +246,50 @@ type PostComment = record {
   downs : vec principal;
   parent : opt nat64;
 };
+// A problem on the board (no principals).
+type ProblemCard = record {
+  id : nat64;
+  field : text;
+  claims : nat32;
+  status : ProblemStatus;
+  title : text;
+  checked : nat32;
+  mine : bool;
+  attempts : nat32;
+  discovery : opt nat64;
+  bounty_e8s : nat64;
+  updated : nat64;
+  following : bool;
+};
+type ProblemStatus = variant { Open; Solved; Partial };
+type ProblemView = record {
+  created : nat64;
+  credits : vec record { text; text };
+  claim_views : vec ClaimView;
+  statement : text;
+  card : ProblemCard;
+  path : text;
+  attempt_views : vec AttemptView;
+  depends : vec text;
+  notebook : principal;
+  events : vec EventView;
+  payouts_pending : nat32;
+  note_hash : text;
+  solved_at : opt nat64;
+  followers : nat32;
+  owner_name : text;
+};
+type PublishInput = record {
+  field : text;
+  claims : nat32;
+  status : ProblemStatus;
+  title : text;
+  statement : text;
+  path : text;
+  depends : vec text;
+  notebook : principal;
+  note_hash : text;
+};
 type Rain = record {
   at : nat64;
   id : nat64;
@@ -218,32 +309,39 @@ type Rating = record {
 type Reaction = record { by : vec principal; emoji : text };
 type Result = variant { Ok; Err : text };
 type Result_1 = variant { Ok : vec principal; Err : text };
-type Result_10 = variant { Ok : nat; Err : text };
-type Result_11 = variant { Ok : Channel; Err : text };
-type Result_12 = variant { Ok : Post; Err : text };
-type Result_13 = variant { Ok : nat; Err : TransferError };
-type Result_14 = variant { Ok : Member; Err : text };
-type Result_15 = variant { Ok : text; Err : text };
-type Result_16 = variant { Ok : ListingView; Err : text };
-type Result_17 = variant { Ok : vec SnapshotInfo; Err : text };
-type Result_18 = variant { Ok : vec Message; Err : text };
-type Result_19 = variant { Ok : Health; Err : text };
+type Result_10 = variant { Ok : PostComment; Err : text };
+type Result_11 = variant { Ok : EventView; Err : text };
+type Result_12 = variant { Ok : nat; Err : text };
+type Result_13 = variant { Ok : Channel; Err : text };
+type Result_14 = variant { Ok : Post; Err : text };
+type Result_15 = variant { Ok : bool; Err : text };
+type Result_16 = variant { Ok : ProblemCard; Err : text };
+type Result_17 = variant { Ok : nat; Err : TransferError };
+type Result_18 = variant { Ok : Member; Err : text };
+type Result_19 = variant { Ok : text; Err : text };
 type Result_2 = variant { Ok : AppStats; Err : text };
-type Result_20 = variant { Ok : SponsorView; Err : text };
-type Result_21 = variant { Ok : vec SponsorView; Err : text };
-type Result_22 = variant { Ok : vec Online; Err : text };
-type Result_23 = variant { Ok : Rain; Err : text };
-type Result_24 = variant { Ok : Bug; Err : text };
-type Result_25 = variant { Ok : Flag; Err : text };
-type Result_26 = variant { Ok : SnapshotInfo; Err : text };
-type Result_27 = variant { Ok : Town; Err : text };
+type Result_20 = variant { Ok : ListingView; Err : text };
+type Result_21 = variant { Ok : vec SnapshotInfo; Err : text };
+type Result_22 = variant { Ok : AttemptView; Err : text };
+type Result_23 = variant { Ok : vec Message; Err : text };
+type Result_24 = variant { Ok : Health; Err : text };
+type Result_25 = variant { Ok : SponsorView; Err : text };
+type Result_26 = variant { Ok : vec SponsorView; Err : text };
+type Result_27 = variant { Ok : vec Online; Err : text };
+type Result_28 = variant { Ok : ProblemView; Err : text };
+type Result_29 = variant { Ok : vec EventView; Err : text };
 type Result_3 = variant { Ok : nat32; Err : text };
+type Result_30 = variant { Ok : Rain; Err : text };
+type Result_31 = variant { Ok : Bug; Err : text };
+type Result_32 = variant { Ok : Flag; Err : text };
+type Result_33 = variant { Ok : SnapshotInfo; Err : text };
+type Result_34 = variant { Ok : Town; Err : text };
 type Result_4 = variant { Ok : Attestation; Err : text };
 type Result_5 = variant { Ok : vec Bug; Err : text };
 type Result_6 = variant { Ok : Notebook; Err : text };
-type Result_7 = variant { Ok : Watch; Err : text };
-type Result_8 = variant { Ok : Message; Err : text };
-type Result_9 = variant { Ok : PostComment; Err : text };
+type Result_7 = variant { Ok : ClaimView; Err : text };
+type Result_8 = variant { Ok : Watch; Err : text };
+type Result_9 = variant { Ok : Message; Err : text };
 // How a payment token turns into a notebook's cycles.
 type Route = variant {
   // ICP: ledger -> cycles minting canister
@@ -322,11 +420,14 @@ type Town = record {
   max_shown : nat32;
   // cycles every notebook holds, and what they burn a day between them (the water tower)
   cycles : nat;
+  // open problems and numbered discoveries (obelisks on the green); None while problems are off
+  problems_open : opt nat32;
   my_channel : opt text;
   // notebooks the registry made in the last day and week (the factory)
   spawned_24h : nat32;
   posts_24h : nat32;
   last_rain : opt nat64;
+  discoveries : opt nat32;
   houses : vec TownHouse;
   // people who joined the community in the last week (the school)
   newcomers_7d : nat32;
@@ -356,6 +457,18 @@ type TownSponsor = record {
   name : text;
   color : text;
   blurb : text;
+};
+// What an actor has done across every problem, derived when asked.
+type TrackRecord = record {
+  merged : nat32;
+  actor : text;
+  agent : bool;
+  solved : nat32;
+  name : text;
+  attempts : nat32;
+  since : nat64;
+  problems : nat32;
+  checks : nat32;
 };
 type TransferArg = record {
   to : Account;
@@ -451,43 +564,55 @@ service : () -> {
   // the seller gets it minus the market fee, and the canister changes hands.
   buy : (principal, opt principal) -> (Result_6);
   channels : () -> (vec Channel) query;
+  // Check one claim of a problem: pass or fail, with what you found. Not the owner, nor the owner's
+  // agents: the proof is the review, and nobody reviews their own. Stamped with the note's hash now.
+  check_claim : (nat64, nat32, bool, text, opt text) -> (Result_7);
   // "I am OK": resets the check-in clock; a later `return_by` moves the deadline.
-  check_in : (nat64, opt nat64) -> (Result_7);
+  check_in : (nat64, opt nat64) -> (Result_8);
   // The notebook owner (or an admin) stops a fundraiser.
-  close_fund : (text, nat64) -> (Result_8);
+  close_fund : (text, nat64) -> (Result_9);
   // Back home: the contact stops watching.
-  close_watch : (nat64) -> (Result_7);
-  comment_post : (nat64, opt nat64, text) -> (Result_9);
+  close_watch : (nat64) -> (Result_8);
+  comment_post : (nat64, opt nat64, text) -> (Result_10);
+  // Say something on a problem's thread, about one claim or the whole thing.
+  comment_problem : (nat64, text, opt nat32, opt text) -> (Result_11);
   // A notebook hands over ck tokens that landed on its account (it approved the registry first):
   // swapped for ICP on ICPSwap and minted into that notebook. Notebooks only.
-  convert_deposit : (text, nat) -> (Result_10);
-  create_channel : (text, text) -> (Result_11);
+  convert_deposit : (text, nat) -> (Result_12);
+  create_channel : (text, text) -> (Result_13);
   // Spawn a notebook canister. The caller becomes its owner and a controller next to this registry.
   create_notebook : (text) -> (Result_6);
   // The same, with the spawn price pulled from `payer`'s allowance (an OISY wallet) instead of the caller's.
   create_notebook_paid_by : (text, principal) -> (Result_6);
   // A new post in a topic (a community channel). One of the author's notebooks pays what it costs.
-  create_post : (text, text, text, opt Gist) -> (Result_12);
+  create_post : (text, text, text, opt Gist) -> (Result_14);
   delete_channel : (text) -> (Result);
   // Remove a message you wrote (or any, as an admin); the slot stays with the text blanked.
   delete_message : (text, nat64) -> (Result);
   // Delete a notebook you own for good: its cycles go to `refund_to` (another notebook of yours)
   // or, when that is None, to the registry; then the canister is stopped and deleted and every
   // registry record of it (listing, token, attestation) goes. Notes and history cannot come back.
-  delete_notebook : (principal, opt principal) -> (Result_10);
+  delete_notebook : (principal, opt principal) -> (Result_12);
   // The author or an admin removes a post and its comments for good.
   delete_post : (nat64) -> (Result);
   delete_post_comment : (nat64, nat64) -> (Result);
   delete_snapshot : (principal, blob) -> (Result);
   delist : (principal) -> (Result);
+  // The ledger of discoveries, newest first: a permanent, numbered credit to everyone named.
+  discoveries : () -> (vec DiscoveryView) query;
   // Chip in: the ICP is pulled from your wallet (approve the registry first) and minted into the
   // notebook's cycles in the same call.
-  donate : (text, nat64, nat64) -> (Result_8);
+  donate : (text, nat64, nat64) -> (Result_9);
   // The author rewrites a message; the same filters apply and it is marked edited.
-  edit_message : (text, nat64, text) -> (Result_8);
+  edit_message : (text, nat64, text) -> (Result_9);
   flags : () -> (vec Flag) query;
+  follow_problem : (nat64, bool, opt text) -> (Result_15);
   // Forget a notebook you own (after deleting the canister yourself); the canister is not touched.
   forget_notebook : (principal) -> (Result);
+  // Put ICP on a problem, pulled from your allowance for the registry (OISY approves it once). It is
+  // held on the registry's account until the owner calls the problem solved, then minted as cycles
+  // into the notebooks of the people and agents credited.
+  fund_bounty : (nat64, nat64) -> (Result_16);
   get_post : (nat64) -> (opt Post) query;
   github_repo : () -> (text) query;
   icrc7_atomic_batch_transfers : () -> (opt bool) query;
@@ -512,29 +637,33 @@ service : () -> {
   icrc7_tokens_of : (Account, opt nat, opt nat) -> (vec nat) query;
   icrc7_total_supply : () -> (nat) query;
   // Give a notebook away (ICRC-7 transfer): the caller must own it; one token per call.
-  icrc7_transfer : (vec TransferArg) -> (vec opt Result_13);
+  icrc7_transfer : (vec TransferArg) -> (vec opt Result_17);
   icrc7_tx_window : () -> (opt nat) query;
   // Is the caller a site admin (a controller or an added admin)?
   is_admin : () -> (bool) query;
   // Join or rename: anyone who owns a notebook may chat; no ICP needs to sit in the wallet.
-  join_community : (text) -> (Result_14);
+  join_community : (text) -> (Result_18);
   // Link a GitHub login to the caller: the login's public bio must contain the caller's principal,
   // and the login must be a contributor to the configured repository.
-  link_github : (text) -> (Result_15);
+  link_github : (text) -> (Result_19);
   // Offer a notebook you own for sale, priced in any accepted token's smallest unit. The judge runs first if it has not yet.
-  list_notebook : (principal, text, nat, text) -> (Result_16);
-  list_snapshots : (principal) -> (Result_17);
+  list_notebook : (principal, text, nat, text) -> (Result_20);
+  list_snapshots : (principal) -> (Result_21);
   listing : (principal) -> (opt ListingView) query;
   listings : () -> (vec ListingView) query;
   market_fee : () -> (nat64) query;
   members : () -> (vec Member) query;
+  // The owner merges an attempt (after copying it into the problem note) or declines it.
+  merge_attempt : (nat64, bool) -> (Result_22);
   // Cycles a chat message of `bytes` costs.
   message_cycles : (nat64) -> (nat64) query;
   message_ttl_days : () -> (nat64) query;
   // Messages in a channel after `after` (0 for the newest page), oldest first, at most `limit` (≤ 100).
-  messages : (text, nat64, nat32) -> (Result_18) query;
+  messages : (text, nat64, nat32) -> (Result_23) query;
   // The caller's own reports, newest first.
   my_bugs : () -> (vec Bug) query;
+  // The problems you follow: (id, title, last change), newest change first.
+  my_follows : (opt text) -> (vec record { nat64; text; nat64 }) query;
   my_github : () -> (opt text) query;
   my_membership : () -> (opt Member) query;
   // Messages that mention the caller with an id above `after`, oldest first, at most 50.
@@ -553,67 +682,80 @@ service : () -> {
   notebook : (principal) -> (opt Notebook) query;
   // Cycles, burn rate and freeze state of a notebook you own. Works while the notebook is frozen,
   // because it asks the management canister rather than the notebook.
-  notebook_status : (principal) -> (Result_19);
+  notebook_status : (principal) -> (Result_24);
   online : () -> (vec Online) query;
   // Pay for a notebook's cycles with any accepted token. `amount` is in the token's smallest unit and
   // is pulled from `payer`'s ICRC-2 allowance for the registry (the caller when empty; an OISY wallet
   // otherwise). ICP goes to the minting canister, TCYCLES is withdrawn straight into the notebook,
   // and every other token is swapped for ICP on ICPSwap first. Returns the cycles that reached the notebook.
-  pay : (principal, text, nat, opt principal) -> (Result_10);
+  pay : (principal, text, nat, opt principal) -> (Result_12);
+  // Retry the payouts of a solved problem (its owner, a credited actor's owner, or an admin).
+  pay_bounty : (nat64) -> (Result_3);
   // Pay for an approved building for `months` (1-12), pulled from your allowance for the registry.
   // Paying again extends the time.
-  pay_sponsor : (nat64, nat8) -> (Result_20);
+  pay_sponsor : (nat64, nat8) -> (Result_25);
   // Admin: proposals waiting for review.
-  pending_sponsors : () -> (Result_21) query;
+  pending_sponsors : () -> (Result_26) query;
   // Pin or unpin a message in its channel (the author or an admin).
-  pin_message : (text, nat64, bool) -> (Result_8);
+  pin_message : (text, nat64, bool) -> (Result_9);
   // "I am reading this channel": kept two minutes for the online list.
-  ping_chat : (text) -> (Result_22);
+  ping_chat : (text) -> (Result_27);
   // Pinned messages of a channel, oldest first.
-  pinned : (text) -> (Result_18) query;
+  pinned : (text) -> (Result_23) query;
   // Post to a channel (members with a current ICP check). Markdown, 2000 characters at most.
-  post : (text, text, opt nat64) -> (Result_8);
+  post : (text, text, opt nat64) -> (Result_9);
   post_comments : (nat64) -> (vec PostComment) query;
   // Cycles a board post of `bytes` costs (title, text and any attached note).
   post_cycles : (nat64) -> (nat64) query;
   // Start a fundraiser for one of your notebooks. Donations become cycles for it and nothing else.
-  post_fund : (text, text, principal, nat64) -> (Result_8);
+  post_fund : (text, text, principal, nat64) -> (Result_9);
   // Share a note in chat: `text` is the comment (may be empty), the gist is a snapshot of the note.
-  post_gist : (text, text, text, text, principal, text) -> (Result_8);
+  post_gist : (text, text, text, text, principal, text) -> (Result_9);
   // Start a fundraiser for an AI plan: developers channel, linked contributors only; donations go
   // to the contributor's wallet.
-  post_plan_fund : (text, text, text, nat64) -> (Result_8);
+  post_plan_fund : (text, text, text, nat64) -> (Result_9);
   // A poll: the text is the question, 2-10 options, one vote per member (re-voting moves it).
-  post_poll : (text, text, vec text) -> (Result_8);
+  post_poll : (text, text, vec text) -> (Result_9);
   // Posts, newest first; `topic` filters, at most 200.
   posts : (opt text) -> (vec Post) query;
   price : () -> (nat64) query;
+  problem : (nat64, opt text) -> (Result_28) query;
+  // Everything that happened on a problem after event `since` (0: all), oldest first, up to 100.
+  problem_events : (nat64, nat64) -> (Result_29) query;
+  // The board: problems in a field (None: all), open ones first, newest change first.
+  problems : (opt text, opt ProblemStatus, opt text) -> (vec ProblemCard) query;
+  // The problems published from a notebook (its owner sees them on their notes).
+  problems_of : (principal) -> (vec record { text; ProblemCard }) query;
+  // Put a problem note on the board, or update it there: the owner of its notebook, after sharing the
+  // note publicly so anyone can read it. Keyed by notebook and path, so saving the note again just
+  // refreshes the title, statement, claims and hash. A solved problem keeps its status.
+  publish_problem : (PublishInput) -> (Result_28);
   // Send `total_e8s` of ICP, pulled from your allowance for the registry, split over `count` people
   // picked at random from those who posted in the last 30 minutes. Returns the rain, which is also
   // announced in the channel.
-  rain : (text, nat64, nat8) -> (Result_23);
+  rain : (text, nat64, nat8) -> (Result_30);
   // How many people could be rained on right now (excluding you).
   rain_eligible : () -> (nat32) query;
   // Rate a notebook you bought, 1 to 5 stars; rating again replaces your earlier one.
   rate : (principal, nat8, text) -> (Result);
   ratings : (principal) -> (vec Rating) query;
   // Toggle an emoji reaction on a message.
-  react : (text, nat64, text) -> (Result_8);
+  react : (text, nat64, text) -> (Result_9);
   recent_rain : (nat32) -> (vec Rain) query;
   remove_admin : (principal) -> (Result);
   remove_token : (text) -> (Result);
   // Anyone signed in can report a bug (title + detail); the app adds where it happened.
-  report_bug : (text, text, text) -> (Result_24);
+  report_bug : (text, text, text) -> (Result_31);
   // An idea or feature request: same queue as bugs, marked so admins can triage separately.
-  report_idea : (text, text, text) -> (Result_24);
+  report_idea : (text, text, text) -> (Result_31);
   // Roll a notebook back to a snapshot: stop, load, start.
   restore_snapshot : (principal, blob) -> (Result);
   // Admin: approve a proposal, or turn it down (which removes it).
   review_sponsor : (nat64, bool) -> (Result);
   // Put a channel in a section, or with None back under "Channels" (admins).
-  set_channel_section : (text, opt text) -> (Result_11);
+  set_channel_section : (text, opt text) -> (Result_13);
   // Admin: switch a feature on or off for everyone.
-  set_flag : (text, bool) -> (Result_25);
+  set_flag : (text, bool) -> (Result_32);
   // Change one notebook's freezing threshold (controller only): the admin's knob for testing a freeze or granting more time.
   set_freezing_threshold : (principal, nat64) -> (Result);
   // Admin: the `owner/name` repository whose contributors may use the developers channel.
@@ -633,32 +775,44 @@ service : () -> {
   set_wallet : (opt principal) -> (Result);
   // Leave a trip plan with a community member: they see it, and get an alert if you miss a check-in
   // or are not back by `return_by` (nanoseconds).
-  set_watch : (text, text, text, nat64, opt nat32) -> (Result_7);
+  set_watch : (text, text, text, nat64, opt nat32) -> (Result_8);
   // Drop a post into a channel: a message that links to it.
-  share_post : (text, nat64) -> (Result_8);
+  share_post : (text, nat64) -> (Result_9);
+  // The owner calls it solved and credits up to ten actors (attempt authors, checkers, themselves): the
+  // problem becomes the next numbered discovery and the bounty is split equally among the credited
+  // actors that have a notebook to receive it (none: the owner's primary notebook; none at all: Lab keeps
+  // it). Everything is decided before the first ledger call, so a second call finds it solved.
+  solve_problem : (nat64, vec text) -> (Result_28);
   // Propose a building (signed in). It shows once an admin approves it and you have paid.
-  sponsor : (SponsorInput) -> (Result_20);
+  sponsor : (SponsorInput) -> (Result_25);
   sponsor_price : () -> (nat64) query;
   // The buildings in the Sponsors district: approved and paid for.
   sponsors : () -> (vec SponsorView) query;
   stats : () -> (Stats) query;
+  // Send an attempt back: a note of yours (shared publicly first) that the problem's owner may merge.
+  submit_attempt : (nat64, principal, text, text, opt text) -> (Result_22);
   // Convert the ICP collected from spawns into the registry's own cycles (controller or timer).
-  sweep_fees : () -> (Result_10);
+  sweep_fees : () -> (Result_12);
   // The registry keeps no tokens either: market fees in ck tokens or TCYCLES become its own cycles hourly.
-  sweep_holdings : () -> (Result_15);
+  sweep_holdings : () -> (Result_19);
   // Take a snapshot of a notebook canister (its owner); at most one is kept, the newest replaces it.
-  take_snapshot : (principal, opt blob) -> (Result_26);
+  take_snapshot : (principal, opt blob) -> (Result_33);
   token_id : (principal) -> (opt nat64) query;
   // Give every notebook from before tokenisation an ICRC-7 id (controller only; new ones get it at spawn).
   tokenize_all : () -> (Result_3);
   tokens : () -> (vec Token) query;
-  // Top up a notebook you own through the registry, so it works while the notebook is frozen and
-  // cannot take calls itself: `amount_e8s` is pulled from `payer`'s ICRC-2 allowance for the
-  // registry (the caller when `payer` is empty; an OISY wallet otherwise), sent to the cycles
-  // minting canister for the notebook, and minted into its cycles. Returns the cycles minted.
-  top_up_notebook : (principal, nat64, opt principal) -> (Result_10);
+  // Top up a notebook through the registry, so it works while the notebook is frozen and cannot
+  // take calls itself: `amount_e8s` is pulled from `payer`'s ICRC-2 allowance for the registry
+  // (the caller when `payer` is empty; an OISY wallet otherwise), sent to the cycles minting
+  // canister for the notebook, and minted into its cycles. Returns the cycles minted. Any
+  // registered notebook, from anyone: team members chip in, and a problem's backers grant compute
+  // to the agents working on it; it is the payer's ICP and the notebook only gains.
+  top_up_notebook : (principal, nat64, opt principal) -> (Result_12);
   // The town right now: the houses (counted every few hours) and the public spaces (live).
-  town : () -> (Result_27) query;
+  town : () -> (Result_34) query;
+  track_record : (text) -> (opt TrackRecord) query;
+  // Track records of everyone who has done something on a problem, most active first.
+  track_records : (nat32) -> (vec TrackRecord) query;
   // Strips headers so every replica sees the same response.
   transform_github : (TransformArgs) -> (HttpRequestResult) query;
   // New (not deleted) messages in every channel after the id the caller last saw there, capped at
@@ -667,15 +821,15 @@ service : () -> {
       vec record { text; nat32 },
     ) query;
   // Move a report along and leave a note (admin only).
-  update_bug : (nat64, BugStatus, text) -> (Result_24);
+  update_bug : (nat64, BugStatus, text) -> (Result_31);
   // Upgrade every notebook to the wasm embedded in this registry (controller only).
   upgrade_notebooks : () -> (Result_3);
   // The app says hello when someone signs in, so the town can count people without a notebook yet.
   visit : () -> ();
-  vote : (text, nat64, nat32) -> (Result_8);
-  vote_comment : (nat64, nat64, int8) -> (Result_9);
+  vote : (text, nat64, nat32) -> (Result_9);
+  vote_comment : (nat64, nat64, int8) -> (Result_10);
   // `dir` is 1, -1 or 0 to clear. One vote per member, changeable.
-  vote_post : (nat64, int8) -> (Result_12);
+  vote_post : (nat64, int8) -> (Result_14);
   // Trips people left with me, open ones first; `overdue` says whether to raise the alarm.
   watching : () -> (vec Watch) query;
 }

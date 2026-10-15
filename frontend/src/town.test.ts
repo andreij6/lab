@@ -153,3 +153,16 @@ test("town: seasons and projection", () => {
   assert.equal(season(new Date(2027, 1, 28)).next, "spring");
   for (const [x, y] of [[0, 0], [3.5, -2], [-10, 12]]) { const [a, b] = unproject(...project(x, y)); assert.ok(Math.abs(a - x) < 1e-9 && Math.abs(b - y) < 1e-9); }
 });
+
+test("an obelisk on the green per discovery, capped with a numbered one", () => {
+  const none = layoutTown(town([house(3)]));
+  assert.equal(none.objs.filter((o) => o.k === "obelisk").length, 0);
+  const three = layoutTown(town([house(3)], { discoveries: 3 })).objs.filter((o) => o.k === "obelisk");
+  assert.deepEqual(three.map((o) => o.n).sort(), [1, 2, 3]);
+  assert.ok(three.every((o) => o.x < 0 && o.y < 0), "on the green, behind the Lab");
+  const many = layoutTown(town([house(3)], { discoveries: 20 })).objs.filter((o) => o.k === "obelisk");
+  assert.equal(many.length, 8);
+  const last = many.find((o) => (o.tg as { more: boolean }).more)!;
+  assert.equal(last.n, 20);
+  assert.equal(many.filter((o) => (o.tg as { more: boolean }).more).length, 1);
+});
