@@ -5485,9 +5485,12 @@ function render() {
   unmountEditors(true);
   const focusedPath = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>(".cm-host")?.dataset.cm;
   const chatTop = document.querySelector<HTMLElement>("[data-chat-log]")?.scrollTop;
+  // the file pane keeps its place: opening a note far down the list must not jump the list back to the top
+  const sideTop = document.getElementById("side")?.scrollTop ?? 0, asideTop = document.getElementById("aside")?.scrollTop ?? 0;
   destroyEditors();
   app.innerHTML = S.shared ? sharedPage() : S.town ? townPage() : S.problems ? problemsPage() : S.board && S.identity ? boardPage() : S.community && S.identity ? communityPage() : S.market && S.identity ? marketPage() : S.admin && S.isAdmin ? adminPage() : !S.identity && !(S.notebook && isSandbox()) ? landing() : S.notebook ? workspace() : notebooksPage();
   if (S.show) app.insertAdjacentHTML("beforeend", showHtml());
+  { const s = document.getElementById("side"); if (s && sideTop) s.scrollTop = sideTop; const a = document.getElementById("aside"); if (a && asideTop) a.scrollTop = asideTop; }
   // a re-render must not move the reader: keep the chat where it was, or at the bottom
   if (S.community) { const log = app.querySelector<HTMLElement>("[data-chat-log]"); if (log) { log.scrollTop = S.community.atBottom === false && chatTop !== undefined ? chatTop : log.scrollHeight; chatScrolled(); } }
   mountEditors();
@@ -5527,8 +5530,8 @@ function scrollPending() {
 function renderSide() {
   const s = document.getElementById("side");
   const a = document.getElementById("aside");
-  if (s) s.innerHTML = side();
-  if (a) a.innerHTML = aside();
+  if (s) { const top = s.scrollTop; s.innerHTML = side(); s.scrollTop = top; }
+  if (a) { const top = a.scrollTop; a.innerHTML = aside(); a.scrollTop = top; }
   const c = cur();
   const n = c ? S.comments.filter((x) => x.path === c).length : 0;
   document.querySelectorAll<HTMLElement>('[data-action="comments"]').forEach((b) => { b.querySelector(".badge")?.remove(); if (n) b.insertAdjacentHTML("beforeend", `<span class="badge">${n}</span>`); });
