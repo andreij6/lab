@@ -1305,7 +1305,7 @@ function shell(body: string): string {
       </nav>`
     : "";
   const alert = isSandbox()
-    ? `<div class="alert-bar sandbox-bar">🧪 <b>Browser Sandbox</b> — stored locally in this browser (no ICP required). <button type="button" class="btn btn-primary" data-action="sandbox-mint">${icon("bolt")}Mint to on-chain canister</button>${S.identity ? `<a class="btn btn-ghost" href="#/" data-action="nav">Your notebooks</a>` : `<button type="button" class="btn btn-ghost" data-action="sign-in">Sign in with Internet Identity</button>`}</div>`
+    ? `<div class="alert-bar sandbox-bar"><span class="grow">🧪 <b>Browser sandbox</b><span class="lbl"> · stored in this browser only, no ICP needed</span></span><button type="button" class="btn btn-primary" data-action="sandbox-mint" title="Spawn a canister of your own and copy every note into it">${icon("bolt")}Mint<span class="lbl"> to a canister</span></button>${S.identity ? `<a class="btn btn-ghost" href="#/" data-action="nav">${icon("list")}<span class="lbl">Your notebooks</span></a>` : `<button type="button" class="btn btn-ghost" data-action="sign-in" title="Sign in with Internet Identity">${icon("out")}<span class="lbl">Sign in with Internet Identity</span></button>`}</div>`
     : S.frozen
     ? `<div class="alert-bar">${icon("bolt")}This notebook is frozen: it cannot answer until it is topped up. ${S.notes?.length ? "You are seeing the last copy saved on this device." : ""} <button type="button" class="btn btn-ghost" data-action="freeze-modal">Top up</button></div>`
     : S.conflicts.length
@@ -3377,7 +3377,7 @@ function problemView(v: ProblemView, note: string | undefined, noteError: string
     ${me && !solved ? `<button type="button" class="btn btn-ghost" data-action="problem-fork" title="Copy the note into one of your notebooks to work on">${icon("copy")}<span class="small lbl">Fork</span></button><button type="button" class="btn btn-ghost" data-action="problem-attempt" title="Offer a note of yours as an attempt">${icon("send")}<span class="small lbl">Send an attempt</span></button>` : ""}
     ${c.mine && !solved ? `<button type="button" class="btn btn-primary" data-action="problem-solve">${icon("award")}Call it solved</button>` : ""}
     ${c.mine ? `<a class="btn btn-ghost" href="#/notebook/${v.notebook.toText()}/${esc(encodeURIComponent(v.path))}" data-action="nav" title="Open the note">${icon("edit")}</a>` : ""}</span>`;
-  return `<div class="chat-head"><a href="#/problems" class="btn btn-ghost" data-action="nav" title="Back to the list">${icon("chevron")}<span class="small lbl">Problems</span></a><span class="small muted">${esc(fieldLabel(c.field))}</span>${tools}</div>
+  return `<div class="chat-head problems-head"><a href="#/problems" class="btn btn-ghost" data-action="nav" title="Back to the list">${icon("chevron")}<span class="small lbl">Problems</span></a><span class="small muted">${esc(fieldLabel(c.field))}</span>${tools}</div>
     <div class="post-view problem">
       <h2 class="ptitle">${esc(c.title)}</h2>
       <div class="small muted">${statusPill(c.status)} · by ${esc(v.owner_name)} · ${when(v.created)} · ${v.followers} follower${v.followers === 1 ? "" : "s"}${c.bounty_e8s ? ` · bounty <b>${icpText(c.bounty_e8s)}</b>` : ""}${v.depends.length ? ` · builds on ${v.depends.map((d) => `<code>${esc(d)}</code>`).join(", ")}` : ""}</div>
@@ -3401,13 +3401,15 @@ function problemsPage(): string {
   if (p.open) main = problemView(p.open, p.note, p.noteError);
   else if (p.tab === "discoveries") {
     const list = (p.discoveries ?? []).filter((d) => !p.field || d.field === p.field);
-    main = `<div class="chat-head"><b>Discoveries</b><span class="small muted">${fieldName} · solved problems, numbered for good, crediting everyone merged or checked</span><span class="right-actions">${tabs}</span></div>
+    main = `<div class="chat-head problems-head"><b>Discoveries</b><span class="small muted">${fieldName} · solved problems, numbered for good, crediting everyone merged or checked</span><span class="right-actions">${tabs}</span></div>
     <div class="plist">${p.loading && !p.discoveries ? `<p class="muted small" style="padding:12px">Loading…</p>` : list.length ? list.map((d) => `<a href="#/problems/${d.problem}" class="prow pcard" data-action="nav"><div class="prow-main"><span class="ptitle"><span class="pill ok">№${d.n}</span> ${esc(d.title)}</span><div class="small muted">${esc(fieldLabel(d.field))} · ${d.credits.map(([, n]) => esc(n)).join(", ")} · ${when(d.at)} · note ${esc(d.note_hash.slice(0, 10))}…</div></div></a>`).join("") : `<div class="chat-empty">${icon("award")}<h3>No discoveries${p.field ? ` in ${fieldName}` : ""} yet</h3><p class="muted small">When a problem's owner calls it solved, it is numbered here with everyone credited, and an obelisk goes up on the town green.</p></div>`}</div>`;
-  } else if (p.tab === "agents") main = `<div class="chat-head"><b>Track records</b><span class="small muted">People and agents, by what they have checked, sent and solved</span><span class="right-actions">${tabs}</span></div>
+  } else if (p.tab === "agents") main = `<div class="chat-head problems-head"><b>Track records</b><span class="small muted">People and agents, by what they have checked, sent and solved</span><span class="right-actions">${tabs}</span></div>
     <div class="plist">${p.loading && !p.records ? `<p class="muted small" style="padding:12px">Loading…</p>` : p.records?.length ? `<div class="ptable-wrap" style="margin:12px;max-height:none"><table class="ptable"><thead><tr><th>Who</th><th>Checks</th><th>Attempts</th><th>Merged</th><th>Solved</th><th>Problems</th><th>Since</th></tr></thead><tbody>${p.records.map((r) => `<tr><td>${esc(r.name)}${r.agent ? ` <span class="pill agent">${icon("bot")}agent</span>` : ""}</td><td>${r.checks}</td><td>${r.attempts}</td><td>${r.merged}</td><td>${r.solved}</td><td>${r.problems}</td><td class="small muted">${ago(r.since)}</td></tr>`).join("")}</tbody></table></div>` : `<div class="chat-empty">${icon("bot")}<h3>Nobody yet</h3><p class="muted small">Check a claim, send an attempt or publish a problem to appear here. Agents act through their notebook's API: see the agent skill.</p></div>`}</div>`;
   else {
     const shown = p.cards.filter((c) => p.status !== "open" || c.status !== ProblemStatus.Solved);
-    main = `<div class="chat-head"><b>${fieldName}</b><span class="small muted">${p.status === "solved" ? "solved" : p.status === "all" ? "open and solved" : "open"}</span><span class="right-actions"><span class="segmented sub">${(["open", "solved", "all"] as const).map((k) => `<button type="button" class="tab ${p.status === k ? "on" : ""}" data-action="problems-status" data-status="${k}">${k[0].toUpperCase()}${k.slice(1)}</button>`).join("")}</span>${tabs}</span></div>
+    // on a phone the Fields pane is hidden: a menu stands in for it
+    const fieldsBtn = S.mobile ? `<button type="button" class="btn btn-ghost" data-action="problems-fields-menu">${icon("list")}<span class="small lbl">Fields</span></button>` : "";
+    main = `<div class="chat-head problems-head"><b>${fieldName}</b><span class="small muted">${p.status === "solved" ? "solved" : p.status === "all" ? "open and solved" : "open"}</span><span class="right-actions">${fieldsBtn}<span class="segmented sub">${(["open", "solved", "all"] as const).map((k) => `<button type="button" class="tab ${p.status === k ? "on" : ""}" data-action="problems-status" data-status="${k}">${k[0].toUpperCase()}${k.slice(1)}</button>`).join("")}</span>${tabs}</span></div>
       <div class="plist">${p.loading && !p.cards.length ? `<p class="muted small" style="padding:12px">Loading…</p>` : shown.length ? shown.map(problemCardHtml).join("") : `<div class="chat-empty">${icon("target")}<h3>No problems ${p.status === "solved" ? "solved" : "open"}${p.field ? ` in ${fieldName}` : ""} yet</h3><p class="muted small">Publish one from a problem note. Claims get checked by other people and their agents; attempts come back for you to merge; a bounty waits for whoever solves it.</p></div>`}</div>`;
   }
   const crumb = `<b>Problems</b>${p.open ? `<span class="faint">/</span><span>${esc(p.open.card.title)}</span>` : p.tab !== "problems" ? `<span class="faint">/</span><span>${p.tab[0].toUpperCase()}${p.tab.slice(1)}</span>` : p.field ? `<span class="faint">/</span><span>${fieldName}</span>` : ""}`;
@@ -3489,6 +3491,15 @@ async function problemAction(action: string, el: HTMLElement) {
   const reload = () => (v ? loadProblems(p!.tab, v.card.id) : loadProblems(p?.tab ?? "problems"));
   const fail = (e: unknown) => toast(errMsg(e), "error");
   switch (action) {
+    case "problems-fields-menu": {
+      const r = el.getBoundingClientRect();
+      const pick = (f: string) => () => { const i = document.createElement("i"); i.dataset.field = f; void problemAction("problems-field", i); };
+      return contextMenu(Math.max(8, r.left), r.bottom + 4, "Fields", [
+        { label: "All fields", icon: "list", action: pick(""), checked: !p?.field },
+        ...FIELDS.map(([v, l]) => ({ label: l, icon: "target", action: pick(v), checked: p?.field === v }) as MenuItem),
+        ...(S.identity ? ["-" as const, { label: "New problem", icon: "plus", action: () => void problemAction("problem-new", el) } as MenuItem] : []),
+      ]);
+    }
     case "problems-field": store("nb-problems-field", el.dataset.field ?? ""); p!.field = el.dataset.field || undefined; if (p!.open) location.hash = "#/problems"; else if (p!.tab === "discoveries") render(); else return loadProblems("problems"); return;
     case "problems-status": store("nb-problems-status", el.dataset.status ?? "open"); p!.status = (el.dataset.status as "open" | "solved" | "all") ?? "open"; return loadProblems("problems");
     case "problem-new": { const n = await pickNotebook("Which notebook holds the problem?"); if (!n) return; if (S.notebook?.canister.toText() !== n.canister.toText()) await openNotebook(n.canister.toText()); location.hash = `#/notebook/${n.canister.toText()}`; return newProblem(); }

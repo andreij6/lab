@@ -799,3 +799,9 @@ body .wsbar, body .topbar { padding-right: 50px; } /* keep the corner clear for 
   .dock-tools .lbl { display: none; }
   .dock-tools .btn { padding: 6px 8px; }
 }
+.sandbox-bar { flex-wrap: nowrap; min-width: 0; } .sandbox-bar .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .sandbox-bar .btn { flex: none; white-space: nowrap; }
+@media (max-width: 760px) { .sandbox-bar { padding: 6px 10px; gap: 6px; } .sandbox-bar .lbl { display: none; } }
+@media (max-width: 760px) {
+  .problems-head { flex-wrap: wrap; row-gap: 6px; } .problems-head .right-actions { flex-wrap: wrap; justify-content: flex-start; width: 100%; margin-left: 0; }
+  .cmd { flex-wrap: wrap; } .cmd code { white-space: normal; overflow-wrap: anywhere; min-width: 0; }
+}
