@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildIndex } from "./notes.ts";
-import { applyRule, inferType, isFaded, isoWeek, keepLater, lint, nextToResurface, parseQuery, periodName, periodRollup, propertyColumns, renameProperty, renameTag, retarget, runQuery, setProperty, splitAtHeadings } from "./organize.ts";
+import { applyRule, inferType, isFaded, isoWeek, keepLater, lint, nextToResurface, parseQuery, periodName, periodRollup, propertyColumns, renameProperty, renameTag, retarget, runQuery, setProperty, splitAtHeadings, unlink } from "./organize.ts";
 
 const DAY = 86_400_000;
 const now = Date.UTC(2026, 9, 12, 12);
@@ -82,4 +82,11 @@ test("resurfacing, decay and rules", () => {
   assert.ok(r.applied && r.move === "Meetings/Sync.md" && r.weekly);
   assert.match(r.content, /type: meeting[\s\S]*rule-m1: \d{4}[\s\S]*## Notes/);
   assert.equal(applyRule({ id: "m1", tag: "meeting" }, "Meetings/Sync.md", r.content).applied, false);
+});
+
+test("unlink turns links to one target back into words and leaves the rest", () => {
+  const c = "See [[Nowhere]] and [[Nowhere|the plan]] and [[Nowhere#top]]; keep [[Here]]. ![[Nowhere]]";
+  assert.equal(unlink(c, "Nowhere"), "See Nowhere and the plan and Nowhere; keep [[Here]]. Nowhere");
+  assert.equal(unlink("[[Deep/Path]] x", "Deep/Path"), "Path x");
+  assert.equal(unlink("none", "Nowhere"), "none");
 });

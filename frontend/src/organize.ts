@@ -1,7 +1,7 @@
 // Tools for people with a system: saved searches as live views, typed properties and a table of
 // them, periodic rollups, structure lint, bulk refactors, resurfacing and decay. Pure; the UI lives
 // in main.ts (the Organize tab).
-import { base, dir, frontmatter, parseTags, setFrontmatter, stem, type Index, type NoteLike } from "./notes.ts";
+import { base, dir, frontmatter, parseLinks, parseTags, setFrontmatter, stem, type Index, type NoteLike } from "./notes.ts";
 
 export type OrgNote = NoteLike & { modified?: bigint | number; created?: bigint | number };
 const DAY = 86_400_000;
@@ -254,4 +254,13 @@ export function applyRule(rule: Rule, path: string, content: string, templateTex
   next = setProperty(next, marker, new Date().toISOString().slice(0, 10));
   const move = rule.folder && dir(path) !== rule.folder.replace(/\/$/, "") ? `${rule.folder.replace(/\/$/, "")}/${path.split("/").pop()}` : undefined;
   return { content: next, move, weekly: rule.weekly, applied: true };
+}
+
+/** `content` with every link to `target` turned back into plain text (the alias if it had one, else the
+ *  target's name): the way to drop a link to a note that does not exist without losing the words. */
+export function unlink(content: string, target: string): string {
+  let out = content;
+  // longest raw first, so `![[x]]` goes before `[[x]]` eats its inside and strands the `!`
+  for (const l of [...parseLinks(content)].sort((a, b) => b.raw.length - a.raw.length)) if (l.target === target) out = out.split(l.raw).join(l.alias || l.target.split("/").pop() || l.target);
+  return out;
 }
