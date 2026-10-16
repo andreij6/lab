@@ -789,3 +789,4 @@ body .wsbar, body .topbar { padding-right: 50px; } /* keep the corner clear for 
 .thesis-asset { font: 700 1.4rem var(--mono); letter-spacing: .02em; }
 .thesis-claim { font-size: 1rem; line-height: 1.45; margin: 0 0 14px; }
 .thesis-foot { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
+.side-foot .foot-tools .icon-btn { position: relative; } .side-foot .foot-tools .icon-btn.on { color: var(--accent-2); background: var(--accent-dim); } .side-foot .foot-tools .rb-dot { position: absolute; top: 5px; right: 5px; }
