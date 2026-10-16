@@ -695,7 +695,7 @@ body .wsbar, body .topbar { padding-right: 50px; } /* keep the corner clear for 
 .town canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; outline: none; }
 .town canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
 .town-wait { padding: 24px; }
-.town-hud.collapsed .town-legend { position: absolute; bottom: 86px; left: 50%; transform: translateX(-50%); width: min(560px, calc(100% - 24px)); max-height: calc(100% - 140px); overflow: auto; padding: 14px 16px; display: grid; gap: 7px; font-size: .86rem; }
+.town-legend { position: absolute; bottom: 86px; left: 50%; transform: translateX(-50%); width: min(560px, calc(100% - 24px)); max-height: calc(100% - 140px); overflow: auto; padding: 14px 16px; display: grid; gap: 7px; font-size: .86rem; }
 .town-legend span { display: flex; gap: 10px; align-items: baseline; }
 .lg { flex: none; width: 10px; height: 10px; border-radius: 3px; border: 1px solid var(--fg-2); transform: translateY(1px); }
 .lg-house { background: #f2b8c6; } .lg-lit { background: #ffd98a; } .lg-person { background: #5b6b8c; border-radius: 50%; } .lg-build { background: #e0a92e; } .lg-water { background: #8cc3e3; } .lg-civic { background: var(--bg); }
@@ -805,3 +805,15 @@ body .wsbar, body .topbar { padding-right: 50px; } /* keep the corner clear for 
   .problems-head { flex-wrap: wrap; row-gap: 6px; } .problems-head .right-actions { flex-wrap: wrap; justify-content: flex-start; width: 100%; margin-left: 0; }
   .cmd { flex-wrap: wrap; } .cmd code { white-space: normal; overflow-wrap: anywhere; min-width: 0; }
 }
+
+/* the town on a phone: a bar of four big buttons, one sheet at a time above it */
+.town-dock.mobile { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 6px; bottom: calc(8px + env(safe-area-inset-bottom)); width: calc(100% - 16px); }
+.town-dock.mobile .dbtn { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; min-height: 54px; border: 0; background: transparent; color: var(--fg-2); font: 600 .72rem var(--sans); border-radius: 10px; }
+.town-dock.mobile .dbtn .ico { width: 22px; height: 22px; } .town-dock.mobile .dbtn.on { color: var(--accent-2); background: var(--accent-dim); }
+.town-sheet { position: absolute; left: 8px; right: 8px; bottom: calc(76px + env(safe-area-inset-bottom)); max-height: 56vh; overflow: auto; z-index: 4; display: grid; align-content: start; }
+.town-sheet .sheet-head { position: sticky; top: 0; display: flex; align-items: center; justify-content: space-between; padding: 6px 6px 6px 14px; background: color-mix(in srgb, var(--bg-1) 96%, transparent); border-bottom: 1px solid var(--line); z-index: 1; }
+.town-sheet .sheet-head .icon-btn { width: 44px; height: 44px; } .town-sheet .sheet-head .ico { width: 20px; height: 20px; }
+.town-sheet .sheet-body { padding: 10px 14px 14px; } .town-sheet .btn { min-height: 44px; padding-inline: 16px; }
+.town-sheet.tour .sheet-body p { margin: 8px 0 12px; font-size: .95rem; line-height: 1.5; }
+.town-legend-body { display: grid; gap: 10px; font-size: .9rem; } .town-legend-body span { display: flex; gap: 10px; align-items: baseline; }
+.sheet-stats { display: grid; } .sheet-stats .chip { border-right: 0; border-bottom: 1px solid var(--line); padding: 10px 4px; white-space: normal; } .sheet-stats .chip:last-child { border-bottom: 0; }

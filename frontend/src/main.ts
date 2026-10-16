@@ -414,7 +414,7 @@ const S = {
   /** this notebook's counts for the quests card */
   usage: undefined as NbUsage | undefined,
 
-  town: undefined as { data?: TownData; legend: boolean; tour?: number } | undefined,
+  town: undefined as { data?: TownData; legend: boolean; tour?: number; sheet?: "stats" } | undefined,
   /** the problems pages: the board by field, one problem, the discoveries ledger, track records */
   problems: undefined as { tab: ProblemsTab; field?: string; status: "open" | "solved" | "all"; cards: ProblemCard[]; open?: ProblemView; note?: string; noteError?: string; discoveries?: DiscoveryView[]; records?: TrackRecord[]; loading: boolean } | undefined,
   /** "canister/path" -> the problem published from that note, for the strip above it */
@@ -602,6 +602,8 @@ const ICONS: Record<string, string> = {
   award: '<circle cx="12" cy="9" r="6"/><path d="M8.5 13.9 7 22l5-3 5 3-1.5-8.1"/>',
   town: '<path d="M3 20v-8l5-4 5 4v8"/><path d="M13 20V9l4-3 4 3v11"/><path d="M2 20h20"/><path d="M7 20v-3h2v3"/>',
   broom: '<path d="M19 3l-8 8"/><path d="M11 11l-4 4"/><path d="M7 15l-3 6 6-3"/><path d="M8.5 13.5l2 2"/>',
+  chart: '<path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/>',
+  minus: '<path d="M5 12h14"/>',
   sprout: '<path d="M12 21v-9"/><path d="M12 12c0-3.5 2.5-6 6-6 0 3.5-2.5 6-6 6z"/><path d="M12 15c0-3-2-5-5-5 0 3 2 5 5 5z"/><path d="M7 21h10"/>',
   user: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/>',
   compass: '<circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/>',
@@ -3771,8 +3773,7 @@ function townPage(): string {
   const t = S.town!, d = t.data;
   if (!d) return pageShell("<b>Town</b>", `<div class="town"><p class="muted town-wait">Walking into town…</p></div>`, true);
   const n = townCounts(d), off = new Set(d.off);
-  const legend = t.legend ? `<div class="town-legend glass" role="note"><b>Reading the town</b>
-    <span><i class="lg lg-house"></i>A home: someone with a notebook edited in the last 30 days. Bigger homes hold more notes; each storey is a notebook.</span>
+  const legendLines = `    <span><i class="lg lg-house"></i>A home: someone with a notebook edited in the last 30 days. Bigger homes hold more notes; each storey is a notebook.</span>
     <span><i class="lg lg-house"></i>The town draws at most ${d.maxShown} homes${d.homes > d.houses.length ? ` (${d.houses.length} of ${d.homes} now)` : ""}: when there are more, a mix of every kind, spread across town. Yours is always one of them.</span>
     <span><i class="lg lg-lit"></i>Lit windows (at night, in the dark theme): edited this week. Chimney smoke: edited today.</span>
     <span><i class="lg lg-person"></i>A person: someone in the community chat right now, at their channel's stall in the Square.</span>
@@ -3783,11 +3784,23 @@ function townPage(): string {
     <span><i class="lg lg-build"></i>Scaffolding and a crane: a notebook made in the last three days. A red lamp by the door: a notebook with under 30 days of cycles left.</span>
     <span><i class="lg lg-water"></i>The water tower: the cycles every notebook holds, its level how many days they last at today's burn; the drip is the burn.</span>
     <span><i class="lg lg-civic"></i>The notebook works makes every notebook (smoke when it has today); the school's yard holds this week's newcomers; the chapel's bell rings while a fundraiser is open. Then the Lab itself, the Square, the board's pavilion${off.has("market") ? "" : ", the market hall"}, the park and the trailhead.</span>
-    <span class="small muted">Every lit window is someone writing in their own notebook. Nobody can see inside.</span></div>` : "";
+    <span class="small muted">Every lit window is someone writing in their own notebook. Nobody can see inside.</span>`;
   const step = t.tour !== undefined ? TOUR[t.tour] : undefined;
-  const tour = step ? `<div class="town-tour glass" role="dialog" aria-label="Tour of the town"><div class="row tight"><b>${esc(step.title)}</b><span class="small muted">${t.tour! + 1} of ${TOUR.length}</span></div><p>${esc(step.text(d))}</p>
-    <div class="row tight"><button type="button" class="btn btn-ghost" data-action="town-tour-end">Skip</button><span class="grow"></span><button type="button" class="btn" data-action="town-tour-back" ${t.tour === 0 ? "disabled" : ""}>Back</button><button type="button" class="btn btn-primary" data-action="town-tour-next">${t.tour === TOUR.length - 1 ? "Done" : "Next"}</button></div></div>` : "";
-  const dock = `<div class="town-dock glass"><div class="dock-stats">${townHud(d)}</div><div class="dock-tools" role="toolbar" aria-label="Town view">
+  const tourBody = step ? `<div class="row tight"><b>${esc(step.title)}</b><span class="small muted">${t.tour! + 1} of ${TOUR.length}</span></div><p>${esc(step.text(d))}</p>
+    <div class="row tight"><button type="button" class="btn btn-ghost" data-action="town-tour-end">Skip</button><span class="grow"></span><button type="button" class="btn" data-action="town-tour-back" ${t.tour === 0 ? "disabled" : ""}>Back</button><button type="button" class="btn btn-primary" data-action="town-tour-next">${t.tour === TOUR.length - 1 ? "Done" : "Next"}</button></div>` : "";
+  let legend = "", tour = "", dock = "";
+  if (S.mobile) {
+    // a phone: one bar of four big buttons, and one sheet at a time above it (a tap on the town closes it)
+    const sheet = (title: string, body: string, cls = "") => `<div class="town-sheet glass ${cls}" role="dialog" aria-label="${esc(title)}"><div class="sheet-head"><b>${esc(title)}</b><button type="button" class="btn btn-ghost icon-btn" data-action="town-sheet" data-sheet="" aria-label="Close">${icon("x")}</button></div><div class="sheet-body">${body}</div></div>`;
+    if (step) tour = sheet("A tour of the town", tourBody, "tour");
+    else if (t.legend) legend = sheet("Reading the town", `<div class="town-legend-body">${legendLines}</div>`);
+    else if (t.sheet === "stats") legend = sheet("Lab right now", `<div class="sheet-stats">${townHud(d)}</div>`);
+    const db = (action: string, ic: string, label: string, on = false, extra = "") => `<button type="button" class="dbtn ${on ? "on" : ""}" data-action="${action}" ${extra} aria-pressed="${on}">${icon(ic)}<span>${label}</span></button>`;
+    dock = `<div class="town-dock glass mobile" role="toolbar" aria-label="Town view">${db("town-sheet", "chart", "Stats", t.sheet === "stats", 'data-sheet="stats"')}${db("town-tour", "compass", "Tour", !!step)}${db("town-legend", "help", "Legend", t.legend)}${db("town-more", "more", "More")}</div>`;
+  } else {
+    legend = t.legend ? `<div class="town-legend glass" role="note"><b>Reading the town</b>${legendLines}</div>` : "";
+    tour = step ? `<div class="town-tour glass" role="dialog" aria-label="Tour of the town">${tourBody}</div>` : "";
+    dock = `<div class="town-dock glass"><div class="dock-stats">${townHud(d)}</div><div class="dock-tools" role="toolbar" aria-label="Town view">
     <button type="button" class="btn btn-ghost icon-btn" data-action="town-out" title="Zoom out (−)" aria-label="Zoom out">−</button>
     <button type="button" class="btn btn-ghost icon-btn" data-action="town-in" title="Zoom in (+)" aria-label="Zoom in">+</button>
     <button type="button" class="btn btn-ghost icon-btn" data-action="town-home" title="Whole town (0)" aria-label="Whole town">${icon("fit")}</button>
@@ -3797,6 +3810,7 @@ function townPage(): string {
     <button type="button" class="btn btn-ghost ${t.legend ? "on" : ""}" data-action="town-legend" aria-pressed="${t.legend}" title="Legend" aria-label="Legend">${icon("help")}<span class="lbl">Legend</span></button>
     ${!off.has("sponsors") && S.identity ? `<button type="button" class="btn btn-ghost icon-btn" data-action="town-sponsor" title="Pay for a building in the Sponsors district" aria-label="Sponsor a building">${icon("coin")}</button>` : ""}
     <button type="button" class="btn btn-ghost icon-btn" data-action="theme-menu" title="Day or night: the appearance" aria-label="Appearance">${icon(S.theme.mode === "dark" ? "moon" : "sun")}</button></div></div>`;
+  }
   const label = `Lab as a town: ${d.homes} homes, ${n.today} lit today, ${n.online} people online, ${n.talk} messages today.`;
   return pageShell("<b>Town</b>", `<div class="town">
     <canvas data-town="full" tabindex="0" role="img" aria-label="${esc(label)}"></canvas><div class="town-tip" hidden></div>
@@ -3999,8 +4013,23 @@ function townAction(action: string) {
   else if (action === "town-mine") townCamera("mine");
   else if (action === "town-porch") void townPorchDialog();
   else if (action === "town-quests") townQuestsDialog();
-  else if (action === "town-legend") { t.legend = !t.legend; render(); }
-  else if (action === "town-tour") { if (t.tour !== undefined) void tourStep(-1); else void tourStep(0); }
+  else if (action === "town-sheet") { const which = (document.activeElement as HTMLElement | null)?.dataset.sheet; if (!which && t.tour !== undefined) { void tourStep(-1); return; } t.sheet = which === "stats" && t.sheet !== "stats" ? "stats" : undefined; t.legend = false; if (t.sheet && t.tour !== undefined) { t.tour = undefined; townSpotlight(true); } render(); }
+  else if (action === "town-legend") { t.legend = !t.legend; t.sheet = undefined; if (S.mobile && t.legend && t.tour !== undefined) { t.tour = undefined; townSpotlight(true); } render(); }
+  else if (action === "town-tour") { t.sheet = undefined; t.legend = false; if (t.tour !== undefined) void tourStep(-1); else void tourStep(0); }
+  else if (action === "town-more") {
+    const el = document.activeElement as HTMLElement | null, r = el?.getBoundingClientRect();
+    const d = t.data;
+    contextMenu(Math.max(8, (r?.right ?? innerWidth) - 240), (r?.top ?? innerHeight) - 8, "Town", [
+      { label: "Zoom in", icon: "plus", action: () => townCamera("in") },
+      { label: "Zoom out", icon: "minus", action: () => townCamera("out") },
+      { label: "Whole town", icon: "fit", action: () => townCamera("home") },
+      ...(d?.mine !== undefined ? [{ label: "My home", icon: "house", action: () => townCamera("mine") } as MenuItem, { label: "Open house: a sign on your porch", icon: "pin", action: () => void townPorchDialog() } as MenuItem] : []),
+      { label: "Quests and milestones", icon: "award", action: () => townQuestsDialog() },
+      ...(d && !d.off.includes("sponsors") && S.identity ? [{ label: "Sponsor a building", icon: "coin", action: () => void sponsorDialog() } as MenuItem] : []),
+      "-",
+      { label: "Appearance: day or night", icon: S.theme.mode === "dark" ? "moon" : "sun", action: () => void onAction("theme-menu", el ?? document.body) },
+    ]);
+  }
   else if (action === "town-tour-next") void tourStep((t.tour ?? -1) + 1);
   else if (action === "town-tour-back") void tourStep((t.tour ?? 1) - 1);
   else if (action === "town-tour-end") void tourStep(-1);
@@ -8974,6 +9003,12 @@ document.addEventListener("focusout", (ev) => {
   const p = ta.dataset.path!; const i = Number(ta.dataset.i);
   const nb = parseNotebook(draftOf(p).text);
   if (nb.cells[i]?.type === "markdown" && nb.cells[i].source.trim()) { nbEditing.get(p)?.delete(nb.cells[i].id); setTimeout(() => refreshNotebook(p), 50); }
+});
+document.addEventListener("pointerdown", (ev) => {
+  // a phone: tapping the town puts away whatever sheet is open over it
+  const t = S.town;
+  if (!S.mobile || !t || !(t.legend || t.sheet) || !(ev.target as HTMLElement).matches?.('canvas[data-town="full"]')) return;
+  t.legend = false; t.sheet = undefined; render();
 });
 document.addEventListener("dblclick", (ev) => {
   const md = (ev.target as HTMLElement).closest<HTMLElement>(".md-cell:not(.editing)");
