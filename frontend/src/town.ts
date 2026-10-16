@@ -10,9 +10,10 @@
 
 import { accentOf, hashOf, hex, mix, rgba, rng, skyColours, still, type RGB } from "./sky.ts";
 
-export type TownHouse = { lot: number; storeys: number; size: number; lit: number; low?: boolean; badges?: number };
+export type TownHouse = { lot: number; storeys: number; size: number; lit: number; low?: boolean; badges?: number; agent?: boolean };
 export type TownSponsor = { name: string; blurb: string; url: string; color: string };
 export type TownChan = { name: string; online: number; messages24h: number };
+export type OpenHouseInfo = { lot: number; handle: string; title: string; blurb: string; link?: string; waves: number };
 export type TownData = {
   at: number; houses: TownHouse[]; people: number; homes: number; maxShown: number; quiet: number; mine?: number; myChannel?: string;
   channels: TownChan[]; postTopics: string[]; postsLive: number; posts24h: number; listings: number; rains24h: number; lastRain?: number; hikers: number; off: string[];
@@ -21,14 +22,16 @@ export type TownData = {
   sponsors: TownSponsor[]; myQuests?: [number, number, number];
   /** open problems and numbered discoveries (obelisks on the green); undefined while problems are off */
   problemsOpen?: number; discoveries?: number;
+  /** opt-in front porch welcome cards by lot */
+  openHouses?: OpenHouseInfo[];
 };
 export type Target =
-  | { kind: "house"; house: TownHouse; mine: boolean; building: boolean; model?: boolean } | { kind: "plot" } | { kind: "hall" } | { kind: "stall"; channel: TownChan }
+  | { kind: "house"; house: TownHouse; mine: boolean; building: boolean; model?: boolean; openHouse?: OpenHouseInfo } | { kind: "plot" } | { kind: "hall" } | { kind: "stall"; channel: TownChan }
   | { kind: "fountain" } | { kind: "board" } | { kind: "market" } | { kind: "factory" } | { kind: "school" } | { kind: "chapel" } | { kind: "tower" }
   | { kind: "park" } | { kind: "trail" } | { kind: "lake" } | { kind: "walker"; channel: string; me: boolean }
   | { kind: "landmark"; landmark: Landmark } | { kind: "district"; district: District } | { kind: "station" } | { kind: "visitor"; mine: boolean }
-  | { kind: "obelisk"; n: number; more: boolean };
-type Kind = "obelisk" | "swiss" | "fence" | "station" | "canopy" | "buffer" | "trestle" | "news" | "datacentre" | "credentials" | "bank" | "exchange" | "capitol" | "statue" | "launchpad" | "office" | "sign" | "house" | "plot" | "garden" | "tree" | "pine" | "poplar" | "bush" | "rock" | "hall" | "stall" | "fountain" | "gazebo" | "market" | "crate" | "factory" | "school" | "chapel" | "tower" | "bench" | "lantern" | "bridge" | "reeds";
+  | { kind: "obelisk"; n: number; more: boolean } | { kind: "tent"; campers: number; mine: boolean } | { kind: "courier"; lot: number };
+type Kind = "tent" | "obelisk" | "swiss" | "fence" | "station" | "canopy" | "buffer" | "trestle" | "news" | "datacentre" | "credentials" | "bank" | "exchange" | "capitol" | "statue" | "launchpad" | "office" | "sign" | "house" | "plot" | "garden" | "tree" | "pine" | "poplar" | "bush" | "rock" | "hall" | "stall" | "fountain" | "gazebo" | "market" | "crate" | "factory" | "school" | "chapel" | "tower" | "bench" | "lantern" | "bridge" | "reeds";
 export type Obj = { k: Kind; x: number; y: number; w: number; d: number; s: number; n?: number; tg?: Target; h?: TownHouse; face?: "x" | "y" | ""; ch?: TownChan; mine?: boolean; building?: boolean; model?: boolean };
 /** Ground cells: nothing (beyond the shore), land, water, road, a bridge over water, railway. */
 // ---------------------------------------------------------------- districts and landmarks
@@ -218,7 +221,7 @@ export function layoutTown(t: TownData): Plan {
       // the house sits toward its road; bigger houses fill more of the lot
       const fw = [1.1, 1.3, 1.5, 1.75][h.size], fd = [1.0, 1.2, 1.45, 1.7][h.size];
       const ox = face === "x" ? 1.9 - fw : 0.1 + (1.8 - fw) / 2, oy = face === "y" ? 1.9 - fd : 0.1 + (1.8 - fd) / 2;
-      put({ k: "house", x: x + ox, y: y + oy, w: fw, d: fd, s: hashOf(`lot${h.lot}`), h, face, mine, building: isNew, tg: { kind: "house", house: h, mine, building: isNew } });
+      put({ k: "house", x: x + ox, y: y + oy, w: fw, d: fd, s: hashOf(`lot${h.lot}`), h, face, mine, building: isNew, tg: { kind: "house", house: h, mine, building: isNew, openHouse: t.openHouses?.find((o) => o.lot === h.lot) } });
       if (h.size === 0 && !isNew) put({ k: "garden", x: x + (face === "x" ? 0.15 : 1.3), y: y + (face === "y" ? 0.15 : 1.3), w: 0.55, d: 0.55, s: 1 });
       return;
     }
@@ -338,6 +341,11 @@ export function layoutTown(t: TownData): Plan {
   paving.push([0.6, TY - 1, 14, 0.9]);
   put({ k: "station", x: 8.4, y: TY - 3, w: 4.2, d: 1.7, s: 0, tg: { kind: "station" } });
   put({ k: "canopy", x: 1.2, y: TY - 1, w: 5.6, d: 0.9, s: 0, tg: { kind: "station" } });
+  for (let i = 0; i < Math.min(6, t.campers); i++) {
+    const tx = 1.3 + (i % 3) * 1.55 + (i >= 3 ? 0.45 : 0), ty = TY - 2.85 + Math.floor(i / 3) * 0.78;
+    const mine = !!t.meCamping && i === 0;
+    put({ k: "tent", x: tx, y: ty, w: 0.85, d: 0.72, s: i, mine, tg: { kind: "tent", campers: t.campers, mine } });
+  }
   for (const x of [rx0, rx1]) put({ k: "buffer", x: x === rx0 ? x : x + 0.7, y: TY + 0.15, w: 0.3, d: 0.7, s: 0 });
   for (const x of trestle) put({ k: "trestle", x, y: TY, w: 1, d: 1, s: 0 });
   const platform: [number, number][] = [];
@@ -546,6 +554,15 @@ function drawHouse(o: Obj, t: number) {
     if (on) { const g = ctx.createRadialGradient(lx, ly, 0, lx, ly, 9); g.addColorStop(0, "rgba(240,80,70,.55)"); g.addColorStop(1, "rgba(240,80,70,0)"); ctx.fillStyle = g; ctx.fillRect(lx - 9, ly - 9, 18, 18); }
     ctx.fillStyle = on ? "#f0504a" : "#8a3a36"; ctx.beginPath(); ctx.arc(lx, ly, 1.7, 0, 6.283); ctx.fill(); ctx.stroke();
   }
+  const openPorch = S.data?.openHouses?.find((oh) => oh.lot === hv.lot);
+  if (openPorch) {
+    const front = o.face !== "x", mx = front ? x + w / 2 - 0.18 : x + w + 0.04, my = front ? y + d + 0.04 : y + d / 2 - 0.18;
+    poly(flat(mx, my, front ? 0.36 : 0.24, front ? 0.24 : 0.36, 0.2), "#34d399");
+    const [sx, sy] = P(front ? x + w / 2 - 0.32 : x + w + 0.22, front ? y + d + 0.22 : y + d / 2 - 0.32);
+    ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(sx, sy - 9); ctx.stroke();
+    poly([[sx - 4, sy - 14], [sx + 4, sy - 14], [sx + 4, sy - 8], [sx - 4, sy - 8]], night ? "#1f3a33" : "#ecfdf5");
+    ctx.fillStyle = "#10b981"; ctx.beginPath(); ctx.arc(sx, sy - 11, 1.6, 0, 6.283); ctx.fill();
+  }
   if (o.mine) mineMark(o, top, t);
   if (o.model) { const [px, py] = P(x + w / 2, y + d / 2, top + 6); label("Model home", px, py, S.o!.dark ? "#c8d0e0" : "#5a6276"); }
   hit([P(x, y, 0), P(x + w, y, 0), P(x + w, y + d, 0), P(x, y + d, 0), P(x + w / 2, y + d / 2, top)], o.tg);
@@ -696,11 +713,32 @@ function drawPerson(x: number, y: number, c: string, t: number, walking: boolean
   ctx.beginPath(); ctx.arc(px, py - 9.4, 1.8, 0, 6.283); ctx.fillStyle = S.o!.dark ? "#d8cbb8" : "#f1dcc6"; ctx.fill(); ctx.stroke();
   ctx.restore();
 }
+/** An autonomous agent courier: a small hovering bot with a glowing green diamond badge (matching Agents/ graph nodes). */
+function drawCourier(x: number, y: number, t: number) {
+  const [px, py] = P(x, y), hover = S.still ? 2 : 2 + Math.sin(t * 5 + x) * 1.4;
+  ctx.fillStyle = "rgba(16,185,129,.18)"; ctx.beginPath(); ctx.ellipse(px, py, 3, 1.5, 0, 0, 6.283); ctx.fill();
+  ctx.save(); ctx.lineWidth = line;
+  poly([[px - 2.3, py - 3 - hover], [px + 2.3, py - 3 - hover], [px + 1.9, py - 7.8 - hover], [px - 1.9, py - 7.8 - hover]], S.o!.dark ? "#1e293b" : "#f1f5f9");
+  ctx.beginPath(); ctx.moveTo(px, py - 7.8 - hover); ctx.lineTo(px, py - 10.5 - hover); ctx.stroke();
+  const dy = py - 12.2 - hover;
+  poly([[px, dy - 2.2], [px + 2.2, dy], [px, dy + 2.2], [px - 2.2, dy]], "#34d399");
+  ctx.restore();
+}
 
 function drawObj(o: Obj, t: number) {
   const p = S.pal, night = S.o!.dark, data = S.data!;
   switch (o.k) {
     case "house": return drawHouse(o, t);
+    case "tent": {
+      const { x, y, w, d } = o, h = 8, c = o.mine ? acc() : ["#f59e0b", "#34d399", "#60a5fa", "#f472b6", "#a78bfa"][o.s % 5];
+      const cHex = c.startsWith("#") ? c : "#6d7cff", r0 = P(x + w / 2, y, h), r1 = P(x + w / 2, y + d, h);
+      poly([P(x, y, 0), P(x, y + d, 0), r1, r0], shade(cHex, 0.14));
+      poly([P(x + w, y, 0), P(x + w, y + d, 0), r1, r0], cHex);
+      poly([P(x, y + d, 0), P(x + w, y + d, 0), r1], shade(cHex, 0.25));
+      poly([P(x + w * 0.36, y + d, 0), P(x + w * 0.64, y + d, 0), P(x + w / 2, y + d, h * 0.62)], night ? p.lit : "#2a2d36");
+      if (o.mine) { const [px, py] = P(x + w / 2, y + d / 2, h + 6); label("Your camp", px, py, acc()); }
+      return hit([P(x, y, 0), P(x + w, y + d, 0), P(x, y + d, 0), P(x + w, y, 0), r1], o.tg);
+    }
     case "tree": case "pine": case "poplar": case "bush": return drawTree(o);
     case "rock": { const [cx, cy] = P(o.x + 0.25, o.y + 0.2); poly([[cx - 6, cy], [cx - 4, cy - 5], [cx + 2, cy - 7], [cx + 6, cy - 2], [cx + 5, cy + 1]], night ? "#566075" : "#cfd3da"); return; }
     case "garden": {
@@ -1475,6 +1513,16 @@ function frame(now: number) {
   const tx = trainAt(t, rl);
   if (tx !== undefined) live.push({ k: tx + rl.y + 0.5, draw: () => drawTrain(tx, rl) });
   for (const hk of S.hikers) { const [x, y] = loopAt(hk.u); live.push({ k: x + y, draw: () => drawPerson(x, y, S.pal.person[hk.c], t, true) }); }
+  // agent couriers: a small bot with the green diamond of Agents/ notes runs between the Lab and each home
+  // whose notebook an agent wrote to this week (never a guess: the notebook reports it)
+  const activeHouses = S.plan.objs.filter((o) => o.k === "house" && !o.model && o.h!.agent).slice(0, 6);
+  activeHouses.forEach((ho, idx) => {
+    const u = S.still ? 0.5 : Math.abs((((t * (0.09 + idx * 0.02) + idx * 0.33) % 2) - 1));
+    const sx = 4, sy = 6.4, tx2 = ho.x + ho.w / 2, ty2 = ho.y + ho.d + 0.35;
+    const cx = sx + (tx2 - sx) * u, cy = sy + (ty2 - sy) * u;
+    const lot = ho.h!.lot;
+    live.push({ k: cx + cy, draw: () => { drawCourier(cx, cy, t); const [px, py] = P(cx, cy); hit([[px - 5, py - 15], [px + 5, py + 2]], { kind: "courier", lot }); } });
+  });
   live.sort((a, b) => a.k - b.k);
   let li = 0;
   for (const o of S.plan.objs) {

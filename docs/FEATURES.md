@@ -312,6 +312,15 @@ Prepared questions over a kit's notes, answered by the model picked in Chat with
 - **Agent keys and the locked folder.** Issue a key per agent in Manage; agents read every note over a JSON API and write only under `Agents/`, where people can read, link and delete but not edit. Agent notes carry the agent's name and draw as green diamonds in the graph.
 - **A skill to paste.** Manage fills a skill file with the notebook's URL and key for Claude Code, Codex or any agent, with the rules of the house.
 
+## Trying Lab before paying
+
+- **The browser sandbox.** "Try in browser — free" on the landing page (and a card on the notebooks list) opens a notebook that lives in this browser only (`local-sandbox`, in localStorage): the example notes for every kit, the editor, graph, Python, sheets, flashcards, all working, nothing on-chain. A bar above it offers **Mint to on-chain canister**: sign in, spawn a notebook the usual way, and every sandbox note is copied in. The sandbox's canister calls that need a real canister answer "mint first".
+- **Personas on the landing page.** Six tabs (Obsidian notes, AI agents, Python and sheets, research and formal maths, study, the kits) each with a line, a code sample and a "Try … in browser" button that opens the sandbox on that note. The sign-in button says "Sign in with Internet Identity" everywhere.
+- **The newcomer pass.** Anyone signed in without a notebook may send 10 messages in #help and #general (registry `post_newcomer`, a handle of their choosing, stored in MemoryId 55; `my_newcomer_pass` says how many are left). The chat shows the pass and the count; the side pane explains it.
+- **Sponsor a newcomer.** A member spawns a starter notebook for someone else's principal (`sponsor_newcomer(recipient, name, payer)`): the sponsor pays the spawn (and any cycles they add through `top_up_notebook`), the newcomer is owner and controller from the first second; #general gets a line about it.
+- **Clone from a shared note.** Every shared note (`#/shared/…`) carries a bar: **Clone to my Lab** copies it into one of your notebooks under `Cloned/` (or into the sandbox when signed out), and **Try Lab in browser**. A shared flashcard deck or quiz offers the clone at the end of a run. Published sites (`/p/`) link back to Lab in their footer.
+- **Thesis card.** In Crypto, a thesis has a **Thesis card**: the asset, the claim, the price when written, the live price from the exchange-rate canister and the move, with Copy (markdown) and Share to #crypto.
+
 ## Problems (flag `problems`, off by default)
 
 Solving things together, people with their agents: see [PROBLEMS.md](PROBLEMS.md).
@@ -355,6 +364,13 @@ Lab's activity as a small isometric island town, on the landing page (a slice of
 - **Explore.** Drag to pan, scroll or pinch to zoom, arrows, + − and 0 on the keyboard; hover (or tap) for what something is, click (or tap again) to go there: a stall opens its channel, the pavilion the board, the school #help, your home your notebooks. A legend explains it all.
 - **Privacy.** The registry's public `town()` query returns counts and small buckets only: no names, principals, handles or canister ids. It is not anonymous: a lot is a token id, which ICRC-7 already makes public, and the town shows nothing that ICRC-7, each notebook's `usage()` and its cycles don't already show. Homes, cycles and fundraisers are counted every six hours (and when the town is switched on); building sites, newcomers, the Square and the board are live.
 - Local development: add `?town-demo` to the URL for a busier town than a test network has.
+
+## The town, more
+
+- **Open house.** From the town's dock, a notebook owner puts a sign on their home's porch: a line about what they are working on, another line if they like, and optionally a note they have shared publicly (or a published page; never a link out). Neighbours click the house to read it and **wave**; the sign shows the owner's community handle (or "a neighbour"). Registry `set_open_house`, `open_houses`, `wave_house` (MemoryId 54).
+- **Agent couriers.** A small bot runs between the Lab and each home whose notebook an agent wrote to this week: the notebook's `usage()` reports `agent_active` (a key used in 7 days), the registry puts `agent` on the house. Click one for the track records.
+- **The campground.** Visitors without a notebook get a tent by the station as well as a place on the platform; yours is marked when you are camping.
+- **Quests & milestones** on the dock: the town's own goals (homes, discoveries, newcomers waiting, open houses) and your home's quests with progress.
 
 ## Admin numbers
 

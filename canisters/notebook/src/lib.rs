@@ -870,6 +870,8 @@ pub struct Usage {
     pub streak: u32,
     /// days with a change in the last 30
     pub active_days: u32,
+    /// an agent key was used in the last 7 days
+    pub agent_active: bool,
 }
 
 /// How big and how recently used this notebook is, for the registry's numbers and the town's
@@ -889,7 +891,9 @@ fn usage() -> Usage {
         (f.len(), notes, links, last)
     });
     let active_days = DAYS.with_borrow(|d| d.range(today.saturating_sub(29)..=today).count() as u32);
-    Usage { files, notes, last_modified, links, streak: streak_days(today), active_days }
+    // an agent used a key this week: the town sends a courier to the house
+    let agent_active = AGENT_KEYS.with_borrow(|m| m.iter().any(|e| !e.value().0.revoked && e.value().0.last_used + 7 * DAY_NS > time()));
+    Usage { files, notes, last_modified, links, streak: streak_days(today), active_days, agent_active }
 }
 /// Someone's role over the whole notebook, for the registry (so a team member may top it up).
 #[query]
@@ -2254,7 +2258,7 @@ fn site_page(name: &str, cur: Option<&str>, all: &[String], body: &str) -> Strin
         }
         nav.push_str(&format!("<a href=\"/p/{}\"{}>{}</a>", url_encode(p), if Some(p.as_str()) == cur { " class=\"cur\"" } else { "" }, html_escape(title_of(p))));
     }
-    format!("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{}</title><style>{}</style></head><body><div class=\"wrap\"><nav class=\"nav\"><a class=\"brand\" href=\"/p/\">{}</a>{}</nav><main class=\"main\">{}<p class=\"foot\">Published from a Notebooks canister on the Internet Computer.</p></main></div></body></html>",
+    format!("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{}</title><style>{}</style></head><body><div class=\"wrap\"><nav class=\"nav\"><a class=\"brand\" href=\"/p/\">{}</a>{}</nav><main class=\"main\">{}<p class=\"foot\">Published from a Notebooks canister on the Internet Computer. · <a href=\"/#/\">Clone &amp; try in Lab (free in browser)</a></p></main></div></body></html>",
         html_escape(cur.map(title_of).unwrap_or(name)), SITE_CSS, html_escape(name), nav, body)
 }
 

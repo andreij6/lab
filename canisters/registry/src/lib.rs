@@ -23,7 +23,7 @@ mod town;
 use problems::{AttemptView, ClaimView, DiscoveryView, EventView, ProblemCard, ProblemStatus, ProblemView, PublishInput, TrackRecord};
 use sponsors::{SponsorInput, SponsorView};
 use stats::AppStats;
-use town::Town;
+use town::{OpenHouse, Town};
 
 const NOTEBOOK_WASM: &[u8] = include_bytes!("../../../target/notebook.wasm.gz");
 /// Cycles a new notebook starts with. The owner is a controller and tops it up from there.
@@ -517,7 +517,7 @@ fn update_bug(id: u64, status: BugStatus, note: String) -> Result<Bug, String> {
 /// Spawn a notebook canister. The caller becomes its owner and a controller next to this registry.
 #[update]
 async fn create_notebook(name: String) -> Result<Notebook, String> {
-    spawn(name, None).await
+    spawn_for(msg_caller(), name, None).await
 }
 
 /// The same, with the spawn price pulled from `payer`'s allowance (an OISY wallet) instead of the caller's.
@@ -526,11 +526,32 @@ async fn create_notebook_paid_by(name: String, payer: Principal) -> Result<Noteb
     if payer == Principal::anonymous() {
         return Err("payer must be a real principal".into());
     }
-    spawn(name, Some(payer)).await
+    spawn_for(msg_caller(), name, Some(payer)).await
 }
 
-async fn spawn(name: String, payer: Option<Principal>) -> Result<Notebook, String> {
-    let owner = msg_caller();
+/// Sponsor a starter notebook for a newcomer `recipient`: the caller (or `payer`) covers the spawn
+/// fee, and `recipient` becomes the owner and controller of the new canister.
+#[update]
+async fn sponsor_newcomer(recipient: Principal, name: String, payer: Option<Principal>) -> Result<Notebook, String> {
+    let sponsor = msg_caller();
+    if sponsor == Principal::anonymous() {
+        return Err("sign in first".into());
+    }
+    if recipient == Principal::anonymous() {
+        return Err("recipient must be a real principal".into());
+    }
+    let nb = spawn_for(recipient, name.clone(), Some(payer.unwrap_or(sponsor))).await?;
+    if let Some(m) = MEMBERS.with_borrow(|x| x.get(&sponsor).map(|c| c.0)) {
+        let id = NEXT_MSG.with_borrow(|n| *n.get());
+        NEXT_MSG.with_borrow_mut(|n| n.set(id + 1));
+        let text = format!("🎁 **@{}** sponsored a starter notebook (“{}”) for a newcomer!", m.handle, nb.name);
+        let msg = Message { id, channel: "general".into(), author: sponsor, handle: m.handle, text, at: time(), reply_to: None, deleted: false, poll: None, reactions: None, gist: None, fund: None, edited: None, pinned: None, post: None };
+        MESSAGES.with_borrow_mut(|x| x.insert(msg_key("general", id), C(msg)));
+    }
+    Ok(nb)
+}
+
+async fn spawn_for(owner: Principal, name: String, payer: Option<Principal>) -> Result<Notebook, String> {
     if owner == Principal::anonymous() {
         return Err("sign in first".into());
     }
@@ -1306,7 +1327,7 @@ thread_local! {
     /// the wallet a person pays from when it is not their sign-in principal (their OISY account)
     static WALLETS: RefCell<StableBTreeMap<Principal, Principal, Mem>> = RefCell::new(StableBTreeMap::init(MM.with_borrow(|m| m.get(MemoryId::new(32)))));
     static NEXT_WATCH: RefCell<ic_stable_structures::StableCell<u64, Mem>> = RefCell::new(ic_stable_structures::StableCell::init(MM.with_borrow(|m| m.get(MemoryId::new(31))), 1));
-    // MemoryIds 33-38 are retired (a journal that never shipped): leave them unused. 39: town.rs VISITORS; 41-43: sponsors.rs; 44: AI_FEES; 45-53: problems.rs; start new maps at 54
+    // MemoryIds 33-38 are retired (a journal that never shipped): leave them unused. 39: town.rs VISITORS; 41-43: sponsors.rs; 44: AI_FEES; 45-53: problems.rs; 54: town.rs OPEN_HOUSES; 55: NEWCOMERS; start new maps at 56
     /// cycles Lab has earned from model answers, all time
     pub static AI_FEES: RefCell<ic_stable_structures::StableCell<u128, Mem>> = RefCell::new(ic_stable_structures::StableCell::init(MM.with_borrow(|m| m.get(MemoryId::new(44))), 0));
     /// owner -> the notebook that pays for what they do in the community (none set: their oldest)
@@ -1840,6 +1861,78 @@ async fn join_community(handle: String) -> Result<Member, String> {
 #[query]
 fn my_membership() -> Option<Member> {
     MEMBERS.with_borrow(|m| m.get(&msg_caller()).map(|c| c.0))
+}
+
+const NEWCOMER_FREE_MESSAGES: u32 = 10;
+thread_local! {
+    /// principal -> (handle, messages_used) for signed-in visitors without a notebook yet
+    static NEWCOMERS: RefCell<StableBTreeMap<Principal, C<(String, u32)>, Mem>> = RefCell::new(StableBTreeMap::init(MM.with_borrow(|m| m.get(MemoryId::new(55)))));
+}
+
+/// How many free messages in #help and #general a signed-in newcomer without a notebook has left, and their chosen handle.
+#[query]
+fn my_newcomer_pass() -> (u32, Option<String>) {
+    let me = msg_caller();
+    if me == Principal::anonymous() {
+        return (0, None);
+    }
+    match NEWCOMERS.with_borrow(|n| n.get(&me).map(|c| c.0)) {
+        Some((h, used)) => (NEWCOMER_FREE_MESSAGES.saturating_sub(used), Some(h)),
+        None => (NEWCOMER_FREE_MESSAGES, None),
+    }
+}
+
+/// Let a signed-in visitor waiting at the station say hello or ask for help in #help or #general (up to 10 free messages).
+#[update]
+fn post_newcomer(channel: String, handle: String, text: String, reply_to: Option<u64>) -> Result<Message, String> {
+    let me = msg_caller();
+    if me == Principal::anonymous() {
+        return Err("sign in first".into());
+    }
+    let ch = check_channel(&channel)?;
+    if ch != "help" && ch != "general" {
+        return Err("newcomer pass is for #help and #general".into());
+    }
+    let existing = NEWCOMERS.with_borrow(|n| n.get(&me).map(|c| c.0));
+    let used = existing.as_ref().map(|(_, u)| *u).unwrap_or(0);
+    if used >= NEWCOMER_FREE_MESSAGES {
+        return Err("your 10 free newcomer messages are used up; create a notebook or ask for a sponsor in #help".into());
+    }
+    let handle = if handle.trim().is_empty() {
+        existing.map(|(h, _)| h).ok_or("pick a handle first")?
+    } else {
+        handle.trim().to_string()
+    };
+    if handle.is_empty() || handle.chars().count() > 32 || handle.contains(['@', '#', '<', '>']) {
+        return Err("handle: 1-32 characters, no @ # < >".into());
+    }
+    if foul(&handle).is_some() {
+        return Err("pick a cleaner handle".into());
+    }
+    if MEMBERS.with_borrow(|m| m.iter().any(|e| e.value().0.handle.eq_ignore_ascii_case(&handle) && *e.key() != me))
+        || NEWCOMERS.with_borrow(|n| n.iter().any(|e| e.value().0.0.eq_ignore_ascii_case(&handle) && *e.key() != me))
+    {
+        return Err("that handle is taken".into());
+    }
+    let text = text.trim().to_string();
+    if text.is_empty() || text.chars().count() > 2000 {
+        return Err("message: 1-2000 characters".into());
+    }
+    clean(&text)?;
+    if let Some(r) = reply_to {
+        if MESSAGES.with_borrow(|x| x.get(&msg_key(&ch, r))).is_none() {
+            return Err("reply target is not in this channel".into());
+        }
+    }
+    NEWCOMERS.with_borrow_mut(|n| n.insert(me, C((handle.clone(), used + 1))));
+    let id = NEXT_MSG.with_borrow(|n| *n.get());
+    NEXT_MSG.with_borrow_mut(|n| n.set(id + 1));
+    let msg = Message { id, channel: ch.clone(), author: me, handle, text, at: time(), reply_to, deleted: false, poll: None, reactions: None, gist: None, fund: None, edited: None, pinned: None, post: None };
+    MESSAGES.with_borrow_mut(|x| x.insert(msg_key(&ch, id), C(msg.clone())));
+    record_mentions(&msg);
+    CHAT_PRESENCE.with_borrow_mut(|p| p.insert(me, C((ch, time()))));
+    LAST_POST.with_borrow_mut(|l| l.insert(me, time()));
+    Ok(msg)
 }
 
 

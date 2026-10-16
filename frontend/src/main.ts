@@ -30,7 +30,7 @@ import { CALENDAR_BOARD, LANES, LIMIT, POST_TEMPLATE, calendar, logResults, plac
 import { WORKOUT_TEMPLATE, newRecords, pace, progress, records, weekly, workouts } from "./fitness";
 import { ITEM_TEMPLATE, UPKEEP_TEMPLATE, doneUpkeep, inventory, items, upkeep, warrantiesEnding } from "./home";
 import { attachSky, paintBand, skyPulse } from "./sky";
-import { DEFAULT_WATCH, MAX_WATCH, THESIS_TEMPLATE, TRADE_TEMPLATE, closeTrade, isOpen, isThesis, isTrade, journalStats, pnl, reviewThesis, rMultiple, symbolOf, theses, trade, tradePath, usd, watchSymbols, type Side, type Trade } from "./crypto";
+import { DEFAULT_WATCH, MAX_WATCH, THESIS_TEMPLATE, TRADE_TEMPLATE, closeTrade, isOpen, isThesis, isTrade, journalStats, pnl, reviewThesis, rMultiple, symbolOf, theses, thesisCardSummary, trade, tradePath, usd, watchSymbols, type Side, type Trade } from "./crypto";
 import { cardKey, isDue, review as srsReview, type Rating, type Sched } from "./srs";
 import { align, isLeanNote, leanCode, parseLean, statementCard, unmentionedHyps } from "./lean";
 import { NEW_IPYNB, addCell as nbAddCell, isNotebookPath, moveCell as nbMoveCell, parseNotebook, serializeNotebook, type Cell as NbCell, type Notebook as Nb, type Output as NbOutput } from "./ipynb";
@@ -54,7 +54,7 @@ import { THEMES, applyTheme, loadThemeState, saveThemeState, type ThemeState } f
 import { zip } from "./zip";
 import { addLink, addTag, suggest, type Suggestion } from "./garden";
 import type { Usage as NbUsage } from "./bindings/notebook";
-import { DISTRICTS, attachTown, season, townCamera, townFly, townSpotlight, type Target as TownTarget, type TownData } from "./town";
+import { DISTRICTS, attachTown, season, townCamera, townFly, townSpotlight, type OpenHouseInfo, type Target as TownTarget, type TownData } from "./town";
 
 // ---------- the cycles minting canister: today's ICP price in cycles ----------
 
@@ -150,7 +150,7 @@ async function currentIdentity(): Promise<Identity | undefined> {
 
 // --- "working" indicator: every canister update call shows a progress bar and a label while it runs
 // (updates take a couple of seconds on mainnet); queries stay silent unless they drag on past a second.
-const BUSY_LABELS: Record<string, string> = { delete_notebook: "Deleting the notebook…", ask: "Asking the language model…", join_community: "Joining the community…", post: "Posting…", edit_message: "Saving your edit…", create_post: "Posting…", comment_post: "Posting your comment…", vote_post: "Voting…", vote_comment: "Voting…", react: "Reacting…", vote: "Voting…", post_poll: "Posting the poll…", post_gist: "Sharing the note…", post_fund: "Starting the fundraiser…", post_plan_fund: "Starting the fundraiser…", donate: "Sending ICP…", rain: "Making it rain…", link_github: "Asking GitHub…", share_post: "Sharing…", pin_message: "Pinning…", delete_message: "Deleting…", delete_post: "Deleting…", create_notebook: "Spawning your notebook (about a minute)…", create_notebook_paid_by: "Spawning your notebook (about a minute)…", top_up_notebook: "Converting ICP to cycles…", pay: "Paying…", write: "Saving…", rename: "Renaming…", delete: "Deleting…", set_share: "Updating sharing…", report_bug: "Sending…", report_idea: "Sending…", buy: "Buying…", list_notebook: "Listing…", upgrade_all: "Upgrading notebooks…", restore: "Restoring…", comment: "Posting your comment…", reply: "Posting your reply…" };
+const BUSY_LABELS: Record<string, string> = { delete_notebook: "Deleting the notebook…", ask: "Asking the language model…", join_community: "Joining the community…", post: "Posting…", post_newcomer: "Posting…", sponsor_newcomer: "Spawning starter notebook…", set_open_house: "Updating your porch…", wave_house: "Waving 👋…", edit_message: "Saving your edit…", create_post: "Posting…", comment_post: "Posting your comment…", vote_post: "Voting…", vote_comment: "Voting…", react: "Reacting…", vote: "Voting…", post_poll: "Posting the poll…", post_gist: "Sharing the note…", post_fund: "Starting the fundraiser…", post_plan_fund: "Starting the fundraiser…", donate: "Sending ICP…", rain: "Making it rain…", link_github: "Asking GitHub…", share_post: "Sharing…", pin_message: "Pinning…", delete_message: "Deleting…", delete_post: "Deleting…", create_notebook: "Spawning your notebook (about a minute)…", create_notebook_paid_by: "Spawning your notebook (about a minute)…", top_up_notebook: "Converting ICP to cycles…", pay: "Paying…", write: "Saving…", rename: "Renaming…", delete: "Deleting…", set_share: "Updating sharing…", report_bug: "Sending…", report_idea: "Sending…", buy: "Buying…", list_notebook: "Listing…", upgrade_all: "Upgrading notebooks…", restore: "Restoring…", comment: "Posting your comment…", reply: "Posting your reply…" };
 const busyCalls = new Map<number, string>();
 let busySeq = 0;
 function busyRender() {
@@ -174,9 +174,148 @@ function tracked<T extends object>(actor: T): T {
 /** Off until the registry says otherwise: the market ships switched off. */
 const OFF_BY_DEFAULT = ["market", "problems"];
 const flag = (name: string): boolean => { const f = S.flags.find((x) => x.name === name); return f ? f.on : !OFF_BY_DEFAULT.includes(name); };
+
+// --- Browser Sandbox Notebook ("local-sandbox"): full zero-ICP browser workspace, mintable to an on-chain canister any time
+const SANDBOX_ID = "local-sandbox";
+const isSandbox = () => S.notebook?.canister.toText() === SANDBOX_ID;
+const sandboxRecord = (): NotebookRec => ({
+  canister: { toText: () => SANDBOX_ID } as unknown as Principal,
+  owner: Principal.anonymous(),
+  name: "Browser Sandbox",
+  description: "Free local workspace in this browser — mint to an on-chain canister any time",
+  emoji: "🧪",
+  created_at: BigInt(Date.now()) * 1_000_000n,
+});
+function sandboxDefaultNotes(): Note[] {
+  const today = new Date().toISOString().slice(0, 10);
+  const nowNs = BigInt(Date.now()) * 1_000_000n;
+  const ex = examples(new Set(["chat", "study", "work", "organize", "research", "crypto", "money"]), today);
+  const baseNotes: [string, string, string?][] = [
+    ["index.md", `---\ntags: [sandbox, welcome]\n---\n# Welcome to your Browser Sandbox 🧪\n\nYou are trying **Lab** right in your browser — no ICP or wallet needed to explore. Everything here works immediately and saves locally on this device:\n\n- **Obsidian-grade Markdown & Knowledge Graph**: Open [[Examples/Writing notes]] or click the **Graph** icon on the left.\n- **Autonomous AI Agents**: Inspect [[Agents/Morning Brief]] — on-chain canisters can issue scoped \`nb_...\` keys so AI agents write directly to \`Agents/\` over HTTPS.\n- **Python, Spreadsheets & Live Dashboards**: Run [[Examples/Python.ipynb]] in-browser, edit [[Examples/Budget.sheet]], or view [[Examples/Dashboard.dash]].\n- **Spaced Repetition & Quizzes**: Practice [[Examples/Study/Flashcards]] or take [[Examples/Study/Quiz]].\n- **Crypto & Research Kits**: Check live XRC prices and theses in **Crypto**, or verify citations in **Research**.\n\n> [!tip] Ready to own this on-chain?\n> Click **Mint to on-chain canister** in the top banner any time to spin up your own sovereign Internet Computer canister and copy every note in this sandbox into it.\n`],
+    ["Agents/Morning Brief.md", `---\ntags: [agent, brief]\n---\n# Morning Research & Market Brief\n\nWritten autonomously to \`/api/notes/Agents/Morning%20Brief.md\` using a scoped agent bearer key.\n\n- **Knowledge Graph**: Linked to [[Examples/Writing notes]] and [[Crypto/Theses/BTC holds up better than the rest]].\n- **Action items**:\n  - [ ] Review [[Examples/Study/Flashcards]] due today\n  - [ ] Check live XRC price move on BTC thesis\n`, "research-bot"],
+    ...ex.map(([p, c]): [string, string] => [p, c]),
+  ];
+  return baseNotes.map(([path, content, agent]) => ({ path, content, created: nowNs, modified: nowNs, ...(agent ? { agent } : {}) }));
+}
+function sandboxLoadNotes(): Note[] {
+  const raw = store("nb-sandbox-notes");
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as { path: string; content: string; created: string; modified: string; agent?: string }[];
+      if (Array.isArray(parsed) && parsed.length) return parsed.map((n) => ({ path: n.path, content: n.content, created: BigInt(n.created || "0"), modified: BigInt(n.modified || "0"), ...(n.agent ? { agent: n.agent } : {}) }));
+    } catch { /* fall through to default */ }
+  }
+  const init = sandboxDefaultNotes();
+  sandboxSaveNotes(init);
+  return init;
+}
+function sandboxSaveNotes(notes: Note[]) {
+  store("nb-sandbox-notes", JSON.stringify(notes.map((n) => ({ path: n.path, content: n.content, created: n.created.toString(), modified: n.modified.toString(), ...(n.agent ? { agent: n.agent } : {}) }))));
+}
+function sandboxLoadFolders(): string[] {
+  const notes = sandboxLoadNotes();
+  const fromNotes = new Set<string>(JSON.parse(store("nb-sandbox-folders") ?? "[]") as string[]);
+  for (const n of notes) {
+    const parts = n.path.split("/");
+    for (let i = 1; i < parts.length; i++) fromNotes.add(parts.slice(0, i).join("/"));
+  }
+  return [...fromNotes].sort();
+}
+function sandboxSettingsRaw(): string {
+  const raw = store("nb-sandbox-settings");
+  if (raw) return raw;
+  const dflt = JSON.stringify({ onboarded: true, features: { chat: true, graph: true, study: true, work: true, organize: true, research: true, crypto: true, money: true } });
+  store("nb-sandbox-settings", dflt);
+  return dflt;
+}
+function sandboxNotebookApi(): NotebookApi {
+  const nowNs = () => BigInt(Date.now()) * 1_000_000n;
+  const api: Partial<NotebookApi> = {
+    read_page: async (after) => ({ __kind__: "Ok", Ok: { notes: after ? [] : sandboxLoadNotes(), next: undefined } }),
+    read: async (p) => { const n = sandboxLoadNotes().find((x) => x.path === p); return n ? { __kind__: "Ok", Ok: n } : { __kind__: "Err", Err: { __kind__: "NotFound", NotFound: null } }; },
+    list: async () => ({ __kind__: "Ok", Ok: sandboxLoadNotes().map((n) => ({ path: n.path, size: BigInt(n.content.length), created: n.created, modified: n.modified, agent: n.agent })) }),
+    folders: async () => ({ __kind__: "Ok", Ok: sandboxLoadFolders() }),
+    info: async () => { const ns = sandboxLoadNotes(); return { cycles: 3_000_000_000_000n, files: BigInt(ns.length), bytes: BigInt(ns.reduce((a, x) => a + x.content.length, 0)), total_topped_up_e8s: 0n, total_cycles_from_topups: 0n, owner: Principal.anonymous(), name: "Browser Sandbox", created_at: BigInt(Date.now()) * 1_000_000n, topup_account_id: "", registry: Principal.anonymous(), pending_topups: 0n }; },
+    topups: async () => [],
+    agent_keys: async () => ({ __kind__: "Ok", Ok: [] }),
+    shares: async () => ({ __kind__: "Ok", Ok: [] }),
+    get_settings: async () => ({ __kind__: "Ok", Ok: sandboxSettingsRaw() }),
+    set_settings: async (j) => { store("nb-sandbox-settings", j); return { __kind__: "Ok", Ok: null }; },
+    all_comments: async () => ({ __kind__: "Ok", Ok: [] }),
+    published: async () => null,
+    usage: async () => { const ns = sandboxLoadNotes(); return { files: BigInt(ns.length), notes: BigInt(ns.filter((n) => n.path.endsWith(".md")).length), links: BigInt(ns.reduce((a, n) => a + (n.content.match(/\[\[/g)?.length ?? 0), 0)), streak: 1, active_days: 1, agent_active: false, last_modified: ns.reduce((a, n) => (n.modified > a ? n.modified : a), 0n) }; },
+    history: async () => ({ __kind__: "Ok", Ok: [] }),
+    write: async (path, content) => {
+      const ns = sandboxLoadNotes();
+      const t = nowNs();
+      const ex = ns.find((x) => x.path === path);
+      if (ex) { ex.content = content; ex.modified = t; }
+      else ns.push({ path, content, created: t, modified: t });
+      sandboxSaveNotes(ns);
+      return { __kind__: "Ok", Ok: { path, size: BigInt(content.length), created: ex?.created ?? t, modified: t } };
+    },
+    write_many: async (items, overwrite) => {
+      const ns = sandboxLoadNotes();
+      const t = nowNs();
+      let written = 0;
+      const failed: [string, string][] = [];
+      for (const [path, content] of items) {
+        const ex = ns.find((x) => x.path === path);
+        if (ex && !overwrite) { failed.push([path, "exists"]); continue; }
+        if (ex) { ex.content = content; ex.modified = t; }
+        else ns.push({ path, content, created: t, modified: t });
+        written++;
+      }
+      sandboxSaveNotes(ns);
+      return { __kind__: "Ok", Ok: { written, failed } };
+    },
+    delete_: async (path) => {
+      sandboxSaveNotes(sandboxLoadNotes().filter((x) => x.path !== path));
+      return { __kind__: "Ok", Ok: null };
+    },
+    mkdir: async (path) => {
+      const clean = path.replace(/^\/+|\/+$/g, "");
+      const fs = new Set(sandboxLoadFolders());
+      fs.add(clean);
+      store("nb-sandbox-folders", JSON.stringify([...fs]));
+      return { __kind__: "Ok", Ok: clean };
+    },
+    rename: async (from, to): Promise<Awaited<ReturnType<NotebookApi["rename"]>>> => {
+      const ns = sandboxLoadNotes();
+      const ex = ns.find((x) => x.path === from);
+      if (!ex) return { __kind__: "Err", Err: { __kind__: "NotFound", NotFound: null } };
+      ex.path = to;
+      ex.modified = nowNs();
+      sandboxSaveNotes(ns);
+      return { __kind__: "Ok", Ok: { file: { path: to, size: BigInt(ex.content.length), created: ex.created, modified: ex.modified }, relinked: [] } };
+    },
+    rename_folder: async (from, to) => {
+      const ns = sandboxLoadNotes();
+      let moved = 0;
+      for (const n of ns) if (n.path.startsWith(`${from}/`)) { n.path = `${to}${n.path.slice(from.length)}`; moved++; }
+      sandboxSaveNotes(ns);
+      return { __kind__: "Ok", Ok: { moved, relinked: [] } };
+    },
+    delete_folder: async (path) => {
+      const ns = sandboxLoadNotes();
+      const keep = ns.filter((n) => !n.path.startsWith(`${path}/`));
+      const gone = ns.length - keep.length;
+      sandboxSaveNotes(keep);
+      store("nb-sandbox-folders", JSON.stringify(sandboxLoadFolders().filter((f) => f !== path && !f.startsWith(`${path}/`))));
+      return { __kind__: "Ok", Ok: gone };
+    },
+  };
+  return new Proxy(api as NotebookApi, {
+    get(target, key) {
+      if (key in target) return Reflect.get(target, key);
+      return async () => ({ __kind__: "Err", Err: { __kind__: "Invalid", Invalid: "Mint this browser sandbox to an on-chain canister first to use this feature" } });
+    },
+  });
+}
+
 const registry = (): Registry => tracked(registryActor(REGISTRY, { agentOptions: { identity: S.identity, rootKey: env.IC_ROOT_KEY } }));
-const notebookOf = (id: string): NotebookApi => tracked(notebookActor(id, { agentOptions: { identity: S.identity, rootKey: env.IC_ROOT_KEY } }));
-const nb = (): NotebookApi => notebookOf(S.notebook!.canister.toText());
+const notebookOf = (id: string): NotebookApi => (id === SANDBOX_ID ? sandboxNotebookApi() : tracked(notebookActor(id, { agentOptions: { identity: S.identity, rootKey: env.IC_ROOT_KEY } })));
+const nb = (): NotebookApi => notebookOf(isSandbox() ? SANDBOX_ID : S.notebook!.canister.toText());
 
 // ---------- state ----------
 
@@ -218,6 +357,7 @@ const S = {
   identity: undefined as Identity | undefined,
   principal: "",
   signin: { busy: false, error: "" },
+  landingPersona: "obsidian" as string,
   notebooks: undefined as NotebookRec[] | undefined,
   notebookInfo: new Map<string, Info>(),
   /** cycles health per notebook from the registry; answers even when the notebook is frozen */
@@ -289,7 +429,7 @@ const S = {
   pomodoro: undefined as { end: number; phase: "work" | "break" } | undefined,
   taskOwner: "" as string,
   clipperKey: undefined as string | undefined,
-  community: undefined as { channel: string; channels: Channel[]; messages: Message[]; online: Online[]; member?: Member; balance?: bigint; loading: boolean; draft: string; replyTo?: Message; unread: Record<string, number>; showOnline: boolean; showChannels: boolean; picker?: { mid?: bigint }; editing?: bigint; pins?: Message[]; showPins?: boolean; fee?: bigint; primary?: NotebookRec; error?: string; github?: string; repo?: string; firstUnseen?: bigint; atBottom?: boolean; newCount?: number; gistSlide?: Map<bigint, number> } | undefined,
+  community: undefined as { channel: string; channels: Channel[]; messages: Message[]; online: Online[]; member?: Member; newcomerLeft?: number; newcomerHandle?: string; balance?: bigint; loading: boolean; draft: string; replyTo?: Message; unread: Record<string, number>; showOnline: boolean; showChannels: boolean; picker?: { mid?: bigint }; editing?: bigint; pins?: Message[]; showPins?: boolean; fee?: bigint; primary?: NotebookRec; error?: string; github?: string; repo?: string; firstUnseen?: bigint; atBottom?: boolean; newCount?: number; gistSlide?: Map<bigint, number> } | undefined,
   show: undefined as { slides: string[]; i: number; self?: string; dead?: boolean } | undefined,
   mentions: 0, // @mentions of me in the community since I last looked
   org: { q: "", selected: new Set<string>(), triage: false, triageIdx: 0 } as { q: string; sort?: { key: string; dir: number }; selected: Set<string>; triage: boolean; triageIdx: number },
@@ -972,7 +1112,7 @@ function routeSheet(el: HTMLElement) {
     ...(inNb ? [{ label: "Search or open a note", icon: "search", on: false, go: () => openPalette() } as R] : []),
     { label: "Help and support", icon: "help", on: false, go: () => void onAction("help", el, new MouseEvent("click")) },
     ...(themeAllowed() ? [{ label: "Appearance", icon: "palette", on: false, go: () => void onAction("theme-menu", el, new MouseEvent("click")) } as R] : []),
-    ...(S.identity ? [{ label: "Sign out", icon: "out", on: false, go: () => void onAction("sign-out", el, new MouseEvent("click")) } as R] : [{ label: "Sign in", icon: "out", on: false, go: () => void onAction("sign-in", el, new MouseEvent("click")) } as R]),
+    ...(S.identity ? [{ label: "Sign out", icon: "out", on: false, go: () => void onAction("sign-out", el, new MouseEvent("click")) } as R] : [{ label: "Sign in with Internet Identity", icon: "out", on: false, go: () => void onAction("sign-in", el, new MouseEvent("click")) } as R]),
   ];
   const sheet = document.createElement("div");
   sheet.className = "route-sheet";
@@ -1014,20 +1154,71 @@ const themeAllowed = () => !S.identity || !!S.community || !!S.board || !!S.town
 const themeBtn = () => S.mobile ? moreBtn() : `${S.community ? "" : `<a class="btn btn-ghost" href="#/community" data-action="nav" title="Community chat">${icon("users")}<span class="lbl">Community</span></a>`}${S.board || !flag("board") ? "" : `<a class="btn btn-ghost" href="#/board" data-action="nav" title="Posts and discussion">${icon("pin")}<span class="lbl">Board</span></a>`}${S.market || !flag("market") ? "" : `<a class="btn btn-ghost" href="#/market" data-action="nav" title="Notebooks for sale">${icon("tag")}<span class="lbl">Market</span></a>`}${flag("town") && !S.town ? `<a class="btn btn-ghost" href="#/town" data-action="nav" title="Lab as a small town: who is writing, who is talking">${icon("town")}<span class="lbl">Town</span></a>` : ""}${S.isAdmin ? `<a class="btn btn-ghost" href="#/admin" data-action="nav" title="Reports and ideas">${icon("bug")}<span class="lbl">Admin</span></a>` : ""}<button type="button" class="btn btn-ghost icon-btn" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button>${themeAllowed() ? `<button type="button" class="btn btn-ghost icon-btn" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon(S.theme.mode === "dark" ? "moon" : "sun")}</button>` : ""}`;
 const account = () => `<footer class="account">${icon("shield")}<span>Signed in as <code class="principal" title="${S.principal}">${shortPrincipal(S.principal)}</code></span><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="copy-principal">${S.copied === "principal" ? "Copied" : "Copy principal"}</button><button type="button" class="btn btn-ghost" data-action="sign-out">Sign out</button></span></footer>`;
 
+const LANDING_PERSONAS: { id: string; label: string; icon: string; badge: string; title: string; desc: string; snippet: string; openPath: string; tab?: Tab }[] = [
+  { id: "obsidian", label: "Obsidian & PKM", icon: "graph", badge: "Obsidian-compatible", title: "Bring your Obsidian notes into a canister you own", desc: "Drop a folder or .zip: [[wikilinks]], #tags, backlinks with context, Excalidraw drawings, .canvas boards, and force-directed knowledge graphs work out of the box.", snippet: `---
+tags: [pkm, sovereign]
+---
+# Connected Knowledge Base
+Link to [[Examples/Slides]] or embed diagrams with ![[Sketch.excalidraw]].
+- [x] Backlinks update automatically when you rename a note`, openPath: "Examples/Writing notes.md", tab: "notes" },
+  { id: "agents", label: "AI & Autonomous Agents", icon: "bot", badge: "REST API + MCP Skill", title: "A sovereign memory canister for your AI agents & OpenClaw bots", desc: "Mint scoped nb_… bearer keys in one click. Autonomous agents read your notes and write briefings into Agents/ over standard HTTPS — no wallet SDK required.", snippet: `$ curl -X PUT https://<canister>.icp0.io/api/notes/Agents/Brief.md \\
+  -H "Authorization: Bearer nb_a8f9..." \\
+  -d "# Morning Brief\\n\\nLinked to [[BTC holds up better than the rest]]."`, openPath: "Agents/Morning Brief.md", tab: "notes" },
+  { id: "data", label: "Python, Sheets & Dashboards", icon: "command", badge: "In-Browser Pyodide", title: "Run Jupyter Python notebooks, reactive spreadsheets & KPI dashboards", desc: "Execute Python with NumPy/Pandas in-browser via WebAssembly, load any .sheet workbook with sheet(\"Budget\"), and pin live charts to .dash dashboards.", snippet: `# In Examples/Python.ipynb:
+df = sheet("Examples/Budget.sheet")
+df["Variance"] = df["Spent"] - df["Planned"]
+print(df.to_string(index=False))`, openPath: "Examples/Python.ipynb", tab: "notes" },
+  { id: "research", label: "Research & Formal Math", icon: "quote", badge: "Lean 4 + BibTeX + DOI", title: "Literature matrices, claim verification, Lean 4 proofs & Problem Bounties", desc: "Import BibTeX or DOIs, verify that every Claim:: line has citations, align informal proofs with Lean 4 theorems, and collaborate on ICP-bounty problems.", snippet: `Claim:: Sovereign canisters eliminate cloud lock-in [@doe2024example]
+
+theorem canister_persists (c : Cycles) (h : c > freeze_threshold) :
+  alive c := by exact h`, openPath: "Research/Draft.md", tab: "research" },
+  { id: "study", label: "Study & Spaced Repetition", icon: "cap", badge: "SM-2 Flashcards + Quizzes", title: "Turn any note into spaced-repetition flashcards & interactive quizzes", desc: "Write Front::Back lines or highlight ==cloze deletions==. The built-in SM-2 scheduler resurfaces cards right before you forget, or exports straight to Anki.", snippet: `---
+quiz: cards
+---
+What fuels a notebook canister on the Internet Computer?::Cycles
+
+Spaced repetition:: reviewing a card just before you would forget it.`, openPath: "Examples/Study/Flashcards.md", tab: "study" },
+  { id: "kits", label: "Crypto, Finance & Life Kits", icon: "coin", badge: "12 Built-In Kits", title: "Live XRC crypto theses & trade journals, budgets, career & trip safety", desc: "Price watchlists from the ICP Exchange Rate Canister, track win rate & R-multiples, log thesis cards with live % move since written, or run 10 other built-in kits.", snippet: `---
+type: thesis
+asset: BTC
+price_then: 90000
+review: 2026-11-15
+---
+# BTC holds up better than the rest
+Wrong if: It falls further than ETH and SOL in the next drawdown`, openPath: "Crypto/Theses/BTC holds up better than the rest.md", tab: "crypto" },
+];
+
 function landing(): string {
   const msg = S.signin.busy ? `<span class="muted small">Signing in with ${devMode ? "a local development identity" : "Internet Identity"}…</span>` : S.signin.error ? `<span class="error small" role="alert">Sign-in failed: ${esc(S.signin.error)}.</span>` : `<span class="muted small">${devMode ? "Local network: a browser-held development key. Add ?ii for Internet Identity." : "Internet Identity. No email, no password, nothing to leak."}</span>`;
+  const curP = LANDING_PERSONAS.find((p) => p.id === S.landingPersona) ?? LANDING_PERSONAS[0];
   return `<div class="page">
     <canvas class="landing-sky" data-landing-sky aria-hidden="true"></canvas>
     <header class="topbar">${brand()}<span class="right"><span class="kicker">On the Internet Computer</span>${S.mobile ? moreBtn() : `<button type="button" class="btn btn-ghost icon-btn" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="btn btn-ghost icon-btn" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon(S.theme.mode === "dark" ? "moon" : "sun")}</button>`}</span></header>
     <section class="hero">
       <h1>Organize your thoughts. Get feedback. Build a knowledge base.</h1>
       <p class="lede">A notebook is a folder of markdown files: links between notes, backlinks, tags, a knowledge graph. Here every notebook is its own canister on the Internet Computer. You sign in with Internet Identity, you are its controller, and you keep it running with cycles. Nobody else can read it, not even the registry that created it.</p>
+      <div class="cta">
+        <button type="button" class="btn btn-primary btn-lg" data-action="sign-in" ${S.signin.busy ? "disabled" : ""}>${S.signin.busy ? "Signing in…" : S.signin.error ? "Retry sign in" : "Sign in with Internet Identity"} ${icon("out")}</button>
+        <button type="button" class="btn btn-lg sandbox-cta" data-action="try-sandbox" data-path="${esc(curP.openPath)}" data-tab="${esc(curP.tab ?? "notes")}">${icon("notebook")}Try in browser — free</button>
+        ${msg}
+      </div>
+      <div class="persona-showcase glass" aria-label="Explore what is inside a notebook">
+        <div class="persona-tabs" role="tablist">${LANDING_PERSONAS.map((p) => `<button type="button" role="tab" class="persona-tab ${p.id === curP.id ? "on" : ""}" aria-selected="${p.id === curP.id}" data-action="landing-persona" data-persona="${p.id}">${icon(p.icon)}<span>${esc(p.label)}</span></button>`).join("")}</div>
+        <div class="persona-body">
+          <div class="persona-copy">
+            <span class="pill ok">${esc(curP.badge)}</span>
+            <h2>${esc(curP.title)}</h2>
+            <p class="muted">${esc(curP.desc)}</p>
+            <div class="row tight"><button type="button" class="btn btn-primary" data-action="try-sandbox" data-path="${esc(curP.openPath)}" data-tab="${esc(curP.tab ?? "notes")}">${icon("bolt")}Try ${esc(curP.label)} in browser</button></div>
+          </div>
+          <pre class="persona-code"><code>${esc(curP.snippet)}</code></pre>
+        </div>
+      </div>
       <div class="features">
         <div class="feature">${icon("notebook")}<b>One canister per notebook</b><p>Spawned for you, controlled by you. Download it as a zip any time; it is yours on-chain.</p></div>
         <div class="feature">${icon("graph")}<b>Links that think</b><p>Links between notes, backlinks with context, tags, search and a force-directed graph of how your notes connect.</p></div>
         <div class="feature">${icon("bolt")}<b>Keep it running</b><p>See the cycles left, send ICP from any wallet or top up in one click. Links are rewritten when you rename.</p></div>
       </div>
-      <div class="cta"><button type="button" class="btn btn-primary btn-lg" data-action="sign-in" ${S.signin.busy ? "disabled" : ""}>${S.signin.busy ? "Signing in…" : S.signin.error ? "Retry sign in" : "Sign in"} ${icon("out")}</button>${msg}</div>
       ${townPreview()}
     </section>
   </div>`;
@@ -1069,6 +1260,11 @@ function sharedWithYou(): string {
     <div class="nb-grid">${seen.map((x) => `<a class="nb-card" href="#/shared/${x.canister}/" data-action="nav"><span class="nb-emoji" aria-hidden="true">📓</span><span class="name">${esc(x.name)}</span><span class="small muted">opened ${new Date(x.at).toLocaleDateString()}</span></a>`).join("")}</div></section>`;
 }
 function notebooksPage(): string {
+  const sandboxCard = `<button type="button" class="nb-card sandbox-card" data-action="try-sandbox" data-path="index.md">
+    <span class="nb-emoji" aria-hidden="true">🧪</span>
+    <span class="name">Browser Sandbox <span class="pill ok">Free · Local</span></span>
+    <span class="small nb-desc">Try every kit, Python notebook, spreadsheet, flashcard deck and graph in this browser — mint to an on-chain canister any time.</span>
+  </button>`;
   const cards = S.notebooks === undefined
     ? `<p class="muted">Loading your notebooks…</p>`
     : `<div class="nb-grid">${S.notebooks.map((v) => {
@@ -1080,6 +1276,7 @@ function notebooksPage(): string {
           ${h?.frozen ? `<span class="small danger">Frozen: unreachable until topped up; deleted in about ${String(h.days_left)} days.</span>` : ""}
         </button>`;
       }).join("")}
+      ${sandboxCard}
       <form class="nb-card new" data-form="create-notebook">
         <span class="name">${icon("plus")}New notebook</span>
         <span class="small muted">Spawns a canister with you as owner and controller.${S.price > 0n ? ` Spawning costs ${icp(S.price)} ICP.` : ""}</span>
@@ -1106,7 +1303,9 @@ function shell(body: string): string {
         <button type="button" class="mtab" data-action="palette">${icon("search")}Find</button>
       </nav>`
     : "";
-  const alert = S.frozen
+  const alert = isSandbox()
+    ? `<div class="alert-bar sandbox-bar">🧪 <b>Browser Sandbox</b> — stored locally in this browser (no ICP required). <button type="button" class="btn btn-primary" data-action="sandbox-mint">${icon("bolt")}Mint to on-chain canister</button>${S.identity ? `<a class="btn btn-ghost" href="#/" data-action="nav">Your notebooks</a>` : `<button type="button" class="btn btn-ghost" data-action="sign-in">Sign in with Internet Identity</button>`}</div>`
+    : S.frozen
     ? `<div class="alert-bar">${icon("bolt")}This notebook is frozen: it cannot answer until it is topped up. ${S.notes?.length ? "You are seeing the last copy saved on this device." : ""} <button type="button" class="btn btn-ghost" data-action="freeze-modal">Top up</button></div>`
     : S.conflicts.length
     ? `<div class="alert-bar">${icon("split")}${S.conflicts.length} note${S.conflicts.length === 1 ? " was" : "s were"} changed here offline and elsewhere too. <button type="button" class="btn btn-ghost" data-action="conflicts-open">Choose versions</button></div>`
@@ -1133,7 +1332,7 @@ function ribbonHtml(i?: Info, low = false): string {
   const badge: Partial<Record<Tab, string>> = { study: dueTotal() ? `<i class="rb-count">${dueTotal()}</i>` : "", work: overdueCount() ? `<i class="rb-count danger">${overdueCount()}</i>` : "", trips: tripLate ? `<i class="rb-dot"></i>` : "" };
   return `<nav class="ribbon" aria-label="Sections">
       <div class="rb-group">${rb("notes", "Notes", "file")}${S.notebook ? FEATURES.map((f) => rb(f.id, tip[f.id] ?? f.label, f.icon, badge[f.id] ?? "")).join("") : ""}</div>
-      <div class="rb-group bottom">${rb("manage", `Manage${i ? ` · ${tc(i.cycles)}` : ""}`, "cog", low ? `<i class="rb-dot"></i>` : "")}<a class="rb ${S.community ? "on" : ""}" href="#/community" data-action="nav" title="Community${S.mentions ? ` · ${S.mentions} new mention${S.mentions === 1 ? "" : "s"}` : ""}" aria-label="Community">${icon("users")}${S.mentions ? `<i class="rb-badge">${S.mentions > 9 ? "9+" : S.mentions}</i>` : ""}</a>${flag("board") ? `<a class="rb ${S.board ? "on" : ""}" href="#/board" data-action="nav" title="Board: posts and discussion" aria-label="Board">${icon("pin")}</a>` : ""}${flag("problems") ? `<a class="rb ${S.problems ? "on" : ""}" href="#/problems" data-action="nav" title="Problems: open problems, claims, attempts, bounties and discoveries" aria-label="Problems">${icon("target")}</a>` : ""}${flag("town") ? `<a class="rb ${S.town ? "on" : ""}" href="#/town" data-action="nav" title="Town: Lab right now${S.townNews ? ` · ${S.townNews} new building${S.townNews === 1 ? "" : "s"}` : ""}" aria-label="Town">${icon("town")}${S.townNews ? `<i class="rb-dot" title="New buildings in town"></i>` : ""}</a>` : ""}${flag("market") ? `<a class="rb ${S.market ? "on" : ""}" href="#/market" data-action="nav" title="Notebook market" aria-label="Notebook market">${icon("tag")}</a>` : ""}${S.isAdmin ? `<a class="rb ${S.admin ? "on" : ""}" href="#/admin" data-action="nav" title="Reports and ideas" aria-label="Reports and ideas">${icon("bug")}</a>` : ""}<button type="button" class="rb" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="rb" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button><button type="button" class="rb" data-action="sign-out" title="Sign out" aria-label="Sign out">${icon("out")}</button></div>
+      <div class="rb-group bottom">${rb("manage", `Manage${i ? ` · ${tc(i.cycles)}` : ""}`, "cog", low ? `<i class="rb-dot"></i>` : "")}<a class="rb ${S.community ? "on" : ""}" href="#/community" data-action="nav" title="Community${S.mentions ? ` · ${S.mentions} new mention${S.mentions === 1 ? "" : "s"}` : ""}" aria-label="Community">${icon("users")}${S.mentions ? `<i class="rb-badge">${S.mentions > 9 ? "9+" : S.mentions}</i>` : ""}</a>${flag("board") ? `<a class="rb ${S.board ? "on" : ""}" href="#/board" data-action="nav" title="Board: posts and discussion" aria-label="Board">${icon("pin")}</a>` : ""}${flag("problems") ? `<a class="rb ${S.problems ? "on" : ""}" href="#/problems" data-action="nav" title="Problems: open problems, claims, attempts, bounties and discoveries" aria-label="Problems">${icon("target")}</a>` : ""}${flag("town") ? `<a class="rb ${S.town ? "on" : ""}" href="#/town" data-action="nav" title="Town: Lab right now${S.townNews ? ` · ${S.townNews} new building${S.townNews === 1 ? "" : "s"}` : ""}" aria-label="Town">${icon("town")}${S.townNews ? `<i class="rb-dot" title="New buildings in town"></i>` : ""}</a>` : ""}${flag("market") ? `<a class="rb ${S.market ? "on" : ""}" href="#/market" data-action="nav" title="Notebook market" aria-label="Notebook market">${icon("tag")}</a>` : ""}${S.isAdmin ? `<a class="rb ${S.admin ? "on" : ""}" href="#/admin" data-action="nav" title="Reports and ideas" aria-label="Reports and ideas">${icon("bug")}</a>` : ""}${inNb ? "" : `<button type="button" class="rb" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="rb" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button>`}${S.identity ? `<button type="button" class="rb" data-action="sign-out" title="Sign out" aria-label="Sign out">${icon("out")}</button>` : `<button type="button" class="rb" data-action="sign-in" title="Sign in with Internet Identity" aria-label="Sign in with Internet Identity">${icon("out")}</button>`}</div>
     </nav>`;
 }
 function shellBody(body: string, i: Info | undefined, low: boolean, alert: string, mobileNav: string): string {
@@ -1208,7 +1407,7 @@ function side(): string {
   return `<div class="pane-head"><button type="button" class="btn btn-ghost icon-btn" data-action="today" title="Today's note (${MOD}⇧D)" aria-label="Today's note">${icon("calendar")}</button><button type="button" class="btn btn-ghost icon-btn" data-action="root-menu" title="Notebook actions" aria-label="Notebook actions">${icon("more")}</button></div>
     ${bookmarks}${S.settings.searches.length && !S.query.trim() && !S.tag ? `<div class="pane-title">Saved searches</div>${S.settings.searches.map((x, i) => `<div class="bm-row" data-action="org-open" data-i="${i}" title="${esc(x.q)}">${icon("search")}<span class="name">${esc(x.name)}</span><span class="cnt small faint">${runQuery(orgNotes(), x.q).length}</span></div>`).join("")}` : ""}<div class="tree" data-tree>${body}</div>
     ${tags.length ? `<div class="pane-title">Tags</div><div class="tags">${tags.map(([t, ps]) => `<button type="button" class="tag-chip ${S.tag === t ? "active" : ""}" data-action="tag" data-tag="${esc(t)}">#${esc(t)}<span class="cnt">${ps.size}</span></button>`).join("")}</div>` : ""}
-    <div class="side-foot"><button type="button" class="nb-switch" data-action="nb-menu" title="Switch notebook"><span class="updown">${icon("updown")}</span><b>${esc(S.notebook!.name)}</b>${shareBadge("")}</button></div>`;
+    <div class="side-foot"><button type="button" class="nb-switch" data-action="nb-menu" title="Switch notebook"><span class="updown">${icon("updown")}</span><b>${esc(S.notebook!.name)}</b>${shareBadge("")}</button><span class="foot-tools"><button type="button" class="btn btn-ghost icon-btn" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button>${themeAllowed() ? `<button type="button" class="btn btn-ghost icon-btn" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button>` : ""}</span></div>`;
 }
 
 // --- workspace: links pane
@@ -1532,7 +1731,7 @@ function quizHtml(path: string, text: string): string {
     const ds = isSharedKey(path) ? undefined : S.settings.deckStats[path];
     const acc = ds && ds.reviews ? ` · ${Math.round((ds.good / ds.reviews) * 100)}% got it over ${ds.reviews} review${ds.reviews === 1 ? "" : "s"}` : "";
     const nextDeck = isSharedKey(path) ? undefined : deckPaths().find((d) => d !== path && dueCount(d, note(d)!.content) > 0);
-    if (st.i >= st.order.length) return `<div class="qz-done"><h3>${st.mode === "due" ? "Done for today" : "Deck finished"}</h3><p>${st.good} got it · ${st.again} again${acc}</p><p class="small muted">${due ? `${due} card${due === 1 ? "" : "s"} still due.` : "Nothing more due today; come back tomorrow."}</p><div class="qz-actions">${due ? `<button type="button" class="btn btn-primary" data-action="qz-due" data-path="${esc(path)}">${icon("check")}Review what is due</button>` : ""}<button type="button" class="btn" data-action="qz-all" data-path="${esc(path)}">${icon("refresh")}Study the whole deck</button>${nextDeck ? `<button type="button" class="btn" data-action="open" data-path="${esc(nextDeck)}">${icon("move")}Next deck: ${esc(title(nextDeck))}</button>` : ""}${isSharedKey(path) ? "" : `<button type="button" class="btn btn-ghost" data-action="anki" data-path="${esc(path)}" title="Tab-separated, ready for Anki's importer">${icon("download")}Export for Anki</button>`}</div></div>`;
+    if (st.i >= st.order.length) return `<div class="qz-done"><h3>${st.mode === "due" ? "Done for today" : "Deck finished"}</h3><p>${st.good} got it · ${st.again} again${acc}</p><p class="small muted">${due ? `${due} card${due === 1 ? "" : "s"} still due.` : "Nothing more due today; come back tomorrow."}</p><div class="qz-actions">${due ? `<button type="button" class="btn btn-primary" data-action="qz-due" data-path="${esc(path)}">${icon("check")}Review what is due</button>` : ""}<button type="button" class="btn" data-action="qz-all" data-path="${esc(path)}">${icon("refresh")}Study the whole deck</button>${nextDeck ? `<button type="button" class="btn" data-action="open" data-path="${esc(nextDeck)}">${icon("move")}Next deck: ${esc(title(nextDeck))}</button>` : ""}${isSharedKey(path) ? `<button type="button" class="btn btn-primary" data-action="shared-clone">${icon("copy")}Clone to my Lab &amp; save schedule</button>` : `<button type="button" class="btn btn-ghost" data-action="anki" data-path="${esc(path)}" title="Tab-separated, ready for Anki's importer">${icon("download")}Export for Anki</button>`}</div></div>`;
     const c = cards[st.order[st.i]];
     const sched = srsFor(path)[cardKey(c.front)];
     return `<div class="qz-head"><span class="small muted">${st.mode === "due" ? "Due" : "Card"} ${st.i + 1} of ${st.order.length}${st.mode === "due" ? ` · ${cards.length} in the deck` : due ? ` · ${due} due` : ""}${sched ? ` · seen ${sched.r}×` : " · new"}</span>${tools(cards.length)}</div>
@@ -1542,7 +1741,7 @@ function quizHtml(path: string, text: string): string {
   const qs = parseChoice(text);
   if (!qs.length) return `<div class="qz-empty">${icon("check")}<h3>No questions yet</h3><p class="muted small">A <code>###</code> heading per question, task items as options, <code>[x]</code> on the right ones, an optional <code>&gt;</code> quote as the explanation. ${MOD}E shows the source.</p></div>`;
   const st = quizState(path, qs.length);
-  if (st.i >= qs.length) return `<div class="qz-done"><h3>Quiz finished</h3><p>${st.right} of ${qs.length} right · ${Math.round((st.right / qs.length) * 100)}%</p>${tools(qs.length)}</div>`;
+  if (st.i >= qs.length) return `<div class="qz-done"><h3>Quiz finished</h3><p>${st.right} of ${qs.length} right · ${Math.round((st.right / qs.length) * 100)}%</p><div class="qz-actions">${isSharedKey(path) ? `<button type="button" class="btn btn-primary" data-action="shared-clone">${icon("copy")}Clone to my Lab &amp; track scores</button>` : ""}</div>${tools(qs.length)}</div>`;
   const q = qs[st.order[st.i]];
   const ok = st.checked && graded(q, st.picked);
   const opts = q.options.map((o, k) => {
@@ -1586,9 +1785,12 @@ async function loadCommunity(channel?: string) {
   S.community = c;
   render();
   try {
-    const [chs, mem, gh, repo, fee, primary] = await Promise.all([registry().channels(), registry().my_membership(), registry().my_github(), registry().github_repo(), registry().message_cycles(200n).catch(() => 16_000_000n), registry().my_primary().catch(() => undefined)]);
+    const [chs, mem, gh, repo, fee, primary, newcomerLeft] = await Promise.all([registry().channels(), registry().my_membership(), registry().my_github(), registry().github_repo(), registry().message_cycles(200n).catch(() => 16_000_000n), registry().my_primary().catch(() => undefined), registry().my_newcomer_pass().catch(() => [0, null] as [number, string | null])]);
     c.fee = fee;
     c.primary = primary ?? undefined;
+    // the pass: how many free messages a visitor without a notebook has left, and the handle they chose
+    c.newcomerLeft = Number(newcomerLeft[0]);
+    c.newcomerHandle = newcomerLeft[1] ?? c.newcomerHandle;
     c.channels = chs;
     c.member = mem ?? undefined;
     c.github = gh ?? undefined;
@@ -1647,6 +1849,7 @@ async function refreshUnread() {
 }
 /** Members chat as long as they own a notebook; no ICP has to sit anywhere. */
 const verifiedNow = (m?: Member) => !!m && (S.notebooks?.length ?? 1) > 0;
+const canNewcomerPost = (c: NonNullable<typeof S.community>) => !verifiedNow(c.member) && (c.channel === "help" || c.channel === "general") && (c.newcomerLeft ?? 0) > 0;
 /** Admins put a channel in a section: an existing one, a new one, or none. */
 async function moveChannel(name: string) {
   const c = S.community;
@@ -1762,15 +1965,17 @@ function messageHtml(m: Message, prev?: Message): string {
 function chatHtmlC(): string {
   const c = S.community!;
   const ch = c.channels.find((x) => x.name === c.channel);
-  const can = verifiedNow(c.member) && !(ch?.gate === "github" && !c.github);
+  const can = (verifiedNow(c.member) || canNewcomerPost(c)) && !(ch?.gate === "github" && !c.github);
+  const newcomer = canNewcomerPost(c);
   const msgs = c.messages.length ? c.messages.map((m, i) => messageHtml(m, c.messages[i - 1])).join("") : `<div class="chat-empty">${icon("chat")}<h3>#${esc(c.channel)}</h3><p class="muted small">${esc(ch?.topic ?? "")}. Nothing here yet; say hello.</p></div>`;
-  return `<div class="chat-head"><span class="hash">#</span><b>${esc(c.channel)}</b><span class="small muted">${esc(ch?.topic ?? "")}</span><span class="right-actions">${c.pins?.length ? `<button type="button" class="btn btn-ghost" data-action="chat-pins" title="Pinned messages">📌<span class="small lbl">${c.pins.length}</span></button>` : ""}${flag("rain") ? `<button type="button" class="btn btn-ghost" data-action="rain" title="Send ICP to random people who chatted in the last 30 minutes" ${can ? "" : "disabled"}>☔<span class="small lbl">Rain</span></button>` : ""}${S.mobile ? `<button type="button" class="btn btn-ghost icon-btn" data-action="chat-online-toggle" title="Who is online" aria-label="Who is online">${icon("person")}</button>` : ""}</span></div>
+  return `<div class="chat-head"><span class="hash">#</span><b>${esc(c.channel)}</b><span class="small muted">${esc(ch?.topic ?? "")}</span><span class="right-actions">${c.pins?.length ? `<button type="button" class="btn btn-ghost" data-action="chat-pins" title="Pinned messages">📌<span class="small lbl">${c.pins.length}</span></button>` : ""}${verifiedNow(c.member) ? `<button type="button" class="btn btn-ghost" data-action="chat-sponsor-newcomer" title="Sponsor a newcomer's first notebook canister">${icon("heart")}<span class="small lbl">Sponsor a newcomer</span></button>` : ""}${flag("rain") ? `<button type="button" class="btn btn-ghost" data-action="rain" title="Send ICP to random people who chatted in the last 30 minutes" ${verifiedNow(c.member) ? "" : "disabled"}>☔<span class="small lbl">Rain</span></button>` : ""}${S.mobile ? `<button type="button" class="btn btn-ghost icon-btn" data-action="chat-online-toggle" title="Who is online" aria-label="Who is online">${icon("person")}</button>` : ""}</span></div>
     ${c.showPins && c.pins?.length ? `<div class="pins"><div class="pane-title" style="padding:0 0 4px">Pinned</div>${c.pins.map((m) => `<button type="button" class="pin-row" data-action="chat-goto" data-mid="${m.id}"><b>@${esc(m.handle)}</b> ${esc(m.text.slice(0, 100))}</button>`).join("")}</div>` : ""}
     <div class="chat-log" data-chat-log>${c.loading && !c.messages.length ? `<p class="muted small" style="padding:12px">Loading…</p>` : msgs}</div>
     <button type="button" class="btn jump" data-action="chat-jump" data-jump hidden>${icon("down")}<span class="n">Jump to latest</span></button>
     ${ch?.gate === "github" && !c.github && verifiedNow(c.member) ? `<div class="gate"><b>#${esc(c.channel)} is for contributors${c.repo ? ` to ${esc(c.repo)}` : ""}.</b> ${c.repo ? `Put your principal <code>${esc(S.principal)}</code><button type="button" class="btn btn-ghost icon-btn" data-action="copy-principal" aria-label="Copy principal">${icon("copy")}</button> in your GitHub bio, then link your login.` : "An admin has not set the repository yet."}${c.repo ? `<button type="button" class="btn btn-primary" data-action="link-github">${icon("link")}Link GitHub</button>` : ""}</div>` : ""}
+    ${newcomer ? `<div class="gate"><b>Welcome to the station!</b> You have <b>${c.newcomerLeft}</b> free newcomer message${c.newcomerLeft === 1 ? "" : "s"} left in <code>#help</code> and <code>#general</code>. Say hello, ask a question, or ask someone to sponsor your first notebook!</div>` : ""}
     <form class="composer" data-form="chat-post">${c.editing !== undefined ? `<div class="replying">${icon("edit")}Editing your message<button type="button" class="btn btn-ghost icon-btn" data-action="chat-edit-cancel" aria-label="Cancel edit">${icon("x")}</button></div>` : ""}${c.replyTo ? `<div class="replying">${icon("links")}Replying to <b>@${esc(c.replyTo.handle)}</b>: ${esc(c.replyTo.text.slice(0, 80))}<button type="button" class="btn btn-ghost icon-btn" data-action="chat-reply-cancel" aria-label="Cancel reply">${icon("x")}</button></div>` : ""}
-      ${!c.member ? `<div class="compose-box"><button type="button" class="btn btn-ghost join-chat" data-action="chat-join">${icon("check")}Pick a handle to chat</button></div>` : `<div class="compose-box ${can ? "" : "off"}"><button type="button" class="btn btn-ghost icon-btn" data-action="chat-plus" title="Poll, gist or fundraiser" aria-label="More" ${can ? "" : "disabled"}>${icon("plus")}</button><textarea name="chattext" rows="1" placeholder="${can ? `Message #${esc(c.channel)}` : ch?.gate === "github" && verifiedNow(c.member) ? `Link your GitHub to post in #${esc(c.channel)}` : "Create a notebook to chat"}" ${can ? "" : "disabled"} aria-label="Message" title="↵ to send, ⇧↵ for a new line">${esc(c.draft)}</textarea><button type="button" class="btn btn-ghost icon-btn emoji-btn" data-action="chat-emoji" title="Emoji" aria-label="Emoji" ${can ? "" : "disabled"}>☺</button></div>`}
+      ${!c.member && !newcomer ? `<div class="compose-box"><button type="button" class="btn btn-ghost join-chat" data-action="chat-join">${icon("check")}Pick a handle to chat</button></div>` : `<div class="compose-box ${can ? "" : "off"}"><button type="button" class="btn btn-ghost icon-btn" data-action="chat-plus" title="Poll, gist or fundraiser" aria-label="More" ${verifiedNow(c.member) ? "" : "disabled"}>${icon("plus")}</button><textarea name="chattext" rows="1" placeholder="${can ? `Message #${esc(c.channel)}${newcomer ? ` (${c.newcomerLeft} free newcomer messages left)` : ""}` : ch?.gate === "github" && verifiedNow(c.member) ? `Link your GitHub to post in #${esc(c.channel)}` : "Create a notebook (or post in #help / #general with your newcomer pass) to chat"}" ${can ? "" : "disabled"} aria-label="Message" title="↵ to send, ⇧↵ for a new line">${esc(c.draft)}</textarea><button type="button" class="btn btn-ghost icon-btn emoji-btn" data-action="chat-emoji" title="Emoji" aria-label="Emoji" ${can ? "" : "disabled"}>☺</button></div>`}
       ${c.picker ? `<div class="pop-scrim" data-action="chat-pick-close"></div><div class="emoji-pop" role="dialog" aria-label="Emoji">${c.picker.mid !== undefined ? `<div class="small muted" style="padding:4px 6px">React to <b>@${esc(c.messages.find((m) => m.id === c.picker!.mid)?.handle ?? "")}</b></div>` : ""}<div class="emoji-grid">${CHAT_EMOJI.map((e) => `<button type="button" class="emoji" data-action="chat-pick" data-emoji="${e}" aria-label="${e}">${e}</button>`).join("")}</div></div>` : ""}
     </form>`;
 }
@@ -1781,9 +1986,9 @@ function onlineHtml(): string {
   for (const o of here) byChan.set(o.channel, [...(byChan.get(o.channel) ?? []), o]);
   return `<div class="pane-title">Online <span class="count">${here.length}</span></div>
     ${here.length ? [...byChan.entries()].map(([ch, os]) => `<div class="pane-sub" style="padding:0 10px">#${esc(ch)}</div>${os.map((o) => `<div class="online-row"><span class="avatar" style="--h:${[...o.principal.toText()].reduce((a, x) => a + x.charCodeAt(0), 0) % 360}">${esc(o.handle.slice(0, 2).toUpperCase())}</span><span>${esc(o.handle)}</span>${o.principal.toText() === S.principal ? `<span class="small muted">you</span>` : ""}</div>`).join("")}`).join("") : `<div class="empty-side">Nobody is reading right now.</div>`}
-    ${c.member ? `<div class="pane-title">Paid from</div><div class="empty-side">${c.primary ? `<b>${esc(c.primary.emoji ?? "📓")} ${esc(c.primary.name)}</b> pays for your messages, polls, shared notes and fundraisers, in cycles: about ${cyc(c.fee ?? 16_000_000n)} each. Nothing is taken in ICP.` : "Your notebook pays for your messages in cycles."}${(S.notebooks?.length ?? 0) > 1 ? `<div class="nudge"><button type="button" class="btn btn-ghost" data-action="chat-primary">${icon("notebook")}Change</button></div>` : ""}</div>` : ""}
+    ${c.member ? `<div class="pane-title">Paid from</div><div class="empty-side">${c.primary ? `<b>${esc(c.primary.emoji ?? "📓")} ${esc(c.primary.name)}</b> pays for your messages, polls, shared notes and fundraisers, in cycles: about ${cyc(c.fee ?? 16_000_000n)} each. Nothing is taken in ICP.` : "Your notebook pays for your messages in cycles."}${(S.notebooks?.length ?? 0) > 1 ? `<div class="nudge"><button type="button" class="btn btn-ghost" data-action="chat-primary">${icon("notebook")}Change</button></div>` : ""}<div class="nudge"><button type="button" class="btn btn-ghost" data-action="chat-sponsor-newcomer">${icon("heart")}Sponsor a newcomer</button></div></div>` : `<div class="pane-title">Newcomer Pass</div><div class="empty-side">Newcomers without a notebook get <b>10 free messages</b> in <code>#help</code> and <code>#general</code> (${c.newcomerLeft ?? 10} left). Ask a question or introduce yourself!</div>`}
     <div class="pane-title">Notifications</div><div class="empty-side"><label class="switch" style="padding:0"><input type="checkbox" name="notify" ${notifyOn() ? "checked" : ""}> Tell me when I'm @mentioned, anywhere in the app</label>${notifyOn() && "Notification" in window && Notification.permission === "default" ? `<div class="nudge"><button type="button" class="btn btn-ghost" data-action="notify-allow">${icon("bell")}Also notify when this tab is hidden</button></div>` : ""}</div>
-    <div class="pane-title">House rules</div><div class="empty-side">Anyone signed in can read. To post you need a notebook: it pays for each message in cycles, what storing it costs (a fraction of a cent). No links, no images, no foul language; the registry refuses them. Edits, reactions and votes are free. Messages are cleaned up after 90 days (pinned ones stay). Admins make channels.</div>`;
+    <div class="pane-title">House rules</div><div class="empty-side">Anyone signed in can read. Newcomers can post 10 free messages in #help and #general; after that, your notebook pays for each message in cycles (a fraction of a cent). Existing members can also sponsor a newcomer's first notebook.</div>`;
 }
 // --- the board: reddit-style posts per topic
 const score = (x: { ups: Principal[]; downs: Principal[] }) => x.ups.length - x.downs.length;
@@ -2568,7 +2773,7 @@ function cryptoTab(): string {
     const p = priceOf(t.asset);
     const ch = p !== undefined && t.priceThen ? (p / t.priceThen - 1) * 100 : undefined;
     return `<div class="run"><span><a href="#" data-action="open" data-path="${esc(t.path)}">${esc(t.title)}</a> <span class="small muted">${esc(t.asset)}${t.priceThen ? ` · ${usd(t.priceThen)} when written` : ""}</span>${ch !== undefined ? ` <span class="small ${ch >= 0 ? "ok" : "danger"}">${ch >= 0 ? "+" : "−"}${Math.abs(ch).toFixed(1)}%</span>` : ""} <span class="small ${t.due ? "" : "muted"}" ${t.due ? 'style="color:var(--danger)"' : ""}>${t.due ? "review now" : t.review ? `· review ${esc(t.review)}` : ""}</span>${t.wrongIf ? `<div class="small muted">Wrong if: ${esc(t.wrongIf)}</div>` : ""}</span>
-      <span class="row-actions">${t.due ? `<button type="button" class="btn btn-ghost" data-action="crypto-thesis-held" data-path="${esc(t.path)}">Still holds</button><button type="button" class="btn btn-ghost" data-action="crypto-thesis-broke" data-path="${esc(t.path)}">Broke</button>` : ""}<button type="button" class="btn btn-ghost" data-action="crypto-thesis-share" data-path="${esc(t.path)}" title="Share a snapshot in #crypto">${icon("users")}Get feedback</button></span></div>`;
+      <span class="row-actions">${t.due ? `<button type="button" class="btn btn-ghost" data-action="crypto-thesis-held" data-path="${esc(t.path)}">Still holds</button><button type="button" class="btn btn-ghost" data-action="crypto-thesis-broke" data-path="${esc(t.path)}">Broke</button>` : ""}<button type="button" class="btn btn-ghost" data-action="crypto-card" data-path="${esc(t.path)}" title="Shareable On-Chain Thesis Card">${icon("share")}Thesis card</button><button type="button" class="btn btn-ghost" data-action="crypto-thesis-share" data-path="${esc(t.path)}" title="Share a snapshot in #crypto">${icon("users")}Get feedback</button></span></div>`;
   };
   return `<section class="main" style="overflow:auto"><div class="page wide kit">
     ${copilotCard("crypto", [{ a: "thesis", icon: "coin", label: "Question a thesis", hint: "Counterarguments, what would prove it wrong, what to watch" }])}
@@ -2682,6 +2887,46 @@ async function cryptoAction(action: string, el: HTMLElement) {
       await writeNote(p, reviewThesis(textOf(p)!, action === "crypto-thesis-held", today, priceOf(t.asset)));
       toast(action === "crypto-thesis-held" ? "Noted. It comes back in 30 days." : "Marked broken. It stays in your notebook as a record.", "ok");
       return render();
+    }
+    case "crypto-card": {
+      const [t] = theses([{ path: p, content: textOf(p)! }], today);
+      await loadPrices([t.asset]);
+      const now = priceOf(t.asset);
+      const card = thesisCardSummary(t, now);
+      const scrim = document.createElement("div");
+      scrim.className = "scrim";
+      scrim.innerHTML = `<div class="modal" role="dialog" aria-modal="true">
+        <h2>${icon("coin")} On-Chain Thesis Card</h2>
+        <div class="thesis-card-modal">
+          <div class="row"><b>${esc(card.asset)}</b><span class="pill ${card.statusLabel.startsWith("Holds") ? "ok" : ""}">${esc(card.statusLabel)}</span></div>
+          <h3 style="margin:6px 0">${esc(card.headline)}</h3>
+          <div class="career-stats" style="margin:8px 0">
+            <div><b>${esc(card.entryLabel)}</b><span>Entry (${esc(t.written ?? "written")})</span></div>
+            <div><b>${esc(card.liveLabel)}</b><span>Live XRC Price</span></div>
+            ${card.deltaPct !== undefined ? `<div><b class="${card.deltaPct >= 0 ? "ok" : "danger"}">${esc(card.deltaLabel)}</b><span>Move</span></div>` : ""}
+          </div>
+          ${t.wrongIf ? `<p class="small muted"><b>Invalidated if:</b> ${esc(t.wrongIf)}</p>` : ""}
+          <p class="small faint">Verified on Internet Computer · Canister ${esc(S.notebook!.canister.toText())}</p>
+        </div>
+        <div class="actions">
+          <button type="button" class="btn" data-x="cancel">Close</button>
+          <button type="button" class="btn" data-x="copy">${icon("copy")}Copy card text</button>
+          <button type="button" class="btn btn-primary" data-x="share">${icon("users")}Share to #crypto</button>
+        </div>
+      </div>`;
+      const close = () => scrim.remove();
+      scrim.addEventListener("click", (e) => e.target === scrim && close());
+      scrim.querySelector("[data-x=cancel]")!.addEventListener("click", close);
+      scrim.querySelector("[data-x=copy]")!.addEventListener("click", async () => {
+        await copy(card.markdown);
+        toast("Thesis card copied to clipboard!", "ok");
+      });
+      scrim.querySelector("[data-x=share]")!.addEventListener("click", () => {
+        close();
+        void shareGist({ notebook: S.notebook!.canister.toText(), path: p, text: card.markdown }, "crypto");
+      });
+      document.body.append(scrim);
+      return;
     }
     case "crypto-thesis-share": {
       const [t] = theses([{ path: p, content: textOf(p)! }], today);
@@ -3061,7 +3306,7 @@ async function homeAction(action: string, el: HTMLElement) {
 /** Every page but the notebooks list and the landing page: the left icon bar (signed in, on a
  *  desktop) and the top bar, the same frame as a notebook. */
 function pageShell(crumb: string, body: string, bare = false): string {
-  const right = S.mobile ? moreBtn() : S.identity ? "" : `<button type="button" class="btn btn-primary" data-action="sign-in">Sign in</button>`;
+  const right = S.mobile ? moreBtn() : S.identity ? "" : `<button type="button" class="btn btn-primary" data-action="sign-in">Sign in with Internet Identity</button>`;
   return `<div class="shell ${S.mobile ? "is-mobile" : ""} ${S.identity ? "" : "single"}">${S.identity ? ribbonHtml() : ""}<div class="shell-main"><header class="wsbar">${brand()}<span class="crumb">${crumb}</span><span class="right">${right}</span></header>${bare ? `<section class="main">${body}</section>` : `<section class="main" style="overflow:auto"><div class="page wide">${body}</div></section>`}</div></div>`;
 }
 // --- problems: open problems by field, claims others check, attempts the owner merges, bounties, discoveries (registry problems.rs, problems.ts)
@@ -3169,7 +3414,7 @@ function problemsPage(): string {
 }
 /** The board's shell (bar, then the workspace filling the rest), signed in or out. */
 function problemsShell(crumb: string, workspace: string): string {
-  const right = S.mobile ? moreBtn() : S.identity ? "" : `<button type="button" class="btn btn-primary" data-action="sign-in">Sign in</button>`;
+  const right = S.mobile ? moreBtn() : S.identity ? "" : `<button type="button" class="btn btn-primary" data-action="sign-in">Sign in with Internet Identity</button>`;
   return `<div class="shell ${S.mobile ? "is-mobile" : ""} ${S.identity ? "" : "single"}">${S.identity ? ribbonHtml() : ""}<div class="shell-main"><header class="wsbar">${brand()}<span class="crumb">${crumb}</span><span class="right">${right}</span></header>${workspace}</div></div>`;
 }
 /** Publish (or refresh) a problem note on the board: shared publicly, read-only, then registered with its hash and claims. */
@@ -3384,17 +3629,17 @@ function pickMany(title: string, body: string, items: { value: string; label: st
 
 // --- the town: Lab's activity as a small isometric town (registry town.rs, town.ts)
 
-const townHouse = (h: Town["houses"][number]) => ({ lot: h.lot, storeys: h.storeys, size: h.size, lit: h.lit, low: h.low, badges: h.badges });
+const townHouse = (h: Town["houses"][number]) => ({ lot: h.lot, storeys: h.storeys, size: h.size, lit: h.lit, low: h.low, badges: h.badges, agent: h.agent });
 /** The town as the registry sends it, with your home added when it isn't among the ones drawn. */
-const townData = (t: Town): TownData => ({
+const townData = (t: Town, openHouses: OpenHouseInfo[] = []): TownData => ({
   at: Number(t.at / 1_000_000n), houses: t.my_house && !t.houses.some((h) => h.lot === t.my_house!.lot) ? [...t.houses, t.my_house].map(townHouse).sort((a, b) => a.lot - b.lot) : t.houses.map(townHouse), people: t.people, homes: t.homes, maxShown: t.max_shown, quiet: t.quiet,
   mine: t.mine, myChannel: t.my_channel, channels: t.channels.map((c) => ({ name: c.name, online: c.online, messages24h: c.messages_24h })), postTopics: t.post_topics, postsLive: t.posts_live,
   posts24h: t.posts_24h, listings: t.listings, rains24h: t.rains_24h, lastRain: t.last_rain === undefined ? undefined : Number(t.last_rain / 1_000_000n), hikers: t.hikers, off: t.off,
   building: [...t.building], notebooks: t.notebooks, spawned24h: t.spawned_24h, spawned7d: t.spawned_7d, newcomers7d: t.newcomers_7d, cycles: Number(t.cycles), burnPerDay: Number(t.burn_per_day), fundraisersOpen: t.fundraisers_open, raisedE8s: Number(t.raised_e8s), campers: t.campers, meCamping: t.me_camping,
   sponsors: t.sponsors.map((x) => ({ name: x.name, blurb: x.blurb, url: x.url, color: x.color })), myQuests: t.my_quests ? [Number(t.my_quests[0]), Number(t.my_quests[1]), t.my_quests[2]] : undefined,
-  problemsOpen: t.problems_open, discoveries: t.discoveries,
+  problemsOpen: t.problems_open, discoveries: t.discoveries, openHouses,
 });
-const fetchTown = () => registry().town().then((r) => (r.__kind__ === "Ok" ? demoTown(townData(r.Ok)) : null)).catch(() => null);
+const fetchTown = () => Promise.all([registry().town(), registry().open_houses().catch(() => [])]).then(([r, ohs]) => (r.__kind__ === "Ok" ? demoTown(townData(r.Ok, ohs.map((o) => ({ lot: o.lot, handle: o.handle, title: o.title, blurb: o.blurb, link: o.link ?? undefined, waves: o.waves })))) : null)).catch(() => null);
 /** Local development with ?town-demo: a busier town than a test network has, to judge the look. */
 function demoTown(d: TownData): TownData {
   if (!devMode || !/town-demo/.test(location.search)) return d;
@@ -3519,7 +3764,9 @@ function townPage(): string {
     <span><i class="lg lg-house"></i>The town draws at most ${d.maxShown} homes${d.homes > d.houses.length ? ` (${d.houses.length} of ${d.homes} now)` : ""}: when there are more, a mix of every kind, spread across town. Yours is always one of them.</span>
     <span><i class="lg lg-lit"></i>Lit windows (at night, in the dark theme): edited this week. Chimney smoke: edited today.</span>
     <span><i class="lg lg-person"></i>A person: someone in the community chat right now, at their channel's stall in the Square.</span>
-    <span><i class="lg lg-person"></i>The station: visitors on the platform signed in this month but have no notebook yet; the train comes and goes.</span>
+    <span><i class="lg lg-person"></i>The station and the campground: visitors who signed in this month but have no notebook yet wait on the platform or camp in a tent; the train comes and goes.</span>
+    <span><i class="lg lg-house"></i>An open house: a sign on the porch, put up by the owner, with a line about their work and maybe a note. Click to read it or wave.</span>
+    <span><i class="lg lg-house"></i>Agent couriers: a small bot runs between the Lab and a home an agent wrote to this week.</span>
     <span><i class="lg lg-house"></i>Flower beds, ivy, flags, statues and lanterns on homes are quests done by writing (Manage › Notebook › Quests); nothing on a home is for sale. The Sponsors' buildings are projects that pay to keep Lab running.</span>
     <span><i class="lg lg-build"></i>Scaffolding and a crane: a notebook made in the last three days. A red lamp by the door: a notebook with under 30 days of cycles left.</span>
     <span><i class="lg lg-water"></i>The water tower: the cycles every notebook holds, its level how many days they last at today's burn; the drip is the burn.</span>
@@ -3532,7 +3779,8 @@ function townPage(): string {
     <button type="button" class="btn btn-ghost icon-btn" data-action="town-out" title="Zoom out (−)" aria-label="Zoom out">−</button>
     <button type="button" class="btn btn-ghost icon-btn" data-action="town-in" title="Zoom in (+)" aria-label="Zoom in">+</button>
     <button type="button" class="btn btn-ghost icon-btn" data-action="town-home" title="Whole town (0)" aria-label="Whole town">${icon("fit")}</button>
-    ${d.mine !== undefined ? `<button type="button" class="btn btn-ghost icon-btn" data-action="town-mine" title="My home" aria-label="My home">${icon("house")}</button>` : ""}
+    ${d.mine !== undefined ? `<button type="button" class="btn btn-ghost icon-btn" data-action="town-mine" title="My home" aria-label="My home">${icon("house")}</button><button type="button" class="btn btn-ghost" data-action="town-porch" title="Pin a status or public note on your front porch">${icon("pin")}<span class="lbl">Open House</span></button>` : ""}
+    <button type="button" class="btn btn-ghost" data-action="town-quests" title="Town-wide community milestones and your home quests">${icon("award")}<span class="lbl">Quests &amp; Milestones</span></button>
     <button type="button" class="btn btn-ghost ${step ? "on" : ""}" data-action="town-tour" title="A tour of the town" aria-label="Tour">${icon("compass")}<span class="lbl">Tour</span></button>
     <button type="button" class="btn btn-ghost ${t.legend ? "on" : ""}" data-action="town-legend" aria-pressed="${t.legend}" title="Legend" aria-label="Legend">${icon("help")}<span class="lbl">Legend</span></button>
     ${!off.has("sponsors") && S.identity ? `<button type="button" class="btn btn-ghost icon-btn" data-action="town-sponsor" title="Pay for a building in the Sponsors district" aria-label="Sponsor a building">${icon("coin")}</button>` : ""}
@@ -3554,10 +3802,12 @@ function townTip(tg: TownTarget): string {
     case "house": {
       const h = tg.house, nbs = `${h.storeys >= 3 ? "3 or more notebooks" : `${h.storeys} notebook${h.storeys === 1 ? "" : "s"}`} · ${NOTES_BUCKET[h.size]}`;
       const earned = QUEST_ROWS(0, 0, 0).filter((_, i) => (h.badges ?? 0) & (1 << i)).map((q) => q[0]);
-      if (tg.mine) return `<b>${tg.building ? "Your home, going up" : "Your home"}</b>${(S.notebooks ?? []).slice(0, 4).map((n) => line(`${esc(n.emoji ?? "📓")} ${esc(n.name)}`)).join("")}${earned.length ? line(`Quests done: ${earned.join(", ")}`) : line("No quests done yet: write, link, keep a streak")}${line(`${NOTES_BUCKET[h.size]} · ${LIT_TEXT[h.lit]}`)}${h.low ? line("A notebook has under 30 days of cycles left: top it up in Manage") : ""}${go("Click to open your notebooks")}`;
+      const oh = tg.openHouse;
+      const ohLine = oh ? `${line(`🪧 <b>@${esc(oh.handle)}</b>: “${esc(oh.title)}” · 👋 ${oh.waves}`)}${oh.blurb ? line(esc(oh.blurb)) : ""}${oh.link ? line("📌 A note is pinned to the door") : ""}` : "";
+      if (tg.mine) return `<b>${tg.building ? "Your home, going up" : "Your home"}</b>${ohLine}${(S.notebooks ?? []).slice(0, 4).map((n) => line(`${esc(n.emoji ?? "📓")} ${esc(n.name)}`)).join("")}${earned.length ? line(`Quests done: ${earned.join(", ")}`) : line("No quests done yet: write, link, keep a streak")}${line(`${NOTES_BUCKET[h.size]} · ${LIT_TEXT[h.lit]}`)}${h.low ? line("A notebook has under 30 days of cycles left: top it up in Manage") : ""}${go("Click to open your notebooks")}`;
       if (tg.model) return `<b>The model home</b>${line("What a notebook becomes here: two storeys for two notebooks, lit windows for writing this week, smoke for today, and every quest done.")}${go("Take the tour for the rest")}`;
       if (tg.building) return `<b>A home going up</b>${line(h.storeys > 1 ? "Another notebook: a new storey" : "A notebook made in the last three days")}`;
-      return `<b>A home</b>${line(nbs)}${line(LIT_TEXT[h.lit])}${h.low ? line("Running low on cycles") : ""}`;
+      return `<b>${oh ? `@${esc(oh.handle)}'s Open House` : "A home"}</b>${ohLine}${line(nbs)}${line(LIT_TEXT[h.lit])}${h.low ? line("Running low on cycles") : ""}${oh ? go(oh.link ? "Click to read the pinned note or wave 👋" : "Click to wave 👋") : ""}`;
     }
     case "plot": return `<b>Your plot</b>${line("Your notebooks have been quiet for a month.")}${line("Write in one to light your home.")}`;
     case "hall": return `<b>The Lab</b>${line("The laboratory at the heart of town, where the count is kept")}${line(`Lab · pop. ${d.people}`)}${line(`${d.homes} home${d.homes === 1 ? "" : "s"} lit this month · ${d.quiet} quiet plot${d.quiet === 1 ? "" : "s"}`)}${d.homes > d.houses.length ? line(`${d.houses.length} drawn: at most ${d.maxShown}, a mix of every kind, always yours`) : ""}`;
@@ -3571,6 +3821,8 @@ function townTip(tg: TownTarget): string {
     case "tower": { const n = townCounts(d); return `<b>The water tower</b>${line(`${cyclesText(d.cycles)} of cycles held by ${d.notebooks} notebook${d.notebooks === 1 ? "" : "s"}`)}${line(`${cyclesText(d.burnPerDay)} burned a day${n.days !== undefined ? `: about ${n.days} days at this rate` : ""}`)}${line("Each notebook pays its own way; top yours up in Manage")}`; }
     case "station": return `<b>The station</b>${line(d.campers ? `${d.campers} visitor${d.campers === 1 ? "" : "s"} on the platform: signed in this month, no notebook yet` : "The platform is empty: everyone who signed in has a notebook")}${line("The people online in chat walk into town from here.")}`;
     case "visitor": return tg.mine ? `<b>You, on the platform</b>${line("You signed in but have no notebook yet. Make one and your home goes up in town.")}${go("Click to make a notebook")}` : `<b>A visitor</b>${line("Someone who signed in and hasn't made a notebook yet")}`;
+    case "tent": return `<b>The campground</b>${line(`${tg.campers} newcomer${tg.campers === 1 ? "" : "s"} trying Lab before putting up a home`)}${tg.mine ? line("One of the tents is yours: mint your sandbox to a canister and a house goes up") : ""}${go("Click to try the browser sandbox")}`;
+    case "courier": return `<b>An agent courier</b>${line(`Running between the Lab and the home on lot ${tg.lot}: an agent writing under Agents/ or checking a claim`)}${go("Click to see the track records")}`;
     case "lake": return `<b>The lake</b>${line("The river runs from it off the edge of the island.")}`;
     case "landmark": { const l = tg.landmark; let host = l.url; try { host = new URL(l.url).host; } catch { /* shown as is */ } return `<b>${esc(l.title)}</b>${l.sponsored ? line("A sponsored building: this project pays to keep Lab running.") : ""}${line(esc(l.blurb))}${go(`Click to open ${esc(host)}`)}`; }
     case "district": { const dd = tg.district; return `<b>${esc(dd.name)}</b>${line(esc(dd.blurb))}${line(`${dd.landmarks.length} landmarks, room for more`)}`; }
@@ -3584,7 +3836,46 @@ function townOpen(tg: TownTarget) {
   if (!S.town) { location.hash = "#/town"; return; }
   const signin = () => toast("Sign in to join in.", "info");
   switch (tg.kind) {
-    case "house": if (tg.model) return void tourStep(1); if (tg.mine) { const nbs = S.notebooks ?? []; location.hash = nbs.length === 1 ? `#/notebook/${nbs[0].canister.toText()}` : "#/"; } return;
+    case "house": {
+      if (tg.model) return void tourStep(1);
+      if (tg.mine) { const nbs = S.notebooks ?? []; location.hash = nbs.length === 1 ? `#/notebook/${nbs[0].canister.toText()}` : "#/"; return; }
+      const oh = tg.openHouse;
+      if (oh) {
+        void (async () => {
+          const scrim = document.createElement("div");
+          scrim.className = "scrim";
+          scrim.innerHTML = `<div class="modal" role="dialog" aria-modal="true">
+            <h2>🪧 @${esc(oh.handle)}'s front porch</h2>
+            <p><b>${esc(oh.title)}</b></p>
+            ${oh.blurb ? `<p>${esc(oh.blurb)}</p>` : ""}
+            <p class="small muted">👋 ${oh.waves} wave${oh.waves === 1 ? "" : "s"} from neighbours</p>
+            <div class="actions">
+              <button type="button" class="btn" data-x="cancel">Close</button>
+              <button type="button" class="btn" data-x="wave">👋 Wave hello</button>
+              ${oh.link ? `<button type="button" class="btn btn-primary" data-x="read">${icon("file")}Read the pinned note</button>` : ""}
+            </div>
+          </div>`;
+          const close = () => scrim.remove();
+          scrim.addEventListener("click", (e) => e.target === scrim && close());
+          scrim.querySelector("[data-x=cancel]")!.addEventListener("click", close);
+          scrim.querySelector("[data-x=wave]")!.addEventListener("click", async () => {
+            if (!S.identity) { close(); return signin(); }
+            const r = await registry().wave_house(oh.lot);
+            if (r.__kind__ === "Err") toast(r.Err, "error");
+            else { oh.waves = r.Ok; toast(`You waved to @${oh.handle}! 👋 (${r.Ok})`, "ok"); close(); render(); }
+          });
+          scrim.querySelector("[data-x=read]")?.addEventListener("click", () => {
+            close();
+            // a note shared from a notebook opens here; a published page or another site opens in a new tab
+            if (oh.link!.startsWith("#/")) location.hash = oh.link!; else window.open(oh.link!, "_blank", "noopener,noreferrer");
+          });
+          document.body.append(scrim);
+        })();
+      }
+      return;
+    }
+    case "tent": void openNotebook(SANDBOX_ID); return;
+    case "courier": location.hash = "#/agents"; return;
     case "plot": location.hash = "#/"; return;
     case "stall": case "walker": { if (!S.identity) return signin(); store("nb-chat-channel", tg.kind === "stall" ? tg.channel.name : tg.channel); location.hash = "#/community"; return; }
     case "board": if (!S.town.data?.off.includes("board")) { if (S.identity) location.hash = "#/board"; else signin(); } return;
@@ -3638,6 +3929,55 @@ function townSync() {
   if (!data) return;
   attachTown(canvas, { data, mode: canvas.dataset.town === "full" ? "full" : "preview", dark: S.theme.mode === "dark", accent: getComputedStyle(document.body).getPropertyValue("--accent").trim(), onOpen: townOpen, tip: townTip });
 }
+async function townPorchDialog() {
+  const d = S.town?.data;
+  if (!S.identity || d?.mine === undefined) return toast("Create a notebook first to get a home with a front porch.", "info");
+  const cur = d.openHouses?.find((o) => o.lot === d.mine);
+  const nbs = S.notebooks ?? [];
+  const curLink = cur?.link?.match(/^#\/shared\/([a-z0-9-]+)\/(.*)$/);
+  const v = await fieldsDialog("Open house", "A sign on your front porch in the town: a line about what you are working on, and, if you like, a note you have shared publicly. Neighbours click your house to read it or wave.", [
+    { name: "title", label: "The sign (empty takes it down)", value: cur?.title ?? "", placeholder: "Working on Lean proofs and crypto theses; say hi", wide: true },
+    { name: "blurb", label: "A line more (optional)", value: cur?.blurb ?? "", kind: "area" },
+    ...(nbs.length ? [{ name: "notebook", label: "Pin a note from", kind: "choice" as const, value: curLink?.[1] ?? "", choices: [{ value: "", label: "No note" }, ...nbs.map((n) => ({ value: n.canister.toText(), label: n.name }))] }] : []),
+    { name: "path", label: "Its path (shared publicly first)", value: curLink ? decodeURIComponent(curLink[2]) : "", placeholder: "index.md", wide: true },
+  ], "Put it up");
+  if (!v) return;
+  const link = v.notebook && v.path ? `#/shared/${v.notebook}/${encodeURIComponent(v.path)}` : null;
+  const r = await registry().set_open_house(v.title ?? "", v.blurb ?? "", link);
+  if (r.__kind__ === "Err") return toast(r.Err, "error");
+  toast(r.Ok ? "Your sign is up on the porch." : "Sign taken down.", "ok");
+  void loadTown();
+}
+function townQuestsDialog() {
+  const d = S.town?.data;
+  if (!d) return;
+  const [notes, links, streakDays] = d.myQuests ?? [0, 0, 0];
+  const rows = QUEST_ROWS(notes, links, streakDays);
+  const scrim = document.createElement("div");
+  scrim.className = "scrim";
+  scrim.innerHTML = `<div class="modal wide" role="dialog" aria-modal="true">
+    <h2>${icon("award")} Town Quests &amp; Community Milestones</h2>
+    <div class="band">
+      <div class="band-title">Community Milestones</div>
+      <div class="runs">
+        <div class="run"><span>🏛️ <b>Town Growth</b> · ${d.homes} / 25 active homes</span><span class="pill ${d.homes >= 25 ? "ok" : ""}">${Math.min(100, Math.round((d.homes / 25) * 100))}%</span></div>
+        <div class="run"><span>🗿 <b>Avenue of Discoveries</b> · ${d.discoveries ?? 0} solved problem obelisks on the green</span><span class="pill ${(d.discoveries ?? 0) > 0 ? "ok" : ""}">${d.discoveries ?? 0} solved</span></div>
+        <div class="run"><span>⛺ <b>Station Newcomers</b> · ${d.campers} visitor${d.campers === 1 ? "" : "s"} waiting for a home</span><a href="#/community" class="btn btn-ghost" data-x="sponsor">Sponsor in #help</a></div>
+        <div class="run"><span>🪧 <b>Open Houses</b> · ${(d.openHouses ?? []).length} neighbour${(d.openHouses ?? []).length === 1 ? "" : "s"} with a front-porch pin</span><span class="pill ok">${(d.openHouses ?? []).length} open</span></div>
+      </div>
+    </div>
+    <div class="band">
+      <div class="band-title">Your Home's Quests (earned by writing, never for sale)</div>
+      <div class="runs">${rows.map(([name, have, need, gift]) => `<div class="run"><span><b>${esc(name)}</b> · <span class="muted">${esc(gift)}</span></span><span class="pill ${have >= need ? "ok" : ""}">${have >= need ? "✓ earned" : `${have} / ${need}`}</span></div>`).join("")}</div>
+    </div>
+    <div class="actions"><button type="button" class="btn btn-primary" data-x="cancel">Done</button></div>
+  </div>`;
+  const close = () => scrim.remove();
+  scrim.addEventListener("click", (e) => e.target === scrim && close());
+  scrim.querySelector("[data-x=cancel]")!.addEventListener("click", close);
+  scrim.querySelector("[data-x=sponsor]")?.addEventListener("click", () => { store("nb-chat-channel", "help"); close(); });
+  document.body.append(scrim);
+}
 function townAction(action: string) {
   const t = S.town;
   if (!t) return;
@@ -3645,6 +3985,8 @@ function townAction(action: string) {
   else if (action === "town-out") townCamera("out");
   else if (action === "town-home") townCamera("home");
   else if (action === "town-mine") townCamera("mine");
+  else if (action === "town-porch") void townPorchDialog();
+  else if (action === "town-quests") townQuestsDialog();
   else if (action === "town-legend") { t.legend = !t.legend; render(); }
   else if (action === "town-tour") { if (t.tour !== undefined) void tourStep(-1); else void tourStep(0); }
   else if (action === "town-tour-next") void tourStep((t.tour ?? -1) + 1);
@@ -5144,7 +5486,7 @@ function render() {
   const focusedPath = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>(".cm-host")?.dataset.cm;
   const chatTop = document.querySelector<HTMLElement>("[data-chat-log]")?.scrollTop;
   destroyEditors();
-  app.innerHTML = S.shared ? sharedPage() : S.town ? townPage() : S.problems ? problemsPage() : S.board && S.identity ? boardPage() : S.community && S.identity ? communityPage() : S.market && S.identity ? marketPage() : S.admin && S.isAdmin ? adminPage() : !S.identity ? landing() : S.notebook ? workspace() : notebooksPage();
+  app.innerHTML = S.shared ? sharedPage() : S.town ? townPage() : S.problems ? problemsPage() : S.board && S.identity ? boardPage() : S.community && S.identity ? communityPage() : S.market && S.identity ? marketPage() : S.admin && S.isAdmin ? adminPage() : !S.identity && !(S.notebook && isSandbox()) ? landing() : S.notebook ? workspace() : notebooksPage();
   if (S.show) app.insertAdjacentHTML("beforeend", showHtml());
   // a re-render must not move the reader: keep the chat where it was, or at the bottom
   if (S.community) { const log = app.querySelector<HTMLElement>("[data-chat-log]"); if (log) { log.scrollTop = S.community.atBottom === false && chatTop !== undefined ? chatTop : log.scrollHeight; chatScrolled(); } }
@@ -5470,7 +5812,7 @@ async function loadNotebook() {
   const [folders, info, topups, keys, shares, settings] = await Promise.all([a.folders(), a.info(), a.topups(10), a.agent_keys(), a.shares(), a.get_settings()]);
   S.agentKeys = keys.__kind__ === "Ok" ? keys.Ok : [];
   S.shares = shares.__kind__ === "Ok" ? shares.Ok : [];
-  if (flag("problems")) { const c = S.notebook!.canister; void registry().problems_of(c).then((cards) => { for (const [path, card] of cards) S.myProblems.set(`${c.toText()}/${path}`, card); render(); }).catch(() => undefined); }
+  if (!isSandbox() && flag("problems")) { const c = S.notebook!.canister; void registry().problems_of(c).then((cards) => { for (const [path, card] of cards) S.myProblems.set(`${c.toText()}/${path}`, card); render(); }).catch(() => undefined); }
   try {
     const j = settings.__kind__ === "Ok" && settings.Ok ? (JSON.parse(settings.Ok) as Partial<Settings>) : {};
     S.settings = parseSettings(j);
@@ -5499,7 +5841,7 @@ async function loadNotebook() {
 }
 
 async function openNotebook(id: string, path?: string) {
-  const v = S.notebooks?.find((x) => x.canister.toText() === id);
+  const v = id === SANDBOX_ID ? sandboxRecord() : S.notebooks?.find((x) => x.canister.toText() === id);
   if (!v) return;
   S.notebook = v;
   S.notes = undefined;
@@ -5522,9 +5864,12 @@ async function openNotebook(id: string, path?: string) {
   try {
     await loadNotebook();
     restoreTabs();
+    if (path && note(path)) await open(path);
     void sweepBoards();
-    if (!S.settings.onboarded && !S.fromCache) setTimeout(() => onboarding(), 400);
-    void loadHealth(id).then((h) => { if (urgent(h) && S.notebook?.canister.toText() === id) { render(); freezeModal(id, h!); } });
+    if (!isSandbox()) {
+      if (!S.settings.onboarded && !S.fromCache) setTimeout(() => onboarding(), 400);
+      void loadHealth(id).then((h) => { if (urgent(h) && S.notebook?.canister.toText() === id) { render(); freezeModal(id, h!); } });
+    }
   } catch (e) {
     const h = await loadHealth(id);
     const cached = await cacheGet<{ notes: Note[]; folders: string[]; settings: Settings; at: number }>(`nb:${id}`);
@@ -6781,7 +7126,7 @@ function sharedPage(): string {
   const crumb = sh.note || sh.files ? `<p class="small muted"><a href="#/shared/${sh.canister}/${encodeURIComponent(up || "/")}" data-action="nav">${icon("links")} ${esc(up || "shared root")}</a></p>` : "";
   let body: string;
   if (sh.loading) body = `<p class="muted">Loading…</p>`;
-  else if (sh.error) body = `<div class="empty">${icon("lock", "big")}<p class="muted">${esc(sh.error)}</p>${S.identity ? "" : `<button type="button" class="btn btn-primary" data-action="sign-in">Sign in</button>`}</div>`;
+  else if (sh.error) body = `<div class="empty">${icon("lock", "big")}<p class="muted">${esc(sh.error)}</p>${S.identity ? "" : `<button type="button" class="btn btn-primary" data-action="sign-in">Sign in with Internet Identity</button>`}</div>`;
   else if (sh.files) {
     const t = tree(sh.files.map((f) => f.path));
     const rows = (f: Folder, depth: number): string => [
@@ -6806,13 +7151,14 @@ function sharedPage(): string {
       : `${progressBar}<article class="md shared-note">${renderMarkdown(sh.note!.content, { self: sh.path, resolve: () => undefined, note: () => undefined, attachment: () => undefined })}</article>${comments}`;
   }
   const team = S.identity && !sh.loading && !sh.error && sh.teamRole ? `<div class="row tight team-row">${sh.teamRole === "Edit" && sh.files ? `<button type="button" class="btn" data-action="shared-new">${icon("plus")}New note</button>` : ""}${sh.teamRole === "Edit" && sh.note && isMeeting(sh.note.content) ? `<button type="button" class="btn" data-action="shared-summarise" title="The free model, paid for in this notebook's cycles">${icon("bot")}Summarise the meeting with AI</button>` : ""}${sh.cycles !== undefined ? `<button type="button" class="btn btn-ghost" data-action="shared-chip-in" title="Top this notebook up from your wallet; the ICP becomes its cycles">${icon("bolt")}Chip in cycles<span class="small muted"> · ${tc(sh.cycles)} left</span></button>` : ""}</div>` : "";
+  const viralBar = !sh.loading && !sh.error && sh.note ? `<div class="shared-viral-bar"><div class="row tight">${icon("notebook")}<span><b>On-chain note in Lab</b> <span class="muted">· fork a copy into your own notebook or try it free in the browser sandbox.</span></span></div><div class="row tight"><button type="button" class="btn btn-primary" data-action="shared-clone">${icon("copy")}Clone to my Lab</button>${!S.identity ? `<button type="button" class="btn" data-action="try-sandbox">${icon("bolt")}Try Lab in browser</button>` : ""}</div></div>` : "";
   return pageShell(`<b>${esc(sh.name || "Shared")}</b><span class="faint">/</span><span>${esc(sh.files ? (sh.path || "Everything shared") : title(sh.path))}</span>`, `
-    <section class="card">${team}
+    <section class="card">${team}${viralBar}
       ${crumb}
       <h1 class="shared-title">${esc(sh.files ? (sh.path || sh.name || "Shared notes") : title(sh.path))}</h1>
       ${sh.note ? `<p class="small muted">${esc(sh.path)} · updated ${when(sh.note.modified)}${sh.note.agent ? ` · written by agent ${esc(sh.note.agent)}` : ""}</p>` : ""}
       ${body}
-      <p class="small muted nudge">${S.identity ? `<a href="#/" data-action="nav">Your notebooks</a>` : "Notebooks: markdown notes in a canister you own. Sign in to make your own."}</p>
+      <p class="small muted nudge">${S.identity ? `<a href="#/" data-action="nav">Your notebooks</a>` : "Notebooks: markdown notes in a canister you own. Sign in or try the browser sandbox to make your own."}</p>
     </section>`);
 }
 let sharedSaveTimer = 0;
@@ -7138,7 +7484,7 @@ const toStatus = (k: string): BugStatus => k as BugStatus;
 /** Report a bug (title + detail) and see your earlier reports with the admin's answer. */
 async function helpDialog() {
   if (!S.identity) {
-    if (await ask({ title: "Help and support", body: "Sign in first so we can follow up on your report (your principal is the only thing attached).", ok: "Sign in" }).then((v) => v !== null)) await signIn();
+    if (await ask({ title: "Help and support", body: "Sign in first so we can follow up on your report (your principal is the only thing attached).", ok: "Sign in with Internet Identity" }).then((v) => v !== null)) await signIn();
     if (!S.identity) return;
   }
   const mine = await registry().my_bugs().catch(() => [] as Bug[]);
@@ -7282,6 +7628,80 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
   const kit = /^(money|creator|fitness|home)-/.exec(action)?.[1];
   if (kit) return kit === "money" ? moneyAction(action, el) : kit === "creator" ? creatorAction(action, el) : kit === "fitness" ? fitnessAction(action, el) : homeAction(action, el);
   switch (action) {
+    case "landing-persona":
+      S.landingPersona = el.dataset.persona ?? "obsidian";
+      return render();
+    case "try-sandbox": {
+      const targetNote = el.dataset.path;
+      S.shared = undefined;
+      return openNotebook(SANDBOX_ID, targetNote);
+    }
+    case "sandbox-mint": {
+      if (!S.identity) {
+        await signIn();
+        if (!S.identity) return;
+      }
+      const name = (await ask({ title: "Mint Browser Sandbox to an on-chain canister", body: "Your notes from the browser sandbox will be copied into a real canister notebook that you own on the Internet Computer.", label: "Notebook name", value: "My Lab", ok: "Next" }))?.trim();
+      if (!name) return;
+      const sbNotes = unwrap(await sandboxNotebookApi().read_page(null, 500)).notes;
+      const id = await spawnNotebook(name, "Minted from browser sandbox");
+      if (!id) return;
+      await openNotebook(id);
+      if (sbNotes.length) {
+        await notebookOf(id).write_many(sbNotes.map((n) => [n.path, n.content] as [string, string]), true);
+        await loadNotebook();
+        restoreTabs();
+        render();
+      }
+      toast(`Minted ${sbNotes.length} notes to your on-chain canister!`, "ok");
+      return;
+    }
+    case "shared-clone": {
+      const sh = S.shared;
+      if (!sh?.note) return;
+      const noteName = base(sh.path).endsWith(".md") ? base(sh.path) : `${base(sh.path)}.md`;
+      const destPath = `Cloned/${noteName}`;
+      if (S.identity && S.notebooks?.length) {
+        const dest = await ask({
+          title: `Clone “${title(sh.path)}” to your Lab`,
+          label: "Destination notebook",
+          choices: [...S.notebooks.map((n) => ({ value: n.canister.toText(), label: n.name })), { value: SANDBOX_ID, label: "Browser Sandbox (free)" }],
+          value: S.notebooks[0].canister.toText(),
+          ok: "Clone & open",
+        });
+        if (!dest) return;
+        await notebookOf(dest).write(destPath, sh.note.content);
+        S.shared = undefined;
+        toast(`Cloned to ${destPath}.`, "ok");
+        return openNotebook(dest, destPath);
+      }
+      await sandboxNotebookApi().write(destPath, sh.note.content);
+      S.shared = undefined;
+      toast(`Cloned “${title(sh.path)}” into your Browser Sandbox.`, "ok");
+      return openNotebook(SANDBOX_ID, destPath);
+    }
+    case "chat-sponsor-newcomer": {
+      const whoText = (await ask({ title: "Sponsor a newcomer's first notebook", body: "A starter notebook for someone waiting at the station: you pay what a spawn costs (and any cycles you add); they own and control the canister from the first second. Ask them for their principal in #help.", label: "Their principal", placeholder: "xxxxx-xxxxx-…", ok: "Next" }))?.trim();
+      if (!whoText) return;
+      let who: Principal;
+      try { who = Principal.fromText(whoText); } catch { return toast("That does not look like a principal.", "error"); }
+      if (whoText === S.principal) return toast("That is you; make a notebook from the list instead.", "info");
+      const nbName = (await ask({ title: "Their notebook's name", label: "Name", value: "My notebook", ok: "Next" }))?.trim();
+      if (!nbName) return;
+      const deposit = await depositDialog(nbName, minDepositE8s(await icpXdrRate()));
+      if (deposit === null) return;
+      try {
+        const need = (S.price > 0n ? S.price + ICP_FEE : 0n) + (deposit > 0n ? deposit + ICP_FEE : 0n);
+        let payer: Principal | undefined;
+        if (need > 0n) payer = await approvePayment(Principal.fromText(REGISTRY), need);
+        const r = await registry().sponsor_newcomer(who, nbName, payer && payer.toText() !== S.principal ? payer : null);
+        if (r.__kind__ === "Err") throw new Error(r.Err);
+        if (deposit > 0n) { const t = await registry().top_up_notebook(r.Ok.canister, deposit, payer && payer.toText() !== S.principal ? payer : null); if (t.__kind__ === "Err") toast(`The notebook is theirs, but the cycles did not go through: ${t.Err}`, "error"); }
+        toast(`“${r.Ok.name}” is live and theirs. Thank you.`, "ok");
+        if (S.community) void loadCommunity(S.community.channel);
+      } catch (e) { toast(errMsg(e), "error"); }
+      return;
+    }
     case "sign-in":
       return signIn();
     case "sign-out":
@@ -7546,7 +7966,7 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
     case "deck-add": { const k = el.dataset.deck!; await createQuiet(`Skills/${k}.md`, DECKS[k]); S.tab = "notes"; return open(`Skills/${k}.md`); }
     case "conflicts-open": return conflictDialog();
     case "keep-offline": return keepOffline();
-    case "crypto-refresh": case "crypto-watch": case "crypto-trade-add": case "crypto-trade-close": case "crypto-thesis-add": case "crypto-thesis-held": case "crypto-thesis-broke": case "crypto-thesis-share": case "crypto-channel": return cryptoAction(action, el);
+    case "crypto-refresh": case "crypto-watch": case "crypto-trade-add": case "crypto-trade-close": case "crypto-thesis-add": case "crypto-thesis-held": case "crypto-thesis-broke": case "crypto-thesis-share": case "crypto-card": case "crypto-channel": return cryptoAction(action, el);
     case "career-app-add": case "career-board": case "career-followed": case "career-heard": case "career-exp-add": case "career-resume-new": case "career-compile": case "career-feedback": case "career-story-add": case "career-practice": case "career-contacted": case "career-person-add": case "career-channel": return careerAction(action, el);
     case "pdf-load": case "pdf-all": {
       const box = el.closest<HTMLElement>(".pdf-embed");
@@ -8762,7 +9182,18 @@ document.addEventListener("submit", (ev) => {
             replaceMessage(r.Ok); render(); scrollChat();
             return;
           }
-          const r = await paidPost(() => registry().post(c.channel, text, c.replyTo?.id ?? null));
+          let r;
+          if (!verifiedNow(c.member) && canNewcomerPost(c)) {
+            if (!c.member && !c.newcomerHandle) {
+              const h = (await ask({ title: "Choose your newcomer handle", body: "Your Newcomer Pass lets you send 10 free messages in #help and #general before you spawn your first notebook.", label: "Handle", value: `visitor_${S.principal.slice(0, 5)}`, ok: "Send message" }))?.trim();
+              if (!h) return;
+              c.newcomerHandle = h;
+            }
+            r = await registry().post_newcomer(c.channel, c.newcomerHandle ?? c.member?.handle ?? "newcomer", text, c.replyTo?.id ?? null);
+            if (r.__kind__ === "Ok" && c.newcomerLeft !== undefined && c.newcomerLeft > 0) c.newcomerLeft--;
+          } else {
+            r = await paidPost(() => registry().post(c.channel, text, c.replyTo?.id ?? null));
+          }
           if (r.__kind__ === "Err") throw new Error(r.Err);
           c.draft = "";
           c.replyTo = undefined;
@@ -8941,14 +9372,14 @@ window.addEventListener("hashchange", () => {
     S.notebook = undefined;
     S.notes = undefined;
     render();
-    void loadNotebooks();
+    if (S.identity) void loadNotebooks();
     return;
   }
   // a notebook link typed or followed while on the list, or a link into another notebook
   const m = location.hash.match(/^#\/notebook\/([a-z0-9-]+)(?:\/(.+))?/);
-  if (m && S.identity) {
+  if (m && (S.identity || m[1] === SANDBOX_ID)) {
     const path = m[2] ? decodeURIComponent(m[2]) : undefined;
-    if (S.notebook?.canister.toText() !== m[1]) void (async () => { if (!S.notebooks) await loadNotebooks(); await openNotebook(m[1], path); })();
+    if (S.notebook?.canister.toText() !== m[1]) void (async () => { if (S.identity && !S.notebooks && m[1] !== SANDBOX_ID) await loadNotebooks(); await openNotebook(m[1], path); })();
     else if (path && path !== cur() && note(path)) void open(path);
     // back (or a typed link) from the community or board to the notebook already open: without this the old page stayed on screen
     else if (left) render();
@@ -8993,7 +9424,11 @@ currentIdentity().then(async (id) => {
   if (sh) return openShared(sh[1], decodeURIComponent(sh[2]));
   if (location.hash === "#/town") { if (id) void loadNotebooks(); return loadTown(); }
   { const pm = problemRoute(); if (pm) { if (id) void loadNotebooks(); return loadProblems(pm[1] as ProblemsTab, pm[2] ? BigInt(pm[2]) : undefined); } }
-  if (!id) return;
+  const m = location.hash.match(/^#\/notebook\/([a-z0-9-]+)(?:\/(.+))?/);
+  if (!id) {
+    if (m && m[1] === SANDBOX_ID) void openNotebook(SANDBOX_ID, m[2] ? decodeURIComponent(m[2]) : undefined);
+    return;
+  }
   render();
   await loadNotebooks();
   setTimeout(() => void checkRain(), 1500);
@@ -9006,7 +9441,6 @@ currentIdentity().then(async (id) => {
   if (location.hash === "#/community") return loadCommunity();
   { const bm = /^#\/board(?:\/(\d+))?$/.exec(location.hash); if (bm) return loadBoard(undefined, bm[1] ? BigInt(bm[1]) : undefined); }
   if (location.hash === "#/capture") return captureRoute();
-  const m = location.hash.match(/^#\/notebook\/([a-z0-9-]+)(?:\/(.+))?/);
   if (m) void openNotebook(m[1], m[2] ? decodeURIComponent(m[2]) : undefined);
 });
 

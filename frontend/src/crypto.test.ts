@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { TRADE_TEMPLATE, THESIS_TEMPLATE, closeTrade, isThesis, isTrade, journalStats, pnl, reviewThesis, rMultiple, theses, trade, usd, watchSymbols } from "./crypto.ts";
+import { TRADE_TEMPLATE, THESIS_TEMPLATE, closeTrade, isThesis, isTrade, journalStats, pnl, reviewThesis, rMultiple, theses, thesisCardSummary, trade, usd, watchSymbols } from "./crypto.ts";
 import { parseTasks } from "./work.ts";
 import { claims } from "./kits.ts";
 import { frontmatter } from "./notes.ts";
@@ -32,6 +32,9 @@ test("a thesis remembers its price, comes due in Work, and is reviewed until it 
   const notes = [{ path: "Crypto/Theses/BTC.md", content: c }];
   let [t] = theses(notes, "2026-10-12");
   assert.deepEqual([t.title, t.asset, t.priceThen, t.review, t.due, t.status], ["BTC outperforms ETH this cycle", "BTC", 98000, "2026-11-11", false, "holds"]);
+  const card = thesisCardSummary(t, 107800);
+  assert.equal(card.deltaLabel, "+10.0%");
+  assert.match(card.markdown, /now \$107,800 \(\+10\.0%\)/);
   assert.equal(theses(notes, "2026-11-11")[0].due, true);
   // its reasons are Research claims, and its review is a task in Work
   assert.equal(claims(c, [], () => undefined).length, 2);

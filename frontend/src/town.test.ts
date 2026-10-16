@@ -166,3 +166,11 @@ test("an obelisk on the green per discovery, capped with a numbered one", () => 
   assert.equal(last.n, 20);
   assert.equal(many.filter((o) => (o.tg as { more: boolean }).more).length, 1);
 });
+
+test("town: campers get tents pitched near the station", () => {
+  const pl = layoutTown(town([house(1)], { campers: 4, meCamping: true }));
+  const tents = pl.objs.filter((o) => o.k === "tent");
+  assert.equal(tents.length, 4);
+  assert.ok(tents.some((t) => t.mine));
+});
+

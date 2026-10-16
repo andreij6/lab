@@ -277,6 +277,8 @@ type Usage = record {
   links : nat64;
   // markdown notes among the files
   notes : nat64;
+  // an agent key was used in the last 7 days
+  agent_active : bool;
   // when any file last changed (ns), or none for an empty notebook
   last_modified : opt nat64;
   // days with a change in the last 30

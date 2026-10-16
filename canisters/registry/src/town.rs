@@ -20,6 +20,9 @@ pub struct TownHouse {
     pub lit: u8,
     /// one of the notebooks has under 30 days of cycles left
     pub low: bool,
+    /// an agent wrote to one of the notebooks this week: a courier runs to the house
+    #[serde(default)]
+    pub agent: bool,
     /// quests done, as bits: 1 Sprout (10 notes), 2 Weaver (25 links), 4 a week's streak, 8 a month's
     /// streak, 16 Librarian (100 notes). Cosmetic: a flower bed, ivy, a flag, a statue, a lantern.
     pub badges: u8,
@@ -122,9 +125,22 @@ impl Drop for Busy {
         TOWN_BUSY.set(false);
     }
 }
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq)]
+pub struct OpenHouse {
+    pub lot: u32,
+    /// the owner's community handle (or "a neighbour"); filled in when read, never stored
+    #[serde(default)]
+    pub handle: String,
+    pub title: String,
+    pub blurb: String,
+    pub link: Option<String>,
+    pub waves: u32,
+}
+
 thread_local! {
     /// principal -> when they last signed in (counted once an hour at most)
     static VISITORS: RefCell<StableBTreeMap<Principal, u64, Mem>> = RefCell::new(StableBTreeMap::init(MM.with_borrow(|m| m.get(MemoryId::new(39)))));
+    static OPEN_HOUSES: RefCell<StableBTreeMap<u32, C<OpenHouse>, Mem>> = RefCell::new(StableBTreeMap::init(MM.with_borrow(|m| m.get(MemoryId::new(54)))));
     static TOWN: RefCell<Counted> = RefCell::new(Counted::default());
     static TOWN_BUSY: Cell<bool> = const { Cell::new(false) };
 }
@@ -159,7 +175,7 @@ pub async fn refresh_town() {
     let status = status_all(&nbs).await;
     let (mut cycles, mut burn) = (0u128, 0u128);
     // owner -> (lowest token id, notebooks, notes, newest edit, low on cycles, links, best streak)
-    let mut by: std::collections::BTreeMap<Principal, (u64, u64, u64, Option<u64>, bool, u64, u32)> = Default::default();
+    let mut by: std::collections::BTreeMap<Principal, (u64, u64, u64, Option<u64>, bool, u64, u32, bool)> = Default::default();
     for ((n, u), st) in nbs.iter().zip(usage.iter()).zip(status.iter()) {
         if let Some((c, b)) = st {
             cycles += c;
@@ -167,7 +183,7 @@ pub async fn refresh_town() {
         }
         // notebooks from before tokens only have an address once tokenize_all has run
         let Some(id) = ID_OF.with_borrow(|m| m.get(&n.canister)) else { continue };
-        let e = by.entry(n.owner).or_insert((u64::MAX, 0, 0, None, false, 0, 0));
+        let e = by.entry(n.owner).or_insert((u64::MAX, 0, 0, None, false, 0, 0, false));
         e.0 = e.0.min(id);
         e.1 += 1;
         e.4 |= st.is_some_and(|(c, b)| b > 0 && c / b < LOW_DAYS);
@@ -177,15 +193,16 @@ pub async fn refresh_town() {
             e.3 = e.3.max(u.last_modified);
             e.5 += u.links.unwrap_or(0);
             e.6 = e.6.max(u.streak.unwrap_or(0));
+            e.7 |= u.agent_active.unwrap_or(false);
         }
     }
     let quests: std::collections::HashMap<Principal, (u64, u64, u32)> = by.iter().map(|(p, e)| (*p, (e.2, e.5, e.6))).collect();
     let mut people: u32 = 0;
     let mut houses: Vec<TownHouse> = Vec::new();
-    for (_, (id, count, notes, newest, low, links, streak)) in by {
+    for (_, (id, count, notes, newest, low, links, streak, agent)) in by {
         people += 1;
         if let Some((storeys, size, lit)) = house_of(count, notes, newest, now) {
-            houses.push(TownHouse { lot: (id - 1) as u32, storeys, size, lit, low, badges: badges_for(notes, links, streak) });
+            houses.push(TownHouse { lot: (id - 1) as u32, storeys, size, lit, low, agent, badges: badges_for(notes, links, streak) });
         }
     }
     // the chapel: fundraisers still open, and what fundraisers raised (messages go after 90 days)
@@ -365,12 +382,73 @@ fn town() -> Result<Town, String> {
     Ok(TOWN.with_borrow(|t| Town { at: t.at, homes: t.homes, max_shown: MAX_HOUSES as u32, my_house: mine.and_then(|l| t.all.get(&l).cloned()), houses: t.houses.clone(), people: t.people, quiet: t.quiet, mine, my_channel, channels, post_topics, posts_live, posts_24h, listings, rains_24h, last_rain, hikers, off, building, notebooks, spawned_24h, spawned_7d, newcomers_7d, cycles: Nat::from(t.cycles), burn_per_day: Nat::from(t.burn), campers, me_camping, fundraisers_open: t.fundraisers_open, raised_e8s: t.raised_e8s, sponsors, my_quests: t.quests.get(&me).copied(), problems_open: pr.map(|c| c.0), discoveries: pr.map(|c| c.1) }))
 }
 
+/// Every home that has put out a welcome sign on its front porch.
+#[query]
+fn open_houses() -> Vec<OpenHouse> {
+    OPEN_HOUSES.with_borrow(|m| m.iter().map(|e| { let mut oh = e.value().0; oh.handle = handle_of_lot(oh.lot); oh }).collect())
+}
+/// The community handle of whoever owns the notebook on `lot`, or "a neighbour".
+fn handle_of_lot(lot: u32) -> String {
+    let owner = NOTEBOOKS.with_borrow(|m| m.iter().find(|e| ID_OF.with_borrow(|i| i.get(e.key())) == Some(lot as u64 + 1)).map(|e| e.value().0.owner));
+    owner.and_then(|o| MEMBERS.with_borrow(|m| m.get(&o).map(|c| c.0.handle))).unwrap_or_else(|| "a neighbour".into())
+}
+
+/// Put out (or take down, when `title` is empty) a front porch welcome sign on your home in town.
+#[update]
+fn set_open_house(title: String, blurb: String, link: Option<String>) -> Result<Option<OpenHouse>, String> {
+    let me = msg_caller();
+    if me == Principal::anonymous() {
+        return Err("sign in first".into());
+    }
+    let lot = NOTEBOOKS.with_borrow(|m| m.iter().filter(|e| e.value().0.owner == me).filter_map(|e| ID_OF.with_borrow(|i| i.get(e.key()))).min()).map(|id| (id - 1) as u32).ok_or("you need a notebook to hang a porch sign")?;
+    let title = title.trim().to_string();
+    if title.is_empty() {
+        OPEN_HOUSES.with_borrow_mut(|m| m.remove(&lot));
+        return Ok(None);
+    }
+    if title.chars().count() > 60 {
+        return Err("porch title: 1-60 characters".into());
+    }
+    let blurb = blurb.trim().to_string();
+    if blurb.chars().count() > 160 {
+        return Err("porch blurb: up to 160 characters".into());
+    }
+    if let Some(w) = crate::foul(&title).or_else(|| crate::foul(&blurb)) {
+        return Err(format!("keep it clean: \"{w}\" is not allowed here"));
+    }
+    let link = link.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    if let Some(ref l) = link {
+        // only places inside Lab: a note shared from a notebook, or a published page; never a link out
+        if l.chars().count() > 200 || !(l.starts_with("#/shared/") || l.starts_with("/p/")) {
+            return Err("the porch can pin a shared note (#/shared/…) or a published page (/p/…)".into());
+        }
+    }
+    let waves = OPEN_HOUSES.with_borrow(|m| m.get(&lot).map(|c| c.0.waves)).unwrap_or(0);
+    let oh = OpenHouse { lot, handle: String::new(), title, blurb, link, waves };
+    OPEN_HOUSES.with_borrow_mut(|m| m.insert(lot, C(oh.clone())));
+    Ok(Some(OpenHouse { handle: handle_of_lot(lot), ..oh }))
+}
+
+/// Wave hello at a neighbour's front porch in town.
+#[update]
+fn wave_house(lot: u32) -> Result<u32, String> {
+    let me = msg_caller();
+    if me == Principal::anonymous() {
+        return Err("sign in first".into());
+    }
+    let mut oh = OPEN_HOUSES.with_borrow(|m| m.get(&lot).map(|c| c.0)).ok_or("no porch sign on that lot")?;
+    oh.waves = oh.waves.saturating_add(1);
+    let w = oh.waves;
+    OPEN_HOUSES.with_borrow_mut(|m| m.insert(lot, C(oh)));
+    Ok(w)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
     fn a_mix_of_every_kind() {
-        let houses: Vec<TownHouse> = (0..5000u32).map(|i| TownHouse { lot: i, storeys: if i % 50 == 0 { 3 } else { 1 }, size: if i % 97 == 0 { 3 } else { 0 }, lit: if i % 7 == 0 { 2 } else { 0 }, low: false, badges: 0 }).collect();
+        let houses: Vec<TownHouse> = (0..5000u32).map(|i| TownHouse { lot: i, storeys: if i % 50 == 0 { 3 } else { 1 }, size: if i % 97 == 0 { 3 } else { 0 }, lit: if i % 7 == 0 { 2 } else { 0 }, low: false, agent: false, badges: 0 }).collect();
         let shown = pick_houses(&houses, 600);
         assert_eq!(shown.len(), 600);
         assert!(shown.windows(2).all(|w| w[0].lot < w[1].lot), "street order, no repeats");

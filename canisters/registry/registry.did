@@ -214,6 +214,15 @@ type Notebook = record {
   canister : principal;
 };
 type Online = record { "principal" : principal; handle : text; channel : text };
+type OpenHouse = record {
+  lot : nat32;
+  title : text;
+  link : opt text;
+  blurb : text;
+  // the owner's community handle (or "a neighbour"); filled in when read, never stored
+  handle : text;
+  waves : nat32;
+};
 // Single-choice poll: `votes[i]` is the index into `options` that voter i picked.
 type Poll = record {
   votes : vec record { principal; nat32 };
@@ -334,8 +343,9 @@ type Result_3 = variant { Ok : nat32; Err : text };
 type Result_30 = variant { Ok : Rain; Err : text };
 type Result_31 = variant { Ok : Bug; Err : text };
 type Result_32 = variant { Ok : Flag; Err : text };
-type Result_33 = variant { Ok : SnapshotInfo; Err : text };
-type Result_34 = variant { Ok : Town; Err : text };
+type Result_33 = variant { Ok : opt OpenHouse; Err : text };
+type Result_34 = variant { Ok : SnapshotInfo; Err : text };
+type Result_35 = variant { Ok : Town; Err : text };
 type Result_4 = variant { Ok : Attestation; Err : text };
 type Result_5 = variant { Ok : vec Bug; Err : text };
 type Result_6 = variant { Ok : Notebook; Err : text };
@@ -444,6 +454,8 @@ type TownHouse = record {
   lot : nat32;
   // one of the notebooks has under 30 days of cycles left
   low : bool;
+  // an agent wrote to one of the notebooks this week: a courier runs to the house
+  agent : bool;
   // notebooks owned, 1-3
   storeys : nat8;
   // quests done, as bits: 1 Sprout (10 notes), 2 Weaver (25 links), 4 a week's streak, 8 a month's
@@ -668,6 +680,8 @@ service : () -> {
   my_membership : () -> (opt Member) query;
   // Messages that mention the caller with an id above `after`, oldest first, at most 50.
   my_mentions : (nat64) -> (vec Message) query;
+  // How many free messages in #help and #general a signed-in newcomer without a notebook has left, and their chosen handle.
+  my_newcomer_pass : () -> (nat32, opt text) query;
   // Notebooks the caller created.
   my_notebooks : () -> (vec Notebook) query;
   // Your primary notebook: the one the community bills, in cycles.
@@ -684,6 +698,8 @@ service : () -> {
   // because it asks the management canister rather than the notebook.
   notebook_status : (principal) -> (Result_24);
   online : () -> (vec Online) query;
+  // Every home that has put out a welcome sign on its front porch.
+  open_houses : () -> (vec OpenHouse) query;
   // Pay for a notebook's cycles with any accepted token. `amount` is in the token's smallest unit and
   // is pulled from `payer`'s ICRC-2 allowance for the registry (the caller when empty; an OISY wallet
   // otherwise). ICP goes to the minting canister, TCYCLES is withdrawn straight into the notebook,
@@ -711,6 +727,8 @@ service : () -> {
   post_fund : (text, text, principal, nat64) -> (Result_9);
   // Share a note in chat: `text` is the comment (may be empty), the gist is a snapshot of the note.
   post_gist : (text, text, text, text, principal, text) -> (Result_9);
+  // Let a signed-in visitor waiting at the station say hello or ask for help in #help or #general (up to 10 free messages).
+  post_newcomer : (text, text, text, opt nat64) -> (Result_9);
   // Start a fundraiser for an AI plan: developers channel, linked contributors only; donations go
   // to the contributor's wallet.
   post_plan_fund : (text, text, text, nat64) -> (Result_9);
@@ -763,6 +781,8 @@ service : () -> {
   set_market_fee : (nat64) -> (Result);
   // The icon and the one-line description on a notebook's card (owner).
   set_notebook_meta : (principal, opt text, opt text) -> (Result_6);
+  // Put out (or take down, when `title` is empty) a front porch welcome sign on your home in town.
+  set_open_house : (text, text, opt text) -> (Result_33);
   // Set the spawn price in e8s (controller only); 0 makes spawning free again.
   set_price : (nat64) -> (Result);
   // Choose which of your notebooks pays for what you do in the community.
@@ -785,6 +805,9 @@ service : () -> {
   solve_problem : (nat64, vec text) -> (Result_28);
   // Propose a building (signed in). It shows once an admin approves it and you have paid.
   sponsor : (SponsorInput) -> (Result_25);
+  // Sponsor a starter notebook for a newcomer `recipient`: the caller (or `payer`) covers the spawn
+  // fee, and `recipient` becomes the owner and controller of the new canister.
+  sponsor_newcomer : (principal, text, opt principal) -> (Result_6);
   sponsor_price : () -> (nat64) query;
   // The buildings in the Sponsors district: approved and paid for.
   sponsors : () -> (vec SponsorView) query;
@@ -796,7 +819,7 @@ service : () -> {
   // The registry keeps no tokens either: market fees in ck tokens or TCYCLES become its own cycles hourly.
   sweep_holdings : () -> (Result_19);
   // Take a snapshot of a notebook canister (its owner); at most one is kept, the newest replaces it.
-  take_snapshot : (principal, opt blob) -> (Result_33);
+  take_snapshot : (principal, opt blob) -> (Result_34);
   token_id : (principal) -> (opt nat64) query;
   // Give every notebook from before tokenisation an ICRC-7 id (controller only; new ones get it at spawn).
   tokenize_all : () -> (Result_3);
@@ -809,7 +832,7 @@ service : () -> {
   // to the agents working on it; it is the payer's ICP and the notebook only gains.
   top_up_notebook : (principal, nat64, opt principal) -> (Result_12);
   // The town right now: the houses (counted every few hours) and the public spaces (live).
-  town : () -> (Result_34) query;
+  town : () -> (Result_35) query;
   track_record : (text) -> (opt TrackRecord) query;
   // Track records of everyone who has done something on a problem, most active first.
   track_records : (nat32) -> (vec TrackRecord) query;
@@ -832,4 +855,6 @@ service : () -> {
   vote_post : (nat64, int8) -> (Result_14);
   // Trips people left with me, open ones first; `overdue` says whether to raise the alarm.
   watching : () -> (vec Watch) query;
+  // Wave hello at a neighbour's front porch in town.
+  wave_house : (nat32) -> (Result_3);
 }

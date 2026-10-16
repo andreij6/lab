@@ -76,6 +76,12 @@ hourly, in MemoryId 39; new visitors stop being recorded at 100,000).
 never come out of houses, so chat is never tied to a home); newcomers play in the schoolyard; hikers walk the trail;
 seasons from the date; light theme is day, dark is night.
 
+**Open houses** (`OPEN_HOUSES`, MemoryId 54): a lot → a sign (title, blurb, an in-app link, waves). `open_houses()` adds the
+owner's handle when read; nothing else about the owner leaves the registry. A sign-post and a mat are drawn by the door;
+the tooltip shows the sign; a click opens it with a wave button and the pinned note. **Agent couriers**: `TownHouse.agent`
+from each notebook's `usage().agent_active` (a key used in the last 7 days); the renderer runs a courier between the
+Lab and up to six such homes. **Tents**: up to six by the station for `campers`, the first one yours when `me_camping`.
+
 ## Privacy
 
 `town()` returns no names, principals, handles, canister ids or notebook names: houses carry a lot number and small

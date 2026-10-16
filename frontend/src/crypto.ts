@@ -123,3 +123,15 @@ export function reviewThesis(content: string, holds: boolean, today: string, pri
 export function watchSymbols(watch: string[], trades: Trade[], ts: Thesis[]): string[] {
   return [...new Set([...watch, ...trades.filter(isOpen).map((t) => t.asset), ...ts.filter((t) => t.status === "holds").map((t) => t.asset)].map(symbolOf).filter(Boolean))].slice(0, MAX_WATCH);
 }
+
+/** The thesis as a card to share: entry price when written, the live price, the move, and a markdown version. */
+export function thesisCardSummary(t: Thesis, livePrice?: number): { asset: string; statusLabel: string; headline: string; entryLabel: string; liveLabel: string; deltaPct?: number; deltaLabel: string; markdown: string } {
+  const deltaPct = t.priceThen !== undefined && t.priceThen > 0 && livePrice !== undefined ? ((livePrice - t.priceThen) / t.priceThen) * 100 : undefined;
+  const deltaLabel = deltaPct === undefined ? "–" : `${deltaPct >= 0 ? "+" : "−"}${Math.abs(deltaPct).toFixed(1)}%`;
+  const statusLabel = t.status === "holds" ? "Holds" : "Broken";
+  const entryLabel = t.priceThen !== undefined ? usd(t.priceThen) : "–";
+  const liveLabel = livePrice !== undefined ? usd(livePrice) : "–";
+  const lines = [`**${t.asset} thesis** · ${t.title} (${statusLabel})`, `Written ${t.written ?? "on-chain"}${t.priceThen !== undefined ? ` at ${entryLabel}` : ""}${livePrice !== undefined ? ` · now ${liveLabel} (${deltaLabel})` : ""}`];
+  if (t.wrongIf) lines.push(`Wrong if: ${t.wrongIf}`);
+  return { asset: t.asset, statusLabel, headline: t.title, entryLabel, liveLabel, deltaPct, deltaLabel, markdown: lines.join("\n") };
+}

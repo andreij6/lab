@@ -33,6 +33,8 @@ pub struct Usage {
     pub links: Option<u64>,
     pub streak: Option<u32>,
     pub active_days: Option<u32>,
+    /// an agent key used in the last week: None from a notebook not yet upgraded
+    pub agent_active: Option<bool>,
 }
 thread_local! {
     static STATS_CACHE: RefCell<Option<AppStats>> = const { RefCell::new(None) };
