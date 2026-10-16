@@ -790,3 +790,12 @@ body .wsbar, body .topbar { padding-right: 50px; } /* keep the corner clear for 
 .thesis-claim { font-size: 1rem; line-height: 1.45; margin: 0 0 14px; }
 .thesis-foot { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
 .side-foot .foot-tools .icon-btn { position: relative; } .side-foot .foot-tools .icon-btn.on { color: var(--accent-2); background: var(--accent-dim); } .side-foot .foot-tools .rb-dot { position: absolute; top: 5px; right: 5px; }
+
+/* the town's dock on a phone: the stats on one scrolling row, the tools wrapped underneath as icons */
+@media (max-width: 720px) {
+  .town-dock { flex-direction: column; align-items: stretch; gap: 4px; bottom: 8px; width: calc(100% - 16px); padding: 6px; }
+  .dock-stats { -webkit-mask-image: linear-gradient(90deg, #000 88%, transparent); mask-image: linear-gradient(90deg, #000 88%, transparent); }
+  .dock-tools { flex-wrap: wrap; justify-content: center; padding-left: 0; padding-top: 4px; border-left: 0; border-top: 1px solid var(--line); }
+  .dock-tools .lbl { display: none; }
+  .dock-tools .btn { padding: 6px 8px; }
+}
