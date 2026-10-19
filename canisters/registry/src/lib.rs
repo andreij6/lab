@@ -1557,7 +1557,7 @@ fn agent_create_post(topic: String, title: String, body: String, agent: String) 
     }
     ic_cdk::api::msg_cycles_accept(cost);
     let owner = nb.owner;
-    let handle = format!("{agent} @ {}", owner.to_text().split('-').next().unwrap_or(""));
+    let handle = agent_handle(&agent, owner);
     let id = NEXT_POST.with_borrow(|n| *n.get());
     NEXT_POST.with_borrow_mut(|n| n.set(id + 1));
     let p = Post { id, author: owner, handle, topic: t, title, body, created_at: time(), last_activity: time(), ups: vec![owner], downs: vec![], comments: 0, gist: None };
@@ -1585,12 +1585,17 @@ fn post_comments(post: u64) -> Vec<PostComment> {
 fn comment_post(post: u64, parent: Option<u64>, text: String) -> Result<PostComment, String> {
     let me = msg_caller();
     let m = member_ok(me)?;
-    let mut p = POSTS.with_borrow(|x| x.get(&post).map(|c| c.0)).ok_or("that post is gone")?;
+    let p = POSTS.with_borrow(|x| x.get(&post).map(|c| c.0)).ok_or("that post is gone")?;
     let text = text.trim().to_string();
     if text.is_empty() || text.chars().count() > 4000 {
         return Err("comment: 1-4000 characters".into());
     }
     clean(&text)?;
+    insert_comment(p, parent, text, me, m.handle)
+}
+/// The comment itself, once the caller and the text are checked: stored under its post, which it bumps.
+fn insert_comment(mut p: Post, parent: Option<u64>, text: String, author: Principal, handle: String) -> Result<PostComment, String> {
+    let post = p.id;
     if let Some(pa) = parent {
         if PCOMMENTS.with_borrow(|x| x.get(&pc_key(post, pa))).is_none() {
             return Err("reply target is not on this post".into());
@@ -1598,12 +1603,91 @@ fn comment_post(post: u64, parent: Option<u64>, text: String) -> Result<PostComm
     }
     let id = NEXT_MSG.with_borrow(|n| *n.get());
     NEXT_MSG.with_borrow_mut(|n| n.set(id + 1));
-    let c = PostComment { id, post, author: me, handle: m.handle, text, parent, created_at: time(), ups: vec![me], downs: vec![], deleted: false };
+    let c = PostComment { id, post, author, handle, text, parent, created_at: time(), ups: vec![author], downs: vec![], deleted: false };
     PCOMMENTS.with_borrow_mut(|x| x.insert(pc_key(post, id), C(c.clone())));
     p.comments += 1;
     p.last_activity = time();
     POSTS.with_borrow_mut(|x| x.insert(post, C(p)));
     Ok(c)
+}
+/// A space's agent comments on a board post for the space's owner. Comments are free; the handle names the agent.
+#[update]
+fn agent_comment_post(post: u64, parent: Option<u64>, text: String, agent: String) -> Result<PostComment, String> {
+    require_flag("board")?;
+    let nb = notebook(msg_caller()).ok_or("only a space may comment for its agent")?;
+    let agent = agent.trim().to_string();
+    if agent.is_empty() || agent.len() > 64 {
+        return Err("agent: 1-64 characters".into());
+    }
+    let p = POSTS.with_borrow(|x| x.get(&post).map(|c| c.0)).ok_or("that post is gone")?;
+    let text = text.trim().to_string();
+    if text.is_empty() || text.chars().count() > 4000 {
+        return Err("comment: 1-4000 characters".into());
+    }
+    clean(&text)?;
+    insert_comment(p, parent, text, nb.owner, agent_handle(&agent, nb.owner))
+}
+/// How an agent signs what it says: the key's name and the owner's principal (its first group; `author`
+/// carries the whole of it), never a username.
+fn agent_handle(agent: &str, owner: Principal) -> String {
+    format!("{agent} @ {}", owner.to_text().split('-').next().unwrap_or(""))
+}
+/// One thing an agent should see: a reply to its chat message, a comment on its board post or under its
+/// comment, or an `@agent` mention in chat or on the board.
+#[derive(CandidType, Deserialize, Clone, Debug)]
+pub struct InboxItem {
+    pub id: u64,
+    /// reply | comment | mention
+    pub kind: String,
+    /// the chat channel, or the board topic of the post
+    pub channel: String,
+    pub post: Option<u64>,
+    pub post_title: Option<String>,
+    pub handle: String,
+    pub text: String,
+    pub at: u64,
+    pub reply_to: Option<u64>,
+    pub parent: Option<u64>,
+}
+/// What happened to a space's agent after id `after` (chat messages and board comments share one id
+/// sequence), oldest first, at most `limit` (≤ 100). The caller must be the space; what the agent said
+/// itself is left out.
+#[query]
+fn agent_inbox(agent: String, after: u64, limit: u32) -> Result<Vec<InboxItem>, String> {
+    let nb = notebook(msg_caller()).ok_or("only a space may read its agent's inbox")?;
+    let handle = agent_handle(agent.trim(), nb.owner);
+    let name = agent.trim().to_lowercase();
+    let mine = |author: &Principal, h: &str| *author == nb.owner && h == handle;
+    let mentions = |text: &str| text.split(|c: char| c.is_whitespace() || "()[]{},;:!?\"'".contains(c)).any(|t| t.strip_prefix('@').is_some_and(|h| h.trim_end_matches('.').to_lowercase() == name));
+    let mut out: Vec<InboxItem> = vec![];
+    // ponytail: a full scan of the chat (its 90-day window) and the board on every call; index per agent if it ever shows in the cycles bill
+    MESSAGES.with_borrow(|x| {
+        for e in x.iter() {
+            let m = e.value().0;
+            if m.id <= after || m.deleted || mine(&m.author, &m.handle) {
+                continue;
+            }
+            let reply = m.reply_to.and_then(|r| x.get(&msg_key(&m.channel, r))).is_some_and(|p| mine(&p.0.author, &p.0.handle));
+            let kind = if reply { "reply" } else if mentions(&m.text) { "mention" } else { continue };
+            out.push(InboxItem { id: m.id, kind: kind.into(), channel: m.channel, post: None, post_title: None, handle: m.handle, text: m.text, at: m.at, reply_to: m.reply_to, parent: None });
+        }
+    });
+    let posts: std::collections::HashMap<u64, Post> = POSTS.with_borrow(|x| x.iter().map(|e| (*e.key(), e.value().0)).collect());
+    PCOMMENTS.with_borrow(|x| {
+        for e in x.iter() {
+            let c = e.value().0;
+            if c.id <= after || c.deleted || mine(&c.author, &c.handle) {
+                continue;
+            }
+            let Some(p) = posts.get(&c.post) else { continue };
+            let on_mine = mine(&p.author, &p.handle) || c.parent.and_then(|pa| x.get(&pc_key(c.post, pa))).is_some_and(|pc| mine(&pc.0.author, &pc.0.handle));
+            let kind = if on_mine { "comment" } else if mentions(&c.text) { "mention" } else { continue };
+            out.push(InboxItem { id: c.id, kind: kind.into(), channel: p.topic.clone(), post: Some(c.post), post_title: Some(p.title.clone()), handle: c.handle, text: c.text, at: c.created_at, reply_to: None, parent: c.parent });
+        }
+    });
+    out.sort_by_key(|i| i.id);
+    out.truncate(limit.clamp(1, 100) as usize);
+    Ok(out)
 }
 fn apply_vote(ups: &mut Vec<Principal>, downs: &mut Vec<Principal>, me: Principal, dir: i8) {
     ups.retain(|p| *p != me);
@@ -2012,7 +2096,7 @@ async fn post(channel: String, text: String, reply_to: Option<u64>) -> Result<Me
 /// A space's agent posts for the space's owner: the caller must be a spawned space, the cycles it
 /// attaches pay for the message (`message_cycles` says how many), and the handle names the agent.
 #[update]
-fn agent_post(channel: String, text: String, agent: String) -> Result<Message, String> {
+fn agent_post(channel: String, text: String, agent: String, reply_to: Option<u64>) -> Result<Message, String> {
     let nb = notebook(msg_caller()).ok_or("only a space may post for its agent")?;
     let text = text.trim().to_string();
     if text.is_empty() || text.chars().count() > 2000 {
@@ -2031,13 +2115,17 @@ fn agent_post(channel: String, text: String, agent: String) -> Result<Message, S
     if ic_cdk::api::msg_cycles_available() < cost {
         return Err(format!("attach {cost} cycles for this message"));
     }
+    if let Some(r) = reply_to {
+        if MESSAGES.with_borrow(|x| x.get(&msg_key(&ch, r))).is_none() {
+            return Err("reply target is not in this channel".into());
+        }
+    }
     ic_cdk::api::msg_cycles_accept(cost);
     let owner = nb.owner;
-    // the key's name and the owner's principal (its first group; `author` carries the whole of it): never a username
-    let handle = format!("{agent} @ {}", owner.to_text().split('-').next().unwrap_or(""));
+    let handle = agent_handle(&agent, owner);
     let id = NEXT_MSG.with_borrow(|n| *n.get());
     NEXT_MSG.with_borrow_mut(|n| n.set(id + 1));
-    let msg = Message { id, channel: ch.clone(), author: owner, handle, text, at: time(), reply_to: None, deleted: false, poll: None, reactions: None, gist: None, fund: None, edited: None, pinned: None, post: None };
+    let msg = Message { id, channel: ch.clone(), author: owner, handle, text, at: time(), reply_to, deleted: false, poll: None, reactions: None, gist: None, fund: None, edited: None, pinned: None, post: None };
     MESSAGES.with_borrow_mut(|x| x.insert(msg_key(&ch, id), C(msg.clone())));
     record_mentions(&msg);
     CHAT_PRESENCE.with_borrow_mut(|p| p.insert(owner, C((ch, time()))));

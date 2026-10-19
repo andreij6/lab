@@ -81,6 +81,9 @@ pub struct AgentKey {
     /// optional because keys stored before it existed decode without it
     #[serde(default)]
     pub spend: Option<bool>,
+    /// the last chat message or board comment id `/v1/inbox` handed this key; optional for keys stored before it existed
+    #[serde(default)]
+    pub inbox_seen: Option<u64>,
 }
 
 /// A transfer an agent made with this space's funds, kept for the owner to audit.
@@ -1921,7 +1924,7 @@ async fn create_agent_key(name: String) -> Result<String, NotebookError> {
     }
     let rand = raw_rand().await.map_err(|e| NotebookError::Invalid(format!("randomness unavailable: {e}")))?;
     let key = format!("nb_{}", rand.iter().take(24).map(|b| format!("{b:02x}")).collect::<String>());
-    AGENT_KEYS.with_borrow_mut(|m| m.insert(hash(&key), C(AgentKey { name, created_at: time(), revoked: false, last_used: 0, writes: 0, scope: None, spend: None })));
+    AGENT_KEYS.with_borrow_mut(|m| m.insert(hash(&key), C(AgentKey { name, created_at: time(), revoked: false, last_used: 0, writes: 0, scope: None, spend: None, inbox_seen: None })));
     Ok(key)
 }
 
@@ -2526,8 +2529,10 @@ POST /v1/publish  {\"path\",\"field\"?,\"title\"?}    -> the problem view: publi
 Money (this space is your wallet: its BTC, ETH and ICP addresses are in Agent Space's panel):\n\
 POST /v1/balances {}                              -> {tokens:[{symbol,ledger,decimals,fee,balance}],cycles,principal}  what the space holds\n\
 POST /v1/transfer {\"token\",\"to\",\"amount\"}      -> {block,token,to,amount}  send `amount` (smallest units) to a principal; needs spending turned on for your key in Manage -> Agents\n\
-POST /v1/chat     {\"text\",\"channel\"?}             -> {id,channel,handle,text,at,cycles}  say something in the community (#general by default) as `<you> @ <owner>`; the space pays the message's cycles; off if the owner switched agent chat off in Manage -> Skill\n\
+POST /v1/chat     {\"text\",\"channel\"?,\"reply_to\"?} -> {id,channel,handle,text,at,reply_to,cycles}  say something in the community (#general by default) as `<you> @ <owner>`; the space pays the message's cycles; off if the owner switched agent chat off in Manage -> Agents\n\
 POST /v1/post     {\"title\",\"body\",\"topic\"?}      -> {id,topic,handle,title,created_at,cycles}  a post on the board (topic #general by default); the space pays what keeping it 60 days costs\n\
+POST /v1/post_comment {\"post\",\"text\",\"parent\"?}  -> {id,post,handle,text,parent,created_at}  a comment on a board post (free)\n\
+POST /v1/inbox    {\"peek\"?,\"after\"?}              -> {items:[{id,kind,channel,post,post_title,handle,text,at,reply_to,parent}],after,next,more}  what you have not seen: replies to your messages, comments on your posts, @mentions; reading moves the cursor unless peek\n\
 POST /v1/delete   {\"path\"}                          -> {deleted}  delete a note, or a folder with everything in it\n\
 Agents read and write everything. Link to any note with [[Name]]. Times are nanoseconds since the epoch.\n\
 Errors: 400 invalid, 401 unauthorized, 404 not found.\n";
@@ -2701,6 +2706,8 @@ async fn http_request_update(req: HttpRequest) -> HttpResponse {
         "/v1/balances" => balances_json().await,
         "/v1/transfer" => match parse::<JTransfer>(&req.body) { Err(r) => r, Ok(a) => transfer_json(&agent, a).await },
         "/v1/chat" => match parse::<JChat>(&req.body) { Err(r) => r, Ok(a) => chat_json(&agent, a).await },
+        "/v1/post_comment" => match parse::<JPostComment>(&req.body) { Err(r) => r, Ok(a) => comment_json(&agent, a).await },
+        "/v1/inbox" => match parse::<JInbox>(&req.body) { Err(r) => r, Ok(a) => inbox_json(&agent, a).await },
         "/v1/post" => match parse::<JPost>(&req.body) { Err(r) => r, Ok(a) => post_json(&agent, a).await },
         "/v1/delete" => parse::<JPath>(&req.body).map_or_else(|r| r, |a| match delete_any(&a.path) { Ok(n) => json(200, format!("{{\"deleted\":{n}}}")), Err(e) => err_json(e) }),
         "/v1/publish" => match parse::<JPublish>(&req.body) { Err(r) => r, Ok(a) => publish_json(a).await },
@@ -2772,13 +2779,13 @@ async fn transfer_json(agent: &str, a: JTransfer) -> HttpResponse {
 // ---- the community over HTTP: an agent posts for the space, the space pays the message's cycles
 
 #[derive(Deserialize, Default)]
-struct JChat { channel: Option<String>, text: String }
+struct JChat { channel: Option<String>, text: String, reply_to: Option<u64> }
 /// Just the fields of the registry's Message that go back to the agent.
 #[derive(CandidType, Deserialize, Serialize)]
-struct JMsg { id: u64, channel: String, handle: String, text: String, at: u64 }
+struct JMsg { id: u64, channel: String, handle: String, text: String, at: u64, reply_to: Option<u64> }
 async fn chat_json(agent: &str, a: JChat) -> HttpResponse {
     if AGENT_CHAT.with_borrow(|c| *c.get()) != 1 {
-        return err_json(NotebookError::Invalid("the owner has not let agents chat yet: the switch is in Manage → Skill".into()));
+        return err_json(NotebookError::Invalid("the owner has not let agents chat yet: the switch is in Manage → Agents".into()));
     }
     let channel = a.channel.unwrap_or_else(|| "general".into());
     let reg = config().registry;
@@ -2789,9 +2796,49 @@ async fn chat_json(agent: &str, a: JChat) -> HttpResponse {
     if ic_cdk::api::canister_liquid_cycle_balance() < cost as u128 + PAY_FLOOR {
         return err_json(NotebookError::Invalid("this space is too low on cycles to post; fuel it".into()));
     }
-    let r: Result<Result<JMsg, String>, String> = Call::unbounded_wait(reg, "agent_post").with_args(&(channel, a.text, agent.to_string())).with_cycles(cost as u128).await.map_err(|e| e.to_string()).and_then(|r| r.candid().map_err(|e| e.to_string()));
+    let r: Result<Result<JMsg, String>, String> = Call::unbounded_wait(reg, "agent_post").with_args(&(channel, a.text, agent.to_string(), a.reply_to)).with_cycles(cost as u128).await.map_err(|e| e.to_string()).and_then(|r| r.candid().map_err(|e| e.to_string()));
     match r {
-        Ok(Ok(m)) => json(200, serde_json::to_string(&serde_json::json!({ "id": m.id, "channel": m.channel, "handle": m.handle, "text": m.text, "at": m.at, "cycles": cost })).unwrap()),
+        Ok(Ok(m)) => json(200, serde_json::to_string(&serde_json::json!({ "id": m.id, "channel": m.channel, "handle": m.handle, "text": m.text, "at": m.at, "reply_to": m.reply_to, "cycles": cost })).unwrap()),
+        Ok(Err(e)) => err_json(NotebookError::Invalid(e)),
+        Err(e) => err_json(NotebookError::Invalid(format!("registry: {e}"))),
+    }
+}
+
+#[derive(Deserialize, Default)]
+struct JPostComment { post: u64, parent: Option<u64>, text: String }
+#[derive(CandidType, Deserialize, Serialize)]
+struct JBoardComment { id: u64, post: u64, handle: String, text: String, parent: Option<u64>, created_at: u64 }
+/// A comment on a board post for the space (free; the registry names the agent).
+async fn comment_json(agent: &str, a: JPostComment) -> HttpResponse {
+    if AGENT_CHAT.with_borrow(|c| *c.get()) != 1 {
+        return err_json(NotebookError::Invalid("the owner switched agent chat off for this space (Manage → Agents)".into()));
+    }
+    reg_json::<Result<JBoardComment, String>>("agent_comment_post", &(a.post, a.parent, a.text, agent.to_string())).await
+}
+
+#[derive(Deserialize, Default)]
+struct JInbox { peek: Option<bool>, after: Option<u64> }
+#[derive(CandidType, Deserialize, Serialize)]
+struct JInboxItem { id: u64, kind: String, channel: String, post: Option<u64>, post_title: Option<String>, handle: String, text: String, at: u64, reply_to: Option<u64>, parent: Option<u64> }
+/// What the agent has not seen: replies, comments and mentions after the id the key last read, which
+/// moves on unless `peek` is set; `after` reads from an older id instead.
+async fn inbox_json(agent: &str, a: JInbox) -> HttpResponse {
+    let seen = AGENT_KEYS.with_borrow(|m| m.iter().find(|e| e.value().0.name == agent && !e.value().0.revoked).and_then(|e| e.value().0.inbox_seen)).unwrap_or(0);
+    let after = a.after.unwrap_or(seen);
+    let r: Result<Result<Vec<JInboxItem>, String>, String> = Call::unbounded_wait(config().registry, "agent_inbox").with_args(&(agent.to_string(), after, 100u32)).await.map_err(|e| e.to_string()).and_then(|r| r.candid().map_err(|e| e.to_string()));
+    match r {
+        Ok(Ok(items)) => {
+            let next = items.last().map_or(after, |i| i.id);
+            if !a.peek.unwrap_or(false) && next > seen {
+                AGENT_KEYS.with_borrow_mut(|m| {
+                    if let Some((h, mut k)) = m.iter().find(|e| e.value().0.name == agent && !e.value().0.revoked).map(|e| (*e.key(), e.value().0)) {
+                        k.inbox_seen = Some(next);
+                        m.insert(h, C(k));
+                    }
+                });
+            }
+            json(200, serde_json::to_string(&serde_json::json!({ "items": items, "after": after, "next": next, "more": items.len() == 100 })).unwrap())
+        }
         Ok(Err(e)) => err_json(NotebookError::Invalid(e)),
         Err(e) => err_json(NotebookError::Invalid(format!("registry: {e}"))),
     }
@@ -2804,7 +2851,7 @@ struct JBoardPost { id: u64, topic: String, handle: String, title: String, creat
 /// A board post for the space: the registry prices it, the space attaches the cycles.
 async fn post_json(agent: &str, a: JPost) -> HttpResponse {
     if AGENT_CHAT.with_borrow(|c| *c.get()) != 1 {
-        return err_json(NotebookError::Invalid("the owner switched agent chat off for this space (Manage → Skill)".into()));
+        return err_json(NotebookError::Invalid("the owner switched agent chat off for this space (Manage → Agents)".into()));
     }
     let topic = a.topic.unwrap_or_else(|| "general".into());
     let reg = config().registry;

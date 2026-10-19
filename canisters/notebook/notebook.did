@@ -1,6 +1,8 @@
 type AgentKey = record {
   revoked : bool;
   name : text;
+  // the last chat message or board comment id `/v1/inbox` handed this key; optional for keys stored before it existed
+  inbox_seen : opt nat64;
   created_at : nat64;
   // a folder this key may also write under (the clipper's Inbox/, a mail relay's Inbox/Mail); Agents/ is always allowed
   scope : opt text;

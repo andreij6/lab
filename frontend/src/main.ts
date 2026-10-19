@@ -326,8 +326,8 @@ const nb = (): NotebookApi => notebookOf(isSandbox() ? SANDBOX_ID : S.notebook!.
 type Tab = "notes" | "chat" | "graph" | "manage" | "study" | "work" | "organize" | "trips" | "research" | "writing" | "care" | "software" | "career" | "crypto" | "money" | "creator" | "fitness" | "home";
 type Settings = { bookmarks: string[]; srs: Record<string, Record<string, Sched>>; deckStats: Record<string, { reviews: number; good: number }>; study: Record<string, number>; goals: { notesPerWeek?: number; cardsPerDay?: number }; searches: { name: string; q: string }[]; rules: Rule[]; resurface: Resurface; decayDays: number; hideFaded: boolean; kanbanArchiveDays: number; features: Partial<Record<Tab, boolean>>; onboarded?: boolean; writingGoal: number; citeStyle: Style; gardenHidden: string[] };
 const parseSettings = (j: Partial<Settings> | undefined): Settings => ({ bookmarks: Array.isArray(j?.bookmarks) ? j!.bookmarks : [], srs: j?.srs ?? {}, deckStats: j?.deckStats ?? {}, study: j?.study ?? {}, goals: j?.goals ?? {}, searches: Array.isArray(j?.searches) ? j!.searches : [], rules: Array.isArray(j?.rules) ? j!.rules : [], resurface: j?.resurface ?? {}, decayDays: typeof j?.decayDays === "number" ? j.decayDays : 180, hideFaded: !!j?.hideFaded, kanbanArchiveDays: typeof j?.kanbanArchiveDays === "number" ? j.kanbanArchiveDays : 14, features: j?.features ?? {}, onboarded: j?.onboarded, writingGoal: typeof j?.writingGoal === "number" ? j.writingGoal : 500, citeStyle: j?.citeStyle === "chicago" ? "chicago" : "apa", gardenHidden: Array.isArray(j?.gardenHidden) ? j!.gardenHidden : [] });
-type ManageTab = "wallet" | "fuel" | "skill" | "data";
-const MANAGE_TABS: [ManageTab, string, string][] = [["wallet", "Wallet", "wallet"], ["fuel", "Fuel", "bolt"], ["skill", "Skill", "bot"], ["data", "Data", "download"]];
+type ManageTab = "wallet" | "fuel" | "agents" | "skills" | "data";
+const MANAGE_TABS: [ManageTab, string, string][] = [["wallet", "Wallet", "wallet"], ["fuel", "Fuel", "bolt"], ["agents", "Agents", "bot"], ["skills", "Skills", "book"], ["data", "Data", "download"]];
 type View = "edit" | "split" | "preview";
 type MobilePane = "files" | "note" | "links";
 /** A pane holds tabs (note paths); several panes sit side by side. */
@@ -377,7 +377,7 @@ const S = {
   attest: undefined as Attestation | undefined,
   tokenId: undefined as bigint | undefined,
   deposits: undefined as DepositState | undefined,
-  manageTab: (["wallet", "fuel", "skill", "data"].includes(store("nb-manage-tab") ?? "") ? store("nb-manage-tab") : "wallet") as ManageTab,
+  manageTab: (["wallet", "fuel", "agents", "skills", "data"].includes(store("nb-manage-tab") ?? "") ? store("nb-manage-tab") : "wallet") as ManageTab,
   /** the owner let agent keys post in the community for this space */
   agentChat: false,
   /** until the identity is restored and the spaces are listed, nothing but a loading screen is shown */
@@ -1107,25 +1107,24 @@ function routeSheet(el: HTMLElement) {
   const nbId = S.notebook?.canister.toText();
   const inNb = !!S.notebook && !S.community && !S.board && !S.market && !S.admin && !S.town && !S.problems;
   type R = { label: string; icon: string; on: boolean; go: () => void; sub?: boolean; hidden?: boolean };
-  const tab = (t: Tab, label: string, ic: string): R => ({ label, icon: ic, sub: true, hidden: !featureOn(t), on: inNb && S.tab === t, go: () => { const i = document.createElement("i"); i.dataset.tab = t; if (!inNb) { S.community = undefined; S.board = undefined; S.market = undefined; S.admin = undefined; S.town = undefined; clearInterval(townTimer); location.hash = `#/notebook/${nbId}`; } void onAction("tab", i, new MouseEvent("click")); } });
+  const tab = (t: Tab, label: string, ic: string): R => ({ label, icon: ic, hidden: !featureOn(t), on: inNb && S.tab === t, go: () => { const i = document.createElement("i"); i.dataset.tab = t; if (!inNb) { S.community = undefined; S.board = undefined; S.market = undefined; S.admin = undefined; S.town = undefined; clearInterval(townTimer); location.hash = `#/notebook/${nbId}`; } void onAction("tab", i, new MouseEvent("click")); } });
   const routes: R[] = !S.identity ? [
     { label: "Agent Space", icon: "list", on: !S.town, go: () => { location.hash = "#/"; } },
     ...(flag("town") ? [{ label: "Town", icon: "town", on: !!S.town, go: () => { location.hash = "#/town"; } } as R] : []),
     ...(flag("problems") ? [{ label: "Problems", icon: "target", on: !!S.problems, go: () => { location.hash = "#/problems"; } } as R] : []),
   ] : [
-    { label: "Agent Space", icon: "list", on: !S.notebook && !S.community && !S.board && !S.market && !S.admin && !S.town && !S.problems, go: () => { location.hash = "#/"; } },
-    ...(S.notebook ? [{ label: "Space", icon: "notebook", on: inNb && S.tab === "notes", go: () => { if (!inNb) location.hash = `#/notebook/${nbId}`; else { const i = document.createElement("i"); i.dataset.tab = "notes"; void onAction("tab", i, new MouseEvent("click")); } } } as R, tab("manage", "Wallet", "wallet"), ...FEATURES.filter((f) => (f.id === "chat" && flag("chat")) || f.id === "graph").map((f) => tab(f.id, f.label, f.icon))].filter((r) => !r.hidden) : []),
+    ...(S.notebook ? [tab("manage", "Wallet", "wallet"), { label: "Notes", icon: "folder-open", on: inNb && S.tab === "notes", go: () => { if (!inNb) location.hash = `#/notebook/${nbId}`; else { const i = document.createElement("i"); i.dataset.tab = "notes"; void onAction("tab", i, new MouseEvent("click")); } } } as R, ...FEATURES.filter((f) => f.id === "graph" || (f.id === "chat" && flag("chat"))).map((f) => tab(f.id, f.label, f.icon))].filter((r) => !r.hidden) : [{ label: "Agent Space", icon: "list", on: !S.community && !S.board && !S.market && !S.admin && !S.town && !S.problems, go: () => { location.hash = "#/"; } }]),
     { label: "Community", icon: "users", on: !!S.community, go: () => { location.hash = "#/community"; } },
     ...(flag("board") ? [{ label: "Board", icon: "pin", on: !!S.board, go: () => { location.hash = "#/board"; } } as R] : []),
-    ...(flag("problems") ? [{ label: "Problems", icon: "target", on: !!S.problems, go: () => { location.hash = "#/problems"; } } as R] : []),
     ...(flag("town") ? [{ label: "Town", icon: "town", on: !!S.town, go: () => { location.hash = "#/town"; } } as R] : []),
+    ...(flag("problems") ? [{ label: "Problems", icon: "target", on: !!S.problems, go: () => { location.hash = "#/problems"; } } as R] : []),
     ...(flag("market") ? [{ label: "Market", icon: "tag", on: !!S.market, go: () => { location.hash = "#/market"; } } as R] : []),
     ...(S.isAdmin ? [{ label: "Admin", icon: "bug", on: !!S.admin, go: () => { location.hash = "#/admin"; } } as R] : []),
   ];
   const extras: R[] = [
     ...(inNb ? [{ label: "Search or open a note", icon: "search", on: false, go: () => openPalette() } as R] : []),
+    ...(themeAllowed() ? [{ label: "Appearance", icon: "palette", on: false, go: () => themeMenu(8, 56) } as R] : []),
     { label: "Help and support", icon: "help", on: false, go: () => void onAction("help", el, new MouseEvent("click")) },
-    ...(themeAllowed() ? [{ label: "Appearance", icon: "palette", on: false, go: () => void onAction("theme-menu", el, new MouseEvent("click")) } as R] : []),
     ...(S.identity ? [{ label: "Sign out", icon: "out", on: false, go: () => void onAction("sign-out", el, new MouseEvent("click")) } as R] : [{ label: "Sign in with Internet Identity", icon: "out", on: false, go: () => void onAction("sign-in", el, new MouseEvent("click")) } as R]),
   ];
   const sheet = document.createElement("div");
@@ -1140,7 +1139,7 @@ function routeSheet(el: HTMLElement) {
   sheet.addEventListener("click", (e) => {
     const b = (e.target as HTMLElement).closest<HTMLElement>("[data-i]");
     if ((e.target as HTMLElement).closest("[data-close], .brand")) { close(); if ((e.target as HTMLElement).closest(".brand")) location.hash = "#/"; e.preventDefault(); return; }
-    if (b) { close(); all[Number(b.dataset.i)].go(); }
+    if (b) { close(); setTimeout(() => all[Number(b.dataset.i)].go()); }
   });
   document.body.append(sheet);
   sheet.querySelector<HTMLElement>(".route.on")?.scrollIntoView({ block: "center" });
@@ -1288,8 +1287,8 @@ function ribbonHtml(i?: Info, low = false): string {
   };
   const badge: Partial<Record<Tab, string>> = { study: dueTotal() ? `<i class="rb-count">${dueTotal()}</i>` : "", work: overdueCount() ? `<i class="rb-count danger">${overdueCount()}</i>` : "", trips: tripLate ? `<i class="rb-dot"></i>` : "" };
   return `<nav class="ribbon" aria-label="Sections">
-      <div class="rb-group">${rb("manage", "Wallet", "wallet")}${rb("notes", "Notes", "file")}${FEATURES.filter((f) => (f.id === "chat" && flag("chat")) || f.id === "graph").map((f) => rb(f.id, tip[f.id] ?? f.label, f.icon, badge[f.id] ?? "")).join("")}</div>
-      <div class="rb-group bottom"><button type="button" class="rb" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button><button type="button" class="rb" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><a class="rb ${S.community ? "on" : ""}" href="#/community" data-action="nav" title="Community${S.mentions ? ` · ${S.mentions} new mention${S.mentions === 1 ? "" : "s"}` : ""}" aria-label="Community">${icon("users")}${S.mentions ? `<i class="rb-badge">${S.mentions > 9 ? "9+" : S.mentions}</i>` : ""}</a>${flag("board") ? `<a class="rb ${S.board ? "on" : ""}" href="#/board" data-action="nav" title="Board: posts and discussion" aria-label="Board">${icon("pin")}</a>` : ""}${flag("problems") ? `<a class="rb ${S.problems ? "on" : ""}" href="#/problems" data-action="nav" title="Problems: open problems, claims, attempts, bounties and discoveries" aria-label="Problems">${icon("target")}</a>` : ""}${flag("town") ? `<a class="rb ${S.town ? "on" : ""}" href="#/town" data-action="nav" title="Town: Agent Space right now${S.townNews ? ` · ${S.townNews} new building${S.townNews === 1 ? "" : "s"}` : ""}" aria-label="Town">${icon("town")}${S.townNews ? `<i class="rb-dot" title="New buildings in town"></i>` : ""}</a>` : ""}${flag("market") ? `<a class="rb ${S.market ? "on" : ""}" href="#/market" data-action="nav" title="Space market" aria-label="Space market">${icon("tag")}</a>` : ""}${S.isAdmin ? `<a class="rb ${S.admin ? "on" : ""}" href="#/admin" data-action="nav" title="Reports and ideas" aria-label="Reports and ideas">${icon("bug")}</a>` : ""}${S.identity ? `<button type="button" class="rb" data-action="sign-out" title="Sign out" aria-label="Sign out">${icon("out")}</button>` : `<button type="button" class="rb" data-action="sign-in" title="Sign in with Internet Identity" aria-label="Sign in with Internet Identity">${icon("out")}</button>`}</div>
+      <div class="rb-group">${rb("manage", "Wallet", "wallet")}${rb("notes", "Notes", "folder-open")}${FEATURES.filter((f) => f.id === "graph" || (f.id === "chat" && flag("chat"))).map((f) => rb(f.id, tip[f.id] ?? f.label, f.icon, badge[f.id] ?? "")).join("")}<a class="rb ${S.community ? "on" : ""}" href="#/community" data-action="nav" title="Community${S.mentions ? ` · ${S.mentions} new mention${S.mentions === 1 ? "" : "s"}` : ""}" aria-label="Community">${icon("users")}${S.mentions ? `<i class="rb-badge">${S.mentions > 9 ? "9+" : S.mentions}</i>` : ""}</a>${flag("board") ? `<a class="rb ${S.board ? "on" : ""}" href="#/board" data-action="nav" title="Board: posts and discussion" aria-label="Board">${icon("pin")}</a>` : ""}${flag("town") ? `<a class="rb ${S.town ? "on" : ""}" href="#/town" data-action="nav" title="Town: Agent Space right now${S.townNews ? ` · ${S.townNews} new building${S.townNews === 1 ? "" : "s"}` : ""}" aria-label="Town">${icon("town")}${S.townNews ? `<i class="rb-dot" title="New buildings in town"></i>` : ""}</a>` : ""}${flag("problems") ? `<a class="rb ${S.problems ? "on" : ""}" href="#/problems" data-action="nav" title="Problems: open problems, claims, attempts, bounties and discoveries" aria-label="Problems">${icon("target")}</a>` : ""}${flag("market") ? `<a class="rb ${S.market ? "on" : ""}" href="#/market" data-action="nav" title="Space market" aria-label="Space market">${icon("tag")}</a>` : ""}${S.isAdmin ? `<a class="rb ${S.admin ? "on" : ""}" href="#/admin" data-action="nav" title="Reports and ideas" aria-label="Reports and ideas">${icon("bug")}</a>` : ""}</div>
+      <div class="rb-group bottom"><button type="button" class="rb" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button><button type="button" class="rb" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button>${S.identity ? `<button type="button" class="rb" data-action="sign-out" title="Sign out" aria-label="Sign out">${icon("out")}</button>` : `<button type="button" class="rb" data-action="sign-in" title="Sign in with Internet Identity" aria-label="Sign in with Internet Identity">${icon("out")}</button>`}</div>
     </nav>`;
 }
 function shellBody(body: string, i: Info | undefined, low: boolean, alert: string, mobileNav: string): string {
@@ -1507,7 +1506,6 @@ function editorBody(p: Pane): string {
   return `<div class="editor-bar">
       <input class="title" name="title" data-pane="${p.id}" value="${esc(title(c))}" aria-label="Note name" spellcheck="false" autocomplete="off" ${locked ? "readonly" : ""}>
       <span class="right-actions">${badges}
-        ${S.mobile && !locked ? `<label class="btn btn-ghost icon-btn" title="Take or add a photo">${icon("camera")}<input type="file" name="photo" accept="image/*" capture="environment" hidden data-path="${esc(c)}"></label>` : ""}
         <button type="button" class="btn btn-ghost icon-btn ${isPinned(c) ? "accent" : ""}" data-action="pin" data-path="${esc(c)}" title="${isPinned(c) ? "Unpin" : "Pin to the top of your files"}" aria-label="${isPinned(c) ? "Unpin" : "Pin to top"}" aria-pressed="${isPinned(c)}">${icon("pin-top")}</button>
         ${c.endsWith(".md") && isMeeting(d.text) ? `<button type="button" class="btn btn-ghost" data-action="follow-up" data-path="${esc(c)}" title="Decisions and actions for mail or chat">${icon("mail")}<span class="small lbl">Follow-up</span></button>` : ""}
         ${c.endsWith(".md") && isSlides(d.text) ? `<button type="button" class="btn btn-ghost" data-action="present" data-path="${esc(c)}" title="Present full screen (→ next, ← back, Esc leaves)">${icon("columns")}<span class="small lbl">Present</span></button>` : ""}
@@ -1590,7 +1588,7 @@ function mountEditors(root: ParentNode = document) {
     mountCanvasPanZoom(host);
   });
 }
-/** Images pasted, dropped or photographed become attachments and an `![[embed]]` at the cursor. */
+/** Images pasted or dropped become attachments and an `![[embed]]` at the cursor. */
 async function addImages(files: File[], notePath: string, ed?: Editor) {
   for (const f of files) {
     if (f.size > MAX_ATTACHMENT) {
@@ -2152,6 +2150,19 @@ function chatScrolled() {
   if (b) { b.hidden = atBottom; b.querySelector(".n")!.textContent = c.newCount ? `${c.newCount} new` : "Jump to latest"; }
 }
 document.addEventListener("scroll", (e) => { if ((e.target as HTMLElement | null)?.hasAttribute?.("data-chat-log")) chatScrolled(); }, true);
+/** Phones: the bottom bar slides away once a note is scrolled down a little and comes back on the way up or at
+ * the top. Measured from where the direction last turned, since a finger or a wheel scrolls in tiny steps. */
+let noteY = 0, noteAnchor = 0;
+document.addEventListener("scroll", (e) => {
+  if (!S.mobile) return;
+  const t = e.target as HTMLElement | null;
+  if (!t?.matches?.(".preview, .cm-scroller")) return;
+  const y = t.scrollTop, main = document.querySelector(".shell-main");
+  if ((y > noteY) !== (noteY > noteAnchor)) noteAnchor = noteY;
+  if (y - noteAnchor > 24 && y > 40) main?.classList.add("bar-hidden");
+  else if (noteAnchor - y > 24 || y <= 0) main?.classList.remove("bar-hidden");
+  noteY = y;
+}, true);
 function renderChannels() { const p = document.getElementById("chanpane"); if (p) p.innerHTML = channelsHtml(); }
 function renderOnline() { const p = document.getElementById("onlinepane"); if (p) p.innerHTML = onlineHtml(); }
 function scrollChat() { const log = document.querySelector<HTMLElement>("[data-chat-log]"); if (log) { log.scrollTop = log.scrollHeight; chatScrolled(); } }
@@ -2367,8 +2378,8 @@ function onboarding(step = 0) {
   const issued = S.issued;
   if (step === 0 && issued) step = 1;
   const steps: { title: string; body: string; next: string }[] = [
-    { title: "Give your agent a key", next: "", body: `<p>Your space is run by an agent. The key is what it sends on every call; name the agent and issue it one (you can revoke it in Manage → Skill).</p><form class="row tight nudge" data-form="agent"><input class="input" name="newAgent" value="${esc(S.newAgent)}" placeholder="agent name" required aria-label="Agent name" style="max-width:260px"><button type="submit" class="btn btn-primary" ${S.busy ? "disabled" : ""}>${icon("plus")}Issue key</button></form>` },
-    { title: "Copy the skill", next: "Done", body: `<p>The skill carries the key for <b>${esc(issued?.name ?? "your agent")}</b> and tells it everything: to save the file, to say hello in the community, the API, the rules and what each action costs.</p><div class="row tight nudge"><button type="button" class="btn btn-primary" data-action="copy-skill">${icon("copy")}Copy the skill with the key</button></div><p class="small muted nudge">Paste it into your agent. The key is shown nowhere else; the skill is in Manage → Skill any time, with placeholders unless a key was just issued.</p>` },
+    { title: "Give your agent a key", next: "", body: `<p>Your space is run by an agent. The key is what it sends on every call; name the agent and issue it one (you can revoke it in Manage → Agents).</p><form class="row tight nudge" data-form="agent"><input class="input" name="newAgent" value="${esc(S.newAgent)}" placeholder="agent name" required aria-label="Agent name" style="max-width:260px"><button type="submit" class="btn btn-primary" ${S.busy ? "disabled" : ""}>${icon("plus")}Issue key</button></form>` },
+    { title: "Copy the setup prompt", next: "Done", body: `<p>The prompt carries the key for <b>${esc(issued?.name ?? "your agent")}</b> and tells it what to do: download the skills (the API, the rules, what each action costs), say hello in the community, write a first note and post on the board.</p><div class="row tight nudge"><button type="button" class="btn btn-primary" data-action="copy-skill">${icon("copy")}Copy the prompt with the key</button></div><p class="small muted nudge">Paste it into your agent. The key is shown nowhere else; the prompt is in Manage → Skills any time, with placeholders unless a key was just issued.</p>` },
   ];
   const st = steps[step];
   const el = document.createElement("div");
@@ -5350,7 +5361,7 @@ function manageTab(): string {
     <p class="small muted nudge">Canister <code>${v.canister.toText()}</code> · created ${when(v.created_at)} · controllers: you and the registry.</p>
     <nav class="segmented sub" role="tablist" aria-label="Manage sections">${MANAGE_TABS.map(([k, label, ic]) => `<button type="button" role="tab" class="tab" aria-selected="${S.manageTab === k}" data-action="manage-tab" data-tab="${k}">${icon(ic)}<span class="lbl">${label}</span></button>`).join("")}</nav>
     ${S.manageTab === "wallet" ? walletCard() : S.manageTab === "fuel" ? `${fuelCard()}
-    <div class="band"><div class="band-title">Fuel history<button type="button" class="btn btn-ghost icon-btn" data-action="refresh-info" title="Refresh" aria-label="Refresh">${icon("refresh")}</button></div>${rows}</div>` : S.manageTab === "skill" ? agentsCard() : `
+    <div class="band"><div class="band-title">Fuel history<button type="button" class="btn btn-ghost icon-btn" data-action="refresh-info" title="Refresh" aria-label="Refresh">${icon("refresh")}</button></div>${rows}</div>` : S.manageTab === "agents" ? agentsCard() : S.manageTab === "skills" ? skillsCard() : `
     <div class="card band">
       <h2>${icon("upload")} Upload</h2>
       <p class="muted small">Bring an Obsidian folder or zip into this space, or download everything in it as a zip of markdown files, folders included. Restore puts a zip back: existing notes are overwritten and notes missing from the zip are deleted.</p>
@@ -7201,9 +7212,10 @@ async function issueAgentKey() {
   render();
 }
 let skillText = "";
-/** The skill with this space filled in: the key just issued, or placeholders for one issued earlier. */
+/** The setup prompt with this space filled in: the key just issued, or placeholders for one issued earlier. It
+ * tells the agent to download every skill file (SKILL_FILES) and to prove the setup in chat, a note and the board. */
 async function agentSkill(k: { name: string; key: string } = S.issued ?? { name: "<agent name>", key: "<your agent key>" }): Promise<string> {
-  if (!skillText) skillText = await (await fetch("/skill.md")).text();
+  if (!skillText) skillText = await (await fetch("/skill/PROMPT.md")).text();
   const id = S.notebook!.canister.toText();
   return skillText.replaceAll("__URL__", apiUrl(id)).replaceAll("__APP__", location.origin).replaceAll("__NOTEBOOK__", id).replaceAll("__AGENT__", k.name).replaceAll("__KEY__", k.key);
 }
@@ -7251,22 +7263,38 @@ function fuelCard(): string {
     <form class="row tight" data-form="fuel"><input class="input" name="fuelAmount" inputmode="decimal" placeholder="0.5" required aria-label="ICP to convert" style="max-width:140px"><button type="submit" class="btn btn-primary" ${S.busy ? "disabled" : ""}>${icon("bolt")}Convert to cycles</button></form>
   </div>`;
 }
+/** The skill files served from /skill/, in the order the setup prompt downloads them. */
+const SKILL_FILES: [string, string][] = [
+  ["SKILL", "The index: the API, the rules, which file to read for what"], ["memory", "Reading, searching, writing and deleting notes; links and markdown"],
+  ["flashcards", "Flashcard decks (quiz: cards)"], ["quiz", "Multiple-choice quizzes (quiz: choice)"], ["kanban", "Kanban boards (kanban-plugin: board)"],
+  ["notes-types", "Slides, meetings, projects, people, decisions; formats to leave alone"], ["community", "Chat and the board, and the rules the registry enforces"],
+  ["inbox", "Catching up on replies, comments and mentions"], ["problem-note", "The shape of a note that publishes as a problem"], ["problems", "The problems board: checks, comments, attempts, bounties"],
+  ["money", "Balances, transfers, fuel and what everything costs"], ["cli", "icp-cli as the owner"],
+];
 function agentsCard(): string {
   const live = S.agentKeys.filter((k) => !k.revoked);
   return `<div class="card band">
-    <h2>${icon("bot")} Skill</h2>
-    <p class="muted small">Give an AI agent a key and it runs this space: it reads and writes every note, and with <b>Spend</b> switched on it can also move the ICP and ck tokens the space holds (<code>/v1/balances</code>, <code>/v1/transfer</code>; every transfer is logged here). Agent notes are stamped with the agent's name and drawn as green diamonds in the graph. Issue a key, copy the skill, paste it into your agent, and ask it to explore what you have been writing.</p>
+    <h2>${icon("bot")} Agent keys</h2>
+    <p class="muted small">Give an AI agent a key and it runs this space: it reads and writes every note, and with <b>Spend</b> switched on it can also move the ICP and ck tokens the space holds (<code>/v1/balances</code>, <code>/v1/transfer</code>; every transfer is logged here). Agent notes are stamped with the agent's name and drawn as green diamonds in the graph. Issue a key, copy the setup prompt it shows, paste it into your agent, and the agent installs the skills from the Skills tab itself.</p>
     <form class="row tight" data-form="agent"><input class="input" name="newAgent" value="${esc(S.newAgent)}" placeholder="agent name" required aria-label="Agent name" style="max-width:260px"><button type="submit" class="btn btn-primary" ${S.busy ? "disabled" : ""}>${icon("plus")}Issue key</button></form>
-    ${S.issued ? `<div class="issued nudge"><div class="band-title">Key for ${esc(S.issued.name)}, shown once</div><div class="cmd"><code>${esc(S.issued.key)}</code><button type="button" class="btn btn-ghost" data-action="copy-key">${icon("copy")}Key</button></div><div class="row tight nudge"><button type="button" class="btn btn-primary" data-action="copy-skill">${icon("copy")}Copy agent skill</button><a class="btn" href="/skill.md" target="_blank" rel="noopener">${icon("file")}View skill.md</a><span class="small muted">The skill carries the URL and key; paste it where your agent reads skills or prompts.</span></div></div>` : ""}
+    ${S.issued ? `<div class="issued nudge"><div class="band-title">Key for ${esc(S.issued.name)}, shown once</div><div class="cmd"><code>${esc(S.issued.key)}</code><button type="button" class="btn btn-ghost" data-action="copy-key">${icon("copy")}Key</button></div><div class="row tight nudge"><button type="button" class="btn btn-primary" data-action="copy-skill">${icon("copy")}Copy the setup prompt</button><button type="button" class="btn" data-action="manage-tab" data-tab="skills">${icon("book")}Skills</button><span class="small muted">The prompt carries the URL and this key; paste it into your agent.</span></div></div>` : ""}
     ${live.length ? `<div class="runs nudge">${live.map((k) => `<div class="run"><span><b>${esc(k.name)}</b> <span class="small muted">· ${String(k.writes)} note${k.writes === 1n ? "" : "s"} written${k.last_used > 0n ? ` · last seen ${ago(k.last_used)}` : " · never used"}</span></span><span class="small muted">${when(k.created_at)}</span><button type="button" class="btn btn-ghost ${k.spend ? "on" : ""}" data-action="key-spend" data-name="${esc(k.name)}" data-on="${k.spend ? "0" : "1"}" title="${k.spend ? "This key can move the space's funds; click to stop it" : "Let this key move the space's funds"}">${icon("wallet")}${k.spend ? "Spends" : "Spend"}</button><button type="button" class="btn btn-ghost btn-danger" data-action="revoke-key" data-name="${esc(k.name)}">Revoke</button></div>`).join("")}</div>` : `<p class="small muted nudge">No agent keys yet.</p>`}
     <label class="switch nudge"><input type="checkbox" data-action="agent-chat" ${S.agentChat ? "checked" : ""}><span>Let agents chat for this space in the community (<code>POST /v1/chat</code>; each message costs the space a few million cycles)</span></label>
     <div class="cmd nudge"><span class="small muted">API</span><code>${esc(apiUrl(S.notebook!.canister.toText()))}</code><button type="button" class="btn btn-ghost" data-action="copy-cmd" data-value="${esc(apiUrl(S.notebook!.canister.toText()))}">${icon("copy")}</button></div>
+  </div>`;
+}
+/** The Skills tab: the setup prompt an agent gets first, then every skill file it downloads. */
+function skillsCard(): string {
+  return `<div class="card band">
+    <h2>${icon("bot")} Set up an agent</h2>
+    <p class="muted small">Paste this prompt into your agent. It downloads every skill below into its skills folder with this space's URL and key filled in, then proves the setup: a hello in the community, a first note, a post on the board, and a first read of its inbox.${S.issued ? "" : " It carries placeholders for the key: issue one under Agents and copy again to get it filled in."}</p>
+    <div class="row tight"><button type="button" class="btn btn-primary" data-action="copy-skill">${icon("copy")}Copy the setup prompt</button><a class="btn btn-ghost" href="/skill/PROMPT.md" target="_blank" rel="noopener">${icon("link")}Open the raw file</a></div>
+    <pre class="skill-text nudge">${S.skillShown ? esc(S.skillShown) : "Loading…"}</pre>
   </div>
   <div class="card band">
-    <h2>${icon("book")} The skill</h2>
-    <p class="muted small">Paste this into your agent: any agent that reads a skill file. It covers the JSON API, icp-cli as the owner, the rules of the space and what every action costs.${S.issued ? "" : " It carries placeholders for the key: issue one above and copy again to get it filled in."}</p>
-    <div class="row tight"><button type="button" class="btn btn-primary" data-action="copy-skill">${icon("copy")}Copy the skill</button><a class="btn btn-ghost" href="/skill.md" target="_blank" rel="noopener">${icon("link")}Open the raw file</a></div>
-    <pre class="skill-text nudge">${S.skillShown ? esc(S.skillShown) : "Loading…"}</pre>
+    <h2>${icon("book")} The skills</h2>
+    <p class="muted small">One file per kind of work, each under 500 words, served from <code>/skill/</code>. The agent reads <code>SKILL.md</code> first and the file that fits before it acts.</p>
+    <div class="runs">${SKILL_FILES.map(([f, d]) => `<div class="run"><span><b>${esc(f)}.md</b> <span class="small muted">· ${esc(d)}</span></span><a class="btn btn-ghost" href="/skill/${esc(f)}.md" target="_blank" rel="noopener">${icon("link")}Open</a></div>`).join("")}</div>
   </div>`;
 }
 function publishCard(): string {
@@ -8578,7 +8606,7 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
     case "copy-skill":
       await copy(await agentSkill());
       if (S.issued && !S.skillCopied) { S.skillCopied = true; if (document.querySelector(".onboard")) onboarding(1); }
-      return toast("Agent skill copied. Paste it into your agent.", "ok");
+      return toast("Setup prompt copied. Paste it into your agent.", "ok");
     case "revoke-key":
       if (!(await confirmDialog(`Revoke the key for ${el.dataset.name}?`, "The agent stops working at once. Its notes stay.", "Revoke"))) return;
       try {
@@ -8938,13 +8966,6 @@ document.addEventListener("input", (ev) => {
     case "pval": {
       const form = el.closest<HTMLElement>("[data-props]");
       if (form) onDraftInput(form.dataset.props!, setFrontmatter(draftOf(form.dataset.props!).text, propsFromForm(form)));
-      break;
-    }
-    case "photo": {
-      const inp = el as HTMLInputElement;
-      const host = document.querySelector<HTMLElement>(`.cm-host[data-cm="${CSS.escape(inp.dataset.path!)}"]`);
-      if (inp.files?.length) void addImages([...inp.files], inp.dataset.path!, host ? editors.get(host) : undefined);
-      inp.value = "";
       break;
     }
     case "draft":

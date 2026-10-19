@@ -243,6 +243,8 @@ body.dragging-tab .dropzone { display: flex; } .dropzone.drop-into { background:
   .editor-bar { flex-wrap: wrap; row-gap: 4px; } .editor-bar .title { flex: 1 0 100%; }
   .wsbar .segmented { position: relative; min-width: 0; overflow-x: auto; scrollbar-width: none; flex: 0 1 auto; } .wsbar .segmented::-webkit-scrollbar { display: none; }
   .mobilebar { display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1px solid var(--line); background: var(--bg-1); padding: 6px 6px calc(6px + env(safe-area-inset-bottom)); }
+  .mobilebar { transition: transform .25s ease; } .shell-main.bar-hidden { grid-template-rows: auto auto 0 1fr 0; overflow: hidden; } .shell-main.bar-hidden .mobilebar { transform: translateY(100%); pointer-events: none; }
+  @media (prefers-reduced-motion: reduce) { .mobilebar { transition: none; } }
   .mtab { display: flex; flex-direction: column; align-items: center; gap: 2px; border: 0; background: transparent; color: var(--fg-2); font-size: .7rem; padding: 6px 2px; border-radius: var(--r-s); }
   .mtab[aria-selected="true"] { color: var(--accent-2); background: var(--accent-dim); } .mtab .ico { width: 20px; height: 20px; }
   .features { grid-template-columns: 1fr; } .hero { padding: 30px 22px; }
@@ -436,7 +438,7 @@ body.dragging-tab .dropzone { display: flex; } .dropzone.drop-into { background:
 .thread .comment.reply { margin-left: 16px; border-left: 2px solid var(--line-2); padding-left: 8px; }
 .comment-form { display: flex; gap: 6px; align-items: center; } .comment-form .input { flex: 1; min-width: 0; } .reply-form { margin-top: 4px; } .reply-form .input { font-size: .85rem; padding: 5px 8px; }
 .btn .badge { background: var(--accent-dim); color: var(--accent-2); border-radius: 999px; padding: 0 5px; font-size: .7rem; margin-left: -2px; }
-.is-mobile .kb-hint { display: none; }
+.is-mobile .kb-hint { display: none; } .is-mobile .preview .props { display: none; }
 @media (max-width: 760px) { .radio { display: block; } .radio b { display: inline; } .radio .muted { display: block; margin-left: 22px; } }
 .tree-row .unread { display: inline-flex; align-items: center; gap: 2px; margin-left: 4px; padding: 0 5px; border-radius: 999px; background: var(--accent-dim); color: var(--accent-2); font-size: .7rem; font-weight: 700; flex: none; } .tree-row .unread .ico { width: 11px; height: 11px; }
 @media (max-width: 760px) { .topbar .right .btn.icon-btn:not([data-action="more-menu"]) { display: none; } }

@@ -6,7 +6,7 @@ import { VitePWA } from "vite-plugin-pwa";
 const pwa = VitePWA({
   registerType: "autoUpdate",
   manifest: false,
-  includeAssets: ["favicon.svg", "icon.svg", "icon-192.png", "icon-512.png", "apple-touch-icon.png", "manifest.webmanifest", "skill.md"],
+  includeAssets: ["favicon.svg", "icon.svg", "icon-192.png", "icon-512.png", "apple-touch-icon.png", "manifest.webmanifest", "skill/*.md"],
   workbox: { globPatterns: ["**/*.{js,css,html,svg,woff2}"], globIgnores: ["**/excalidraw/**", "**/mermaid*", "**/katex*"], maximumFileSizeToCacheInBytes: 6_000_000, navigateFallback: "/index.html", runtimeCaching: [{ urlPattern: /\/api\//, handler: "NetworkOnly" }] },
 });
 
