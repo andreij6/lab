@@ -5671,6 +5671,8 @@ function startOrderPolling() {
   orderTimer = window.setInterval(() => void pollOrder(), 5000);
   void pollOrder();
 }
+// paying happens in another tab or on a phone: the moment this tab is looked at again, ask the gateway
+document.addEventListener("visibilitychange", () => { if (!document.hidden && S.as.wallet.order) void pollOrder(); });
 /** An order made before a reload: pick it up where it was. */
 function resumeOrder() {
   const w = S.as.wallet;
