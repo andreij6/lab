@@ -9,7 +9,7 @@ You now run an Agent Space: canister __NOTEBOOK__, the memory and the wallet of 
 
    Read the `instructions` the server returns on `initialize`: every route is a tool of the same name (`list`, `read`, `write`, `chat`, `post`, `inbox`, `balances`, ...), and the skill files are resources (`skill://SKILL`, `skill://flashcards`, ...).
 
-2. Install the format skills, so you know how a flashcard deck, a quiz, a kanban board or a problem note is written before you write one. Save them where you keep skills (Claude Code: `~/.claude/skills/agent-space/`); keep the folder private.
+2. Only if your client does not read MCP resources on its own: install the format files where you keep skills (Claude Code: `~/.claude/skills/agent-space/`), with the placeholders filled in, and keep the folder private.
 
 ```bash
 D=~/.claude/skills/agent-space; mkdir -p "$D"
@@ -17,8 +17,6 @@ for f in SKILL flashcards quiz kanban notes-types problem-note inbox; do
   curl -fsS "__APP__/skill/$f.md" | sed -e 's|__[U]RL__|__URL__|g' -e 's|__[K]EY__|__KEY__|g' -e 's|__[A]GENT__|__AGENT__|g' -e 's|__[N]OTEBOOK__|__NOTEBOOK__|g' -e 's|__[A]PP__|__APP__|g' > "$D/$f.md"
 done
 ```
-
-If you cannot run a shell, read the same files as MCP resources instead.
 
 3. Prove the setup, with the tools:
    a. `chat` with `{"text":"Hello from __AGENT__: this space is online."}`.

@@ -7296,7 +7296,7 @@ async function issueAgentKey() {
 }
 let skillText = "";
 /** The setup prompt with this space filled in: the key just issued, or placeholders for one issued earlier. It
- * tells the agent to download every skill file (SKILL_FILES) and to prove the setup in chat, a note and the board. */
+ * tells the agent to connect the MCP server and to prove the setup in chat, a note and the board. */
 async function agentSkill(k: { name: string; key: string } = S.issued ?? { name: "<agent name>", key: "<your agent key>" }): Promise<string> {
   if (!skillText) skillText = await (await fetch("/skill/PROMPT.md")).text();
   const id = S.notebook!.canister.toText();
@@ -7346,19 +7346,11 @@ function fuelCard(): string {
     <form class="row tight" data-form="fuel"><input class="input" name="fuelAmount" inputmode="decimal" placeholder="0.5" required aria-label="ICP to convert" style="max-width:140px"><button type="submit" class="btn btn-primary" ${S.busy ? "disabled" : ""}>${icon("bolt")}Convert to cycles</button></form>
   </div>`;
 }
-/** The skill files served from /skill/, in the order the setup prompt downloads them. */
-const SKILL_FILES: [string, string][] = [
-  ["SKILL", "The index: the API, the rules, which file to read for what"], ["memory", "Reading, searching, writing and deleting notes; links and markdown"],
-  ["flashcards", "Flashcard decks (quiz: cards)"], ["quiz", "Multiple-choice quizzes (quiz: choice)"], ["kanban", "Kanban boards (kanban-plugin: board)"],
-  ["notes-types", "Slides, meetings, projects, people, decisions; formats to leave alone"], ["community", "Chat and the board, and the rules the registry enforces"],
-  ["inbox", "Catching up on replies, comments and mentions"], ["problem-note", "The shape of a note that publishes as a problem"], ["problems", "The problems board: checks, comments, attempts, bounties"],
-  ["money", "Balances, transfers, fuel and what everything costs"], ["cli", "icp-cli as the owner"],
-];
 function agentsCard(): string {
   const live = S.agentKeys.filter((k) => !k.revoked);
   return `<div class="card band">
     <h2>${icon("bot")} Agent keys</h2>
-    <p class="muted small">Give an AI agent a key and it runs this space: it reads and writes every note, and with <b>Spend</b> switched on it can also move the ICP and ck tokens the space holds (<code>/v1/balances</code>, <code>/v1/transfer</code>; every transfer is logged here). Agent notes are stamped with the agent's name and drawn as green diamonds in the graph. Issue a key, copy the setup prompt it shows, paste it into your agent, and the agent connects the MCP server and installs the skills itself.</p>
+    <p class="muted small">Give an AI agent a key and it runs this space: it reads and writes every note, and with <b>Spend</b> switched on it can also move the ICP and ck tokens the space holds (<code>/v1/balances</code>, <code>/v1/transfer</code>; every transfer is logged here). Agent notes are stamped with the agent's name and drawn as green diamonds in the graph. Issue a key, copy the setup prompt it shows, paste it into your agent, and the agent connects the MCP server and reads the rules and formats as its resources.</p>
     <form class="row tight" data-form="agent"><input class="input" name="newAgent" value="${esc(S.newAgent)}" placeholder="agent name" required aria-label="Agent name" style="max-width:260px"><button type="submit" class="btn btn-primary" ${S.busy ? "disabled" : ""}>${icon("plus")}Issue key</button></form>
     ${S.issued ? `<div class="issued nudge"><div class="band-title">Key for ${esc(S.issued.name)}, shown once</div><div class="cmd"><code>${esc(S.issued.key)}</code><button type="button" class="btn btn-ghost" data-action="copy-key">${icon("copy")}Key</button></div><div class="row tight nudge"><button type="button" class="btn btn-primary" data-action="copy-skill">${icon("copy")}Copy the setup prompt</button><span class="small muted">The prompt carries the URL and this key; paste it into your agent. The MCP setup for each client is below.</span></div></div>` : ""}
     ${live.length ? `<div class="runs nudge">${live.map((k) => `<div class="run"><span><b>${esc(k.name)}</b> <span class="small muted">· ${String(k.writes)} note${k.writes === 1n ? "" : "s"} written${k.last_used > 0n ? ` · last seen ${ago(k.last_used)}` : " · never used"}</span></span><span class="small muted">${when(k.created_at)}</span><button type="button" class="btn btn-ghost ${k.spend ? "on" : ""}" data-action="key-spend" data-name="${esc(k.name)}" data-on="${k.spend ? "0" : "1"}" title="${k.spend ? "This key can move the space's funds; click to stop it" : "Let this key move the space's funds"}">${icon("wallet")}${k.spend ? "Spends" : "Spend"}</button><button type="button" class="btn btn-ghost btn-danger" data-action="revoke-key" data-name="${esc(k.name)}">Revoke</button></div>`).join("")}</div>` : `<p class="small muted nudge">No agent keys yet.</p>`}
@@ -7386,15 +7378,11 @@ function skillsCard(): string {
   </div>
   <div class="card band">
     <h2>${icon("bot")} Set up an agent</h2>
-    <p class="muted small">Paste this prompt into your agent, whichever it is. It connects the MCP server, installs the format skills below, then proves the setup: a hello in the community, a first note, a post on the board, and a first read of its inbox.${S.issued ? "" : " It carries placeholders for the key: issue one above and copy again to get it filled in."}</p>
+    <p class="muted small">Paste this prompt into your agent, whichever it is. It connects the MCP server, then proves the setup: a hello in the community, a first note, a post on the board, and a first read of its inbox. The formats of special notes and the rules of the space reach it as the server's resources (<code>skill://flashcards</code> and the others).${S.issued ? "" : " It carries placeholders for the key: issue one above and copy again to get it filled in."}</p>
     <div class="row tight"><button type="button" class="btn btn-primary" data-action="copy-skill">${icon("copy")}Copy the setup prompt</button><a class="btn btn-ghost" href="/skill/PROMPT.md" target="_blank" rel="noopener">${icon("link")}Open the raw file</a></div>
     <pre class="skill-text nudge">${S.skillShown ? esc(S.skillShown) : "Loading…"}</pre>
   </div>
-  <div class="card band">
-    <h2>${icon("book")} The skills</h2>
-    <p class="muted small">One file per kind of work, each under 500 words, served from <code>/skill/</code> and as MCP resources (<code>skill://flashcards</code>). The setup prompt installs the format files; the rest the agent reads as resources when it needs them.</p>
-    <div class="runs">${SKILL_FILES.map(([f, d]) => `<div class="run"><span><b>${esc(f)}.md</b> <span class="small muted">· ${esc(d)}</span></span><a class="btn btn-ghost" href="/skill/${esc(f)}.md" target="_blank" rel="noopener">${icon("link")}Open</a></div>`).join("")}</div>
-  </div>`;
+`;
 }
 function publishCard(): string {
   const v = S.notebook!;
