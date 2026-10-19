@@ -167,7 +167,7 @@ function busyRender() {
   el.innerHTML = `<div class="busy-bar"></div><div class="busy-pill"><span class="spin"></span>${esc(labels[labels.length - 1])}</div>`;
 }
 /** Background polls (rain, mentions, trips, the town, health): never shown as "Loading…". */
-const QUIET_METHODS = new Set(["my_rain", "my_mentions", "my_inbox", "my_watches", "watching", "town", "notebook_status"]);
+const QUIET_METHODS = new Set(["my_rain", "my_mentions", "my_inbox", "agent_keys", "all_comments", "my_watches", "watching", "town", "notebook_status"]);
 function trackCall<T>(method: string, p: Promise<T>): Promise<T> {
   if (QUIET_METHODS.has(method)) return p;
   const id = ++busySeq;
@@ -5450,17 +5450,19 @@ function manageTab(): string {
   const rows = S.topups.length
     ? `<div class="runs">${S.topups.map((t) => `<div class="run"><span><b>${icp(t.amount_e8s)} ICP</b> <span class="small muted">→ ${tc(t.cycles)} · ${t.from.toText() === v.canister.toText() ? "sent to the account" : shortPrincipal(t.from.toText())}</span></span><span class="small muted">${when(t.at)}</span><span class="pill ${t.status.__kind__ === "Failed" ? "low" : t.status.__kind__ === "Completed" ? "ok" : ""}">${t.status.__kind__}</span></div>`).join("")}</div>`
     : `<p class="small muted">No top-ups yet.</p>`;
-  return `<section class="main" style="overflow:auto"><div class="page">
-    <div class="stats">
+  const stats = `<div class="stats">
       <div class="stat"><div class="label">Cycles left</div><div class="num ${low ? "danger" : ""}">${i ? tc(i.cycles) : "…"}</div><div class="meter"><i style="width:${runway}%"></i></div><div class="small muted nudge">${(() => { const h = S.health.get(v.canister.toText()); return h ? `Freezes below ${tc(h.freeze_at)} (90 days of idle burn, ${tc(h.idle_cycles_burned_per_day)}/day); about ${daysUntilFreeze(h)} days until then. A frozen space keeps its data 90 days, then it is deleted.` : low ? "Below the freezing line the canister stops answering until topped up." : "Comfortable. 3 TC is a full bar."; })()}</div></div>
       <div class="stat"><div class="label">Files</div><div class="num">${i ? String(i.files) : "…"}</div><div class="small muted">${S.folders.length} folders</div></div>
       <div class="stat"><div class="label">Stored</div><div class="num">${i ? kb(i.bytes) : "…"}</div><div class="small muted">note content</div></div>
       <div class="stat"><div class="label">Topped up</div><div class="num">${i ? `${icp(i.total_topped_up_e8s)} ICP` : "…"}</div><div class="small muted">${i ? `→ ${tc(i.total_cycles_from_topups)}` : ""}</div></div>
-    </div>
-    <p class="small muted nudge">Canister <code>${v.canister.toText()}</code> · created ${when(v.created_at)} · controllers: you and the registry.</p>
-    <nav class="segmented sub" role="tablist" aria-label="Manage sections">${MANAGE_TABS.map(([k, label, ic]) => `<button type="button" role="tab" class="tab" aria-selected="${S.manageTab === k}" data-action="manage-tab" data-tab="${k}">${icon(ic)}<span class="lbl">${label}</span></button>`).join("")}</nav>
+    </div>`;
+  const about = `<p class="small muted nudge">Canister <code>${v.canister.toText()}</code> · created ${when(v.created_at)} · controllers: you and the registry.</p>`;
+  // a phone keeps the top for the tabs; the figures sit under Fuel, where they are acted on
+  return `<section class="main" style="overflow:auto"><div class="page">
+    ${S.mobile ? "" : stats + about}
+    <nav class="segmented sub manage-tabs" role="tablist" aria-label="Manage sections">${MANAGE_TABS.map(([k, label, ic]) => `<button type="button" role="tab" class="tab" aria-selected="${S.manageTab === k}" data-action="manage-tab" data-tab="${k}">${icon(ic)}<span class="lbl">${label}</span></button>`).join("")}</nav>
     ${S.manageTab === "wallet" ? walletCard() : S.manageTab === "fuel" ? `${fuelCard()}
-    <div class="band"><div class="band-title">Fuel history<button type="button" class="btn btn-ghost icon-btn" data-action="refresh-info" title="Refresh" aria-label="Refresh">${icon("refresh")}</button></div>${rows}</div>` : S.manageTab === "agent" ? `${agentsCard()}${skillsCard()}` : S.manageTab === "prompts" ? promptsCard() : `
+    <div class="band"><div class="band-title">Fuel history<button type="button" class="btn btn-ghost icon-btn" data-action="refresh-info" title="Refresh" aria-label="Refresh">${icon("refresh")}</button></div>${rows}</div>${S.mobile ? `<div class="nudge">${stats}${about}</div>` : ""}` : S.manageTab === "agent" ? `${agentsCard()}${skillsCard()}` : S.manageTab === "prompts" ? promptsCard() : `
     <div class="card band">
       <h2>${icon("upload")} Upload</h2>
       <p class="muted small">Bring an Obsidian folder or zip into this space, or download everything in it as a zip of markdown files, folders included. Restore puts a zip back: existing notes are overwritten and notes missing from the zip are deleted.</p>
