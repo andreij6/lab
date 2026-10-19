@@ -2224,11 +2224,12 @@ function chatScrolled() {
 document.addEventListener("scroll", (e) => { if ((e.target as HTMLElement | null)?.hasAttribute?.("data-chat-log")) chatScrolled(); }, true);
 /** Phones: the bottom bar slides away once a note is scrolled down a little and comes back on the way up or at
  * the top. Measured from where the direction last turned, since a finger or a wheel scrolls in tiny steps. */
-let noteY = 0, noteAnchor = 0, readHidden = false, barsSettling = false;
-/** The bottom bar and the note's header (title, actions, path) go together: away while reading down, back on the way up. */
+let noteY = 0, noteAnchor = 0, readHidden = false, headHidden = false, barsSettling = false;
+/** Reading down a note on a phone, the bottom bar and the note's header (title, actions, path) slide away. The bar
+ * comes back on the way up; the header only once the top of the note is in view again. */
 function applyReadHidden() {
   document.querySelector(".shell-main")?.classList.toggle("bar-hidden", readHidden);
-  document.querySelector(".pane")?.classList.toggle("head-hidden", readHidden);
+  document.querySelector(".pane")?.classList.toggle("head-hidden", headHidden);
 }
 document.addEventListener("scroll", (e) => {
   if (!S.mobile || barsSettling) return;
@@ -2236,11 +2237,12 @@ document.addEventListener("scroll", (e) => {
   if (!t?.matches?.(".preview, .cm-scroller")) return;
   const y = t.scrollTop;
   if ((y > noteY) !== (noteY > noteAnchor)) noteAnchor = noteY;
-  const was = readHidden;
-  if (y - noteAnchor > 24 && y > 40) readHidden = true;
+  const was = readHidden, wasHead = headHidden;
+  if (y - noteAnchor > 24 && y > 40) readHidden = headHidden = true;
   else if (noteAnchor - y > 24 || y <= 0) readHidden = false;
+  if (y <= 4) headHidden = false;
   noteY = y;
-  if (readHidden === was) return;
+  if (readHidden === was && headHidden === wasHead) return;
   applyReadHidden();
   // hiding the bars makes the reader taller, which can clamp its scroll back up: not a scroll up by the reader
   barsSettling = true;
@@ -5536,7 +5538,7 @@ function render() {
   if (S.show) app.insertAdjacentHTML("beforeend", showHtml());
   { const s = document.getElementById("side"); if (s && sideTop) s.scrollTop = sideTop; const a = document.getElementById("aside"); if (a && asideTop) a.scrollTop = asideTop; }
   // a phone's reader stays where it was, with the bars still away if it had scrolled down
-  if (S.mobile) { const pv = app.querySelector<HTMLElement>(".pane .preview"); if (pv && previewTop) pv.scrollTop = previewTop; else if (!pv || !previewTop) readHidden = false; noteY = previewTop; noteAnchor = previewTop; applyReadHidden(); }
+  if (S.mobile) { const pv = app.querySelector<HTMLElement>(".pane .preview"); if (pv && previewTop) pv.scrollTop = previewTop; else if (!pv || !previewTop) readHidden = headHidden = false; noteY = previewTop; noteAnchor = previewTop; applyReadHidden(); }
   // a re-render must not move the reader: keep the chat where it was, or at the bottom
   if (S.community) { const log = app.querySelector<HTMLElement>("[data-chat-log]"); if (log) { log.scrollTop = S.community.atBottom === false && chatTop !== undefined ? chatTop : log.scrollHeight; chatScrolled(); } }
   mountEditors();
