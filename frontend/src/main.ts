@@ -3797,7 +3797,10 @@ async function tourStep(to: number) {
   t.tour = to;
   render();
   const step = TOUR[to];
-  if (!townFly(step.kind, step.id, step.zoom)) return tourStep(to + 1);
+  // on a phone the tour card is a sheet over the bottom of the map: the building goes in the space above it
+  const sheet = document.querySelector(".town-sheet.tour")?.getBoundingClientRect(), map = document.querySelector(".town canvas")?.getBoundingClientRect();
+  const covered = sheet && map ? Math.max(0, map.bottom - sheet.top) : 0;
+  if (!townFly(step.kind, step.id, step.zoom, covered)) return tourStep(to + 1);
 }
 function townPage(): string {
   const t = S.town!, d = t.data;

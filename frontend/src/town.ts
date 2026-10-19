@@ -1677,13 +1677,16 @@ function home() {
 /** The camera from the toolbar: zoom, recentre, or fly to a lot. */
 /** Fly to something in the town and point at it (the tour); `kind` is a target kind, `id` a landmark's id.
  *  Returns false when the town has no such thing. */
-export function townFly(kind: Target["kind"] | "model", id?: string, zoom = 1.7): boolean {
+/** Fly to a building. `clearBottom` is how many screen pixels at the bottom a card covers: the building is
+ *  centred in what is left above it. */
+export function townFly(kind: Target["kind"] | "model", id?: string, zoom = 1.7, clearBottom = 0): boolean {
   if (!S.plan) return false;
   const o = S.plan.objs.find((x) => x.tg && (kind === "model" ? x.model === true : x.tg.kind === kind && (!id || (x.tg as { landmark?: Landmark }).landmark?.id === id)));
   if (!o) return false;
   const [cx, cy] = P(o.x + o.w / 2, o.y + o.d / 2, 10);
+  const z = clampZ(zoom);
   S.spot = o.tg;
-  S.fly = { from: { ...S.cam }, to: { x: cx, y: cy, z: clampZ(zoom) }, t0: performance.now(), dur: S.still ? 1 : 1100 };
+  S.fly = { from: { ...S.cam }, to: { x: cx, y: cy + clearBottom / 2 / z, z }, t0: performance.now(), dur: S.still ? 1 : 1100 };
   if (S.still) { S.cam = { ...S.fly.to }; S.fly = undefined; frame(performance.now()); }
   return true;
 }
