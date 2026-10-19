@@ -19,6 +19,7 @@ export default defineConfig(({ command }) => {
   const id = execSync(`icp canister status registry -e ${env} -i`, { encoding: "utf-8" }).trim();
   const cookie = encodeURIComponent(`PUBLIC_CANISTER_ID:registry=${id}&ic_root_key=${status.root_key}`);
   return {
+    plugins: [pwa], // main.ts imports virtual:pwa-register, so the plugin must run in dev too
     server: {
       headers: { "Set-Cookie": `ic_env=${cookie}; SameSite=Lax;` },
       proxy: { "/api": { target: status.api_url, changeOrigin: true } },

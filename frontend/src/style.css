@@ -733,8 +733,6 @@ body .wsbar, body .topbar { padding-right: 50px; } /* keep the corner clear for 
 .model-pick .ico { width: 14px; height: 14px; }
 /* a copilot card needs air before what follows it */
 .card.copilot { margin-bottom: 18px; }
-/* the landing page: the community's sky behind the whole page */
-.landing-sky { position: fixed; inset: 0; width: 100%; height: 100%; z-index: -1; pointer-events: none; }
 /* the dock: the town's numbers and its controls in one bar along the bottom */
 .town-dock { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); width: min(1100px, calc(100% - 24px)); display: flex; align-items: center; gap: 10px; padding: 6px 8px; }
 .dock-stats { flex: 1; min-width: 0; display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; -webkit-mask-image: linear-gradient(90deg, #000 94%, transparent); mask-image: linear-gradient(90deg, #000 94%, transparent); }
@@ -770,17 +768,7 @@ body .wsbar, body .topbar { padding-right: 50px; } /* keep the corner clear for 
 /* help and appearance sit at the right of the file pane's foot, like Obsidian's */
 .side-foot .foot-tools { display: inline-flex; gap: 2px; flex: none; margin-left: auto; } .side-foot .foot-tools .icon-btn { width: 30px; height: 30px; color: var(--fg-3); } .side-foot .foot-tools .icon-btn:hover { color: var(--fg); background: var(--bg-3); } .side-foot .foot-tools .ico { width: 16px; height: 16px; }
 
-/* landing persona showcase, sandbox, shared viral bar, thesis card */
-.persona-showcase { margin-top: 28px; text-align: left; background: color-mix(in srgb, var(--bg-2) 88%, transparent); border: 1px solid var(--line); border-radius: 14px; padding: 18px; backdrop-filter: blur(12px); }
-.persona-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; border-bottom: 1px solid var(--line); padding-bottom: 12px; }
-.persona-tab { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 8px; border: 1px solid transparent; background: transparent; color: var(--fg-2); font: 500 .86rem var(--sans); cursor: pointer; transition: background .15s, color .15s, border-color .15s; }
-.persona-tab:hover { background: var(--bg-3); color: var(--fg); }
-.persona-tab.on { background: var(--accent-dim); color: var(--accent-2); border-color: color-mix(in srgb, var(--accent) 40%, transparent); font-weight: 600; }
-.persona-tab .ico { width: 15px; height: 15px; }
-.persona-body { display: grid; grid-template-columns: 1.15fr 1fr; gap: 18px; align-items: center; }
-@media (max-width: 760px) { .persona-body { grid-template-columns: 1fr; } }
-.persona-copy h3 { margin: 4px 0 8px; font-size: 1.25rem; }
-.persona-code { margin: 0; padding: 14px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); font: .8rem/1.5 var(--mono); color: var(--fg-2); overflow-x: auto; white-space: pre-wrap; }
+/* sandbox, shared viral bar, thesis card */
 .sandbox-bar { background: color-mix(in srgb, var(--accent) 12%, var(--bg-2)); border-bottom: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line)); }
 .sandbox-card { border-style: dashed; border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
 .shared-viral-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px; margin-bottom: 14px; border-radius: 10px; background: color-mix(in srgb, var(--accent) 10%, var(--bg-2)); border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line)); font-size: .88rem; }
@@ -817,3 +805,43 @@ body .wsbar, body .topbar { padding-right: 50px; } /* keep the corner clear for 
 .town-sheet.tour .sheet-body p { margin: 8px 0 12px; font-size: .95rem; line-height: 1.5; }
 .town-legend-body { display: grid; gap: 10px; font-size: .9rem; } .town-legend-body span { display: flex; gap: 10px; align-items: baseline; }
 .sheet-stats { display: grid; } .sheet-stats .chip { border-right: 0; border-bottom: 1px solid var(--line); padding: 10px 4px; white-space: normal; } .sheet-stats .chip:last-child { border-bottom: 0; }
+
+/* Agent Space: the gate (Rapid Tap, Color Hunt) and the wallet grid. Fixed Nocturne values, never themed:
+   agents read these screens pixel by pixel, so every fill is flat and every hex exact. */
+.as { position: fixed; inset: 0; z-index: 5; overflow: auto; background: #161826; color: #e9e9ed; font-family: Inter, "Inter Variable", system-ui, sans-serif; font-size: 15px; line-height: 1.55; }
+.as .mono, .as-timer, .as-count, .as-addr, .as-id { font-family: ui-monospace, Menlo, monospace; }
+.as-center { display: grid; place-items: center; padding: 24px; }
+.as-mark { position: absolute; top: 16px; left: 18px; font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: #75798c; }
+.as-out { position: absolute; top: 12px; right: 18px; font: inherit; font-size: 11px; color: #75798c; background: none; border: 0; cursor: pointer; }
+.as-hero { display: flex; flex-direction: column; align-items: flex-start; gap: 16px; width: min(420px, 100%); }
+.as-h1 { font-size: 25px; font-weight: 500; line-height: 1.12; letter-spacing: -.015em; margin: 0; }
+.as-lede { color: #b2b6ca; margin: 0; }
+.as-steps { display: flex; gap: 12px; font-size: 12px; color: #9397ab; }
+.as-err { font-size: 12px; color: #e0655f; }
+.as-btn { display: inline-flex; align-items: center; justify-content: center; min-height: 36px; padding: 8px 18px; font: inherit; font-size: 14px; font-weight: 500; color: #9184d9; background: transparent; border: 1px solid #9184d9; border-radius: 8px; cursor: pointer; text-decoration: none; }
+.as-btn:hover { background: rgba(145,132,217,.12); } .as-btn:disabled { cursor: default; background: none; }
+.as-btn.pass { color: #5fbf8a; border-color: #5fbf8a; } .as-btn.fail { color: #e0655f; border-color: #e0655f; }
+.as-col { display: flex; flex-direction: column; align-items: center; gap: 18px; text-align: center; }
+.as-timer { font-size: 28px; font-weight: 500; line-height: 1; } .as-count { font-size: 20px; font-weight: 500; line-height: 1; }
+.as-square { display: block; width: 200px; height: 200px; padding: 0; border: 0; border-radius: 0; background: #9184d9; cursor: pointer; }
+.as-square:active { outline: 1px solid #e9e9ed; outline-offset: 5px; }
+.as-square.pass { background: #5fbf8a; } .as-square.fail { background: #e0655f; }
+.as-count.pass { color: #5fbf8a; } .as-count.fail { color: #e0655f; }
+.as-hunt { display: flex; flex-direction: column; align-items: flex-start; gap: 28px; width: min(760px, 100%); }
+.as-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.as-swatch { display: inline-block; width: 14px; height: 14px; }
+.as-words { display: flex; flex-wrap: wrap; gap: 8px 6px; font-weight: 700; font-size: 20px; line-height: 1.2; }
+.as-word { padding: 4px 9px; font: inherit; border: 1px solid transparent; border-radius: 4px; background: transparent; cursor: pointer; }
+.as-word.on { border-color: #e9e9ed; background: #232532; }
+.as-word.pass { border-color: #5fbf8a; box-shadow: 0 0 0 3px rgba(95,191,138,.28); } .as-word.wrong { border-color: #e0655f; }
+.as-tile { position: relative; overflow: hidden; border-radius: 8px; }
+.as-tile.busy::before, .as-tile.busy::after { content: ""; position: absolute; left: 0; bottom: 0; height: 2px; } .as-tile.busy::before { width: 100%; background: #2b2741; } .as-tile.busy::after { width: 38%; background: #9184d9; animation: as-sweep 1.2s linear infinite; }
+@keyframes as-sweep { from { left: -38%; } to { left: 100%; } }
+.as-tile-t { font-size: 15px; font-weight: 500; line-height: 1.2; } .as-tile-s { font-size: 11px; line-height: 1.3; color: #9397ab; }
+@media (max-width: 760px) {
+  .as-square { width: 160px; height: 160px; } .as-words { font-size: 17px; gap: 6px 4px; } .as-word { padding: 4px 7px; }
+}
+.skill-text { white-space: pre-wrap; word-break: break-word; max-height: 460px; overflow: auto; padding: 12px 14px; font: .78rem/1.5 var(--mono); background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--r); }
+/* the owner's own agent in the community: its rows carry the accent, other agents' rows do not */
+.msgrow.mine { background: color-mix(in srgb, var(--accent) 9%, transparent); border-left: 2px solid var(--accent); }
+.msgrow.mine .who { color: var(--accent-2); } .msgrow.mine .avatar { outline: 2px solid var(--accent); outline-offset: 1px; }

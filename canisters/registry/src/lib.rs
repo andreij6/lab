@@ -648,14 +648,9 @@ async fn delete_notebook(canister: Principal, refund_to: Option<Principal>) -> R
         Some(_) => return Err("not your notebook".into()),
         None => return Err("unknown notebook".into()),
     }
-    let to = match refund_to {
-        Some(t) if t == canister => return Err("pick a different notebook for the cycles".into()),
-        Some(t) => match NOTEBOOKS.with_borrow(|m| m.get(&t)) {
-            Some(v) if v.0.owner == me => t,
-            _ => return Err("the cycles can only go to another notebook of yours".into()),
-        },
-        None => canister_self(),
-    };
+    // a deleted space's cycles go back to the registry, whatever the caller asks (the argument stays for old clients)
+    let _ = refund_to;
+    let to = canister_self();
     // off the market first, so nobody buys it mid-deletion
     LISTINGS.with_borrow_mut(|m| m.remove(&canister));
     // the freezing reserve (90 days of idle burn) would block the payout: drop it, the canister is going anyway
@@ -665,6 +660,7 @@ async fn delete_notebook(canister: Principal, refund_to: Option<Principal>) -> R
     let moved = match Call::unbounded_wait(canister, "drain_cycles").with_arg(to).await {
         Ok(r) => match r.candid::<Result<Nat, NotebookErr>>() {
             Ok(Ok(n)) => n,
+            Ok(Err(NotebookErr::Invalid(m))) => return Err(format!("nothing was deleted: {m}")),
             Ok(Err(e)) => return Err(format!("could not move the cycles out, so nothing was deleted: {e:?}")),
             Err(e) => return Err(format!("could not move the cycles out, so nothing was deleted: {e}")),
         },
@@ -1456,6 +1452,7 @@ const FLAG_DEFAULTS: &[(&str, bool, &str)] = &[
     ("town", true, "The town: Lab's activity as a small living town, on the landing page and at #/town"),
     ("sponsors", true, "Sponsored buildings in the town: projects pay ICP by the month, admins approve"),
     ("problems", false, "Problems: open problems by field, claims others check, attempts the owner merges, bounties, discoveries"),
+    ("chat", false, "Ask your notes: the Chat tab in a space, answered by the LLM canister at the space's expense"),
 ];
 #[derive(CandidType, Deserialize, Clone, Debug)]
 pub struct Flag {
@@ -1975,6 +1972,42 @@ async fn post(channel: String, text: String, reply_to: Option<u64>) -> Result<Me
     charge_message(text.len()).await?;
     post_inner(channel, text, reply_to, None, None, None)
 }
+/// A space's agent posts for the space's owner: the caller must be a spawned space, the cycles it
+/// attaches pay for the message (`message_cycles` says how many), and the handle names the agent.
+#[update]
+fn agent_post(channel: String, text: String, agent: String) -> Result<Message, String> {
+    let nb = notebook(msg_caller()).ok_or("only a space may post for its agent")?;
+    let text = text.trim().to_string();
+    if text.is_empty() || text.chars().count() > 2000 {
+        return Err("message: 1-2000 characters".into());
+    }
+    let agent = agent.trim().to_string();
+    if agent.is_empty() || agent.len() > 64 {
+        return Err("agent: 1-64 characters".into());
+    }
+    let ch = check_channel(&channel)?;
+    if !CHANNELS.with_borrow(|c| c.contains_key(&ch)) {
+        return Err("unknown channel".into());
+    }
+    clean(&text)?;
+    let cost = post_cost(text.len() as u64, MESSAGE_DAYS) as u128;
+    if ic_cdk::api::msg_cycles_available() < cost {
+        return Err(format!("attach {cost} cycles for this message"));
+    }
+    ic_cdk::api::msg_cycles_accept(cost);
+    let owner = nb.owner;
+    // the key's name and the owner's principal (its first group; `author` carries the whole of it): never a username
+    let handle = format!("{agent} @ {}", owner.to_text().split('-').next().unwrap_or(""));
+    let id = NEXT_MSG.with_borrow(|n| *n.get());
+    NEXT_MSG.with_borrow_mut(|n| n.set(id + 1));
+    let msg = Message { id, channel: ch.clone(), author: owner, handle, text, at: time(), reply_to: None, deleted: false, poll: None, reactions: None, gist: None, fund: None, edited: None, pinned: None, post: None };
+    MESSAGES.with_borrow_mut(|x| x.insert(msg_key(&ch, id), C(msg.clone())));
+    record_mentions(&msg);
+    CHAT_PRESENCE.with_borrow_mut(|p| p.insert(owner, C((ch, time()))));
+    LAST_POST.with_borrow_mut(|l| l.insert(owner, time()));
+    Ok(msg)
+}
+
 /// Every new chat message is paid for by one of the member's notebooks: exactly what the registry
 /// spends receiving, running and storing it. Edits, reactions and votes are free.
 async fn charge_message(bytes: usize) -> Result<(), String> {

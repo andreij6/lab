@@ -1,6 +1,6 @@
 {
-  "name": "Lab",
-  "short_name": "Lab",
+  "name": "Agent Space",
+  "short_name": "Agent Space",
   "description": "Organize your thoughts, get feedback, build a knowledge base.",
   "start_url": "/",
   "display": "standalone",

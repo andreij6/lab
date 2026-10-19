@@ -5,6 +5,9 @@ type AgentKey = record {
   // a folder this key may also write under (the clipper's Inbox/, a mail relay's Inbox/Mail); Agents/ is always allowed
   scope : opt text;
   writes : nat64;
+  // may move the space's funds over the agent API (the owner turns it on in Manage → Agents);
+  // optional because keys stored before it existed decode without it
+  spend : opt bool;
   last_used : nat64;
 };
 type AskAnswer = record {
@@ -56,6 +59,7 @@ type Comment = record {
 };
 type DepositState = record {
   last_result : text;
+  eth_address : opt text;
   btc_address : opt text;
   last_run : nat64;
 };
@@ -174,41 +178,43 @@ type Renamed = record {
   // notes whose `[[links]]` were rewritten to the new name
   relinked : vec text;
 };
-type Result = variant { Ok : vec AgentKey; Err : NotebookError };
-type Result_1 = variant { Ok : vec Attempt; Err : NotebookError };
-type Result_10 = variant { Ok : DepositState; Err : NotebookError };
-type Result_11 = variant { Ok : nat; Err : NotebookError };
-type Result_12 = variant { Ok : Fetched; Err : NotebookError };
-type Result_13 = variant { Ok : vec text; Err : NotebookError };
-type Result_14 = variant { Ok : vec Revision; Err : NotebookError };
-type Result_15 = variant { Ok : vec FileMeta; Err : NotebookError };
-type Result_16 = variant { Ok : vec AttestationView; Err : NotebookError };
-type Result_17 = variant { Ok : vec principal; Err : NotebookError };
-type Result_18 = variant { Ok : vec Price; Err : NotebookError };
-type Result_19 = variant {
+type Result = variant { Ok : bool; Err : NotebookError };
+type Result_1 = variant { Ok : vec AgentKey; Err : NotebookError };
+type Result_10 = variant { Ok : nat32; Err : NotebookError };
+type Result_11 = variant { Ok : DepositState; Err : NotebookError };
+type Result_12 = variant { Ok : nat; Err : NotebookError };
+type Result_13 = variant { Ok : Fetched; Err : NotebookError };
+type Result_14 = variant { Ok : vec text; Err : NotebookError };
+type Result_15 = variant { Ok : TopUp; Err : text };
+type Result_16 = variant { Ok : vec Revision; Err : NotebookError };
+type Result_17 = variant { Ok : vec FileMeta; Err : NotebookError };
+type Result_18 = variant { Ok : vec AttestationView; Err : NotebookError };
+type Result_19 = variant { Ok : vec principal; Err : NotebookError };
+type Result_2 = variant { Ok : vec Attempt; Err : NotebookError };
+type Result_20 = variant { Ok : vec Price; Err : NotebookError };
+type Result_21 = variant {
   Ok : vec record { principal; nat8 };
   Err : NotebookError;
 };
-type Result_2 = variant { Ok : vec Comment; Err : NotebookError };
-type Result_20 = variant { Ok : Note; Err : NotebookError };
-type Result_21 = variant { Ok : vec Note; Err : NotebookError };
-type Result_22 = variant { Ok : Page; Err : NotebookError };
-type Result_23 = variant { Ok : Renamed; Err : NotebookError };
-type Result_24 = variant { Ok : FolderRenamed; Err : NotebookError };
-type Result_25 = variant { Ok : vec Hit; Err : NotebookError };
-type Result_26 = variant { Ok : Share; Err : NotebookError };
-type Result_27 = variant { Ok : vec Share; Err : NotebookError };
-type Result_28 = variant { Ok : Attempt; Err : NotebookError };
-type Result_29 = variant { Ok : TopUp; Err : text };
-type Result_3 = variant { Ok : AskAnswer; Err : NotebookError };
-type Result_30 = variant { Ok : FileMeta; Err : NotebookError };
-type Result_31 = variant { Ok : Imported; Err : NotebookError };
-type Result_4 = variant { Ok : NoteAttestation; Err : NotebookError };
-type Result_5 = variant { Ok : Audit; Err : NotebookError };
-type Result_6 = variant { Ok : text; Err : NotebookError };
-type Result_7 = variant { Ok : Comment; Err : NotebookError };
-type Result_8 = variant { Ok; Err : NotebookError };
-type Result_9 = variant { Ok : nat32; Err : NotebookError };
+type Result_22 = variant { Ok : Note; Err : NotebookError };
+type Result_23 = variant { Ok : vec Note; Err : NotebookError };
+type Result_24 = variant { Ok : Page; Err : NotebookError };
+type Result_25 = variant { Ok : Renamed; Err : NotebookError };
+type Result_26 = variant { Ok : FolderRenamed; Err : NotebookError };
+type Result_27 = variant { Ok : vec Hit; Err : NotebookError };
+type Result_28 = variant { Ok : Share; Err : NotebookError };
+type Result_29 = variant { Ok : vec Share; Err : NotebookError };
+type Result_3 = variant { Ok : vec Comment; Err : NotebookError };
+type Result_30 = variant { Ok : vec Spend; Err : NotebookError };
+type Result_31 = variant { Ok : Attempt; Err : NotebookError };
+type Result_32 = variant { Ok : FileMeta; Err : NotebookError };
+type Result_33 = variant { Ok : Imported; Err : NotebookError };
+type Result_4 = variant { Ok : AskAnswer; Err : NotebookError };
+type Result_5 = variant { Ok : NoteAttestation; Err : NotebookError };
+type Result_6 = variant { Ok : Audit; Err : NotebookError };
+type Result_7 = variant { Ok : text; Err : NotebookError };
+type Result_8 = variant { Ok : Comment; Err : NotebookError };
+type Result_9 = variant { Ok; Err : NotebookError };
 type Revision = record {
   // who saved it: the owner, an editor, or an agent
   by : principal;
@@ -242,6 +248,15 @@ type ShareArgs = record {
   viewers : vec principal;
   public_role : opt Role;
   commenters : vec principal;
+};
+// A transfer an agent made with this space's funds, kept for the owner to audit.
+type Spend = record {
+  at : nat64;
+  to : principal;
+  agent : text;
+  block : nat;
+  amount : nat;
+  symbol : text;
 };
 type TopUp = record {
   at : nat64;
@@ -285,130 +300,143 @@ type Usage = record {
   active_days : nat32;
 };
 service : (Init) -> {
-  agent_keys : () -> (Result) query;
+  agent_chat_allowed : () -> (Result) query;
+  agent_keys : () -> (Result_1) query;
   // Every attempt in the notebook, newest first (owner).
-  all_attempts : () -> (Result_1) query;
+  all_attempts : () -> (Result_2) query;
   // Every comment in the notebook, newest first (owner).
-  all_comments : () -> (Result_2) query;
-  ask : (principal, text, text, vec AskSource) -> (Result_3);
+  all_comments : () -> (Result_3) query;
+  ask : (principal, text, text, vec AskSource) -> (Result_4);
   // Attempts on one note (owner) or your own (anyone).
-  attempts : (text) -> (Result_1) query;
+  attempts : (text) -> (Result_2) query;
   // Vouch for a note as the owner or anyone the note is shared with (commenters and editors).
-  attest_note : (text, text, text, opt text, text) -> (Result_4);
+  attest_note : (text, text, text, opt text, text) -> (Result_5);
   // Structure of the notebook for the registry's quality judge (owner or registry).
-  audit : () -> (Result_5) query;
+  audit : () -> (Result_6) query;
   // A Bitcoin address owned by this canister: bitcoin sent there becomes ckBTC, then cycles.
-  btc_address : () -> (Result_6);
-  comment : (text, text) -> (Result_7);
-  comments : (text) -> (Result_2) query;
+  btc_address : () -> (Result_7);
+  comment : (text, text) -> (Result_8);
+  comments : (text) -> (Result_3) query;
   // Issue an agent key (shown once). Agents send it as `Authorization: Bearer <key>`.
-  create_agent_key : (text) -> (Result_6);
+  create_agent_key : (text) -> (Result_7);
   // A key that may also write under one folder of yours, for a web clipper or a mail relay (owner).
-  create_scoped_key : (text, text) -> (Result_6);
-  delete : (text) -> (Result_8);
-  delete_comment : (nat64) -> (Result_8);
+  create_scoped_key : (text, text) -> (Result_7);
+  delete : (text) -> (Result_9);
+  delete_comment : (nat64) -> (Result_9);
   // Delete a folder with everything in it; returns how many files went.
-  delete_folder : (text) -> (Result_9);
-  deposits : () -> (Result_10) query;
+  delete_folder : (text) -> (Result_10);
+  deposits : () -> (Result_11) query;
   // Send this notebook's cycles to `to` (another of the owner's notebooks, or the registry) just
   // before the registry deletes it, so they are not burnt with the canister. Registry only.
-  drain_cycles : (principal) -> (Result_11);
+  drain_cycles : (principal) -> (Result_12);
+  // An Ethereum address this canister controls through threshold ECDSA (secp256k1, derivation path
+  // empty): ether and ERC-20s sent there are its own, signed for by the subnet. Derived once, kept.
+  eth_address : () -> (Result_7);
   // Fetch a public document (a PDF linked from a note) over HTTPS, following up to three
   // redirects. Owner only; the notebook pays for the outcall in cycles.
-  fetch_url : (text) -> (Result_12);
+  fetch_url : (text) -> (Result_13);
   // Every folder, sorted, including empty ones.
-  folders : () -> (Result_13) query;
-  get_settings : () -> (Result_6) query;
+  folders : () -> (Result_14) query;
+  // Turn `amount_e8s` of the ICP this space holds on its own account into its cycles (owner): fuel
+  // from the wallet, leaving the rest where it is.
+  fuel_from_wallet : (nat64) -> (Result_15);
+  get_settings : () -> (Result_7) query;
   // Earlier versions of a note, newest first.
-  history : (text) -> (Result_14) query;
+  history : (text) -> (Result_16) query;
   // Every request is upgraded to an update call: update responses need no certification, so the
   // API works through any gateway.
   http_request : (HttpRequest) -> (HttpResponse) query;
   http_request_update : (HttpRequest) -> (HttpResponse);
   info : () -> (Info) query;
   // Every file in the notebook (metadata only), sorted by path.
-  list : () -> (Result_15) query;
+  list : () -> (Result_17) query;
   // Files a sharee may read under `prefix` ("" for everything shared with them).
-  list_shared : (text) -> (Result_15) query;
+  list_shared : (text) -> (Result_17) query;
   // Create a folder (and its ancestors); creating an existing folder is fine.
-  mkdir : (text) -> (Result_6);
+  mkdir : (text) -> (Result_7);
   my_role : (text) -> (opt Role) query;
   // Attestations on a note with whether each still matches the current content (anyone who can read it).
-  note_attestations : (text) -> (Result_16) query;
+  note_attestations : (text) -> (Result_18) query;
   // Pay the registry what one of the owner's chat messages or board posts costs it in cycles. The
   // cycles ride on a call to the registry's `accept_fee`, so the registry counts what arrived rather
   // than trusting this reply. Registry only.
-  pay_registry : (nat) -> (Result_8);
+  pay_registry : (nat) -> (Result_9);
   // "I am looking at this note": kept two minutes, so a group sees who is here.
-  ping : (text) -> (Result_17);
+  ping : (text) -> (Result_19);
   // The last minute's USD price of each symbol (BTC, ETH, SOL, ...), from `xrc`: the exchange rate
   // canister on mainnet, a stand-in locally. Owner only; the notebook pays up to 1B cycles a symbol.
-  prices : (principal, vec text) -> (Result_18);
+  prices : (principal, vec text) -> (Result_20);
   // Everyone's mark on a note, for the group (anyone who can read the note).
-  progress : (text) -> (Result_19) query;
+  progress : (text) -> (Result_21) query;
   published : () -> (opt text) query;
-  read : (text) -> (Result_20) query;
+  read : (text) -> (Result_22) query;
   // The whole notebook (attachments listed without content), so the client can index links,
   // tags and search locally.
-  read_all : () -> (Result_21) query;
+  read_all : () -> (Result_23) query;
   // Notes after `after` (exclusive), up to `limit` of them or ~1.5 MB, whichever first.
-  read_page : (opt text, nat32) -> (Result_22) query;
+  read_page : (opt text, nat32) -> (Result_24) query;
   // Read a shared note: public shares need no sign-in; private ones need a listed principal.
-  read_shared : (text) -> (Result_20) query;
+  read_shared : (text) -> (Result_22) query;
   // Move or rename a file; `[[links]]` to a renamed note are rewritten in every other note.
-  rename : (text, text) -> (Result_23);
+  rename : (text, text) -> (Result_25);
   // Move or rename a folder: every file under it moves, and `[[links]]` follow.
-  rename_folder : (text, text) -> (Result_24);
+  rename_folder : (text, text) -> (Result_26);
   // Answer a comment; the reply inherits the note and needs the same permission as commenting there.
-  reply : (nat64, text) -> (Result_7);
+  reply : (nat64, text) -> (Result_8);
   // One earlier version in full; restore it by writing it back.
-  revision : (text, nat64) -> (Result_20) query;
-  revoke_agent_key : (text) -> (Result_8);
+  revision : (text, nat64) -> (Result_22) query;
+  revoke_agent_key : (text) -> (Result_9);
   // Someone's role over the whole notebook, for the registry (so a team member may top it up).
   role_of : (principal) -> (opt Role) query;
-  search_notes : (text, nat32) -> (Result_25) query;
+  search_notes : (text, nat32) -> (Result_27) query;
+  // Let agent keys post in the community for this space, or stop them (owner).
+  set_agent_chat : (bool) -> (Result_9);
+  // Let a key move this space's funds over the agent API, or stop it (owner).
+  set_key_spend : (text, bool) -> (Result_9);
   // Mark where you are with a note: 1 read, 2 reviewing, 3 known (0 clears).
-  set_progress : (text, nat8) -> (Result_8);
+  set_progress : (text, nat8) -> (Result_9);
   // Publish `folder` ("" for the whole notebook, except Agents/ and attachments) at /p/; `None` unpublishes.
-  set_published : (opt text) -> (Result_8);
-  set_settings : (text) -> (Result_8);
+  set_published : (opt text) -> (Result_9);
+  set_settings : (text) -> (Result_9);
   // Share with explicit permissions: what the link allows (view, comment or edit; editing needs a
   // sign-in) and who may view, comment or edit. Replaces an earlier share of the same path.
-  set_share : (ShareArgs) -> (Result_26);
+  set_share : (ShareArgs) -> (Result_28);
   // Share a note, a folder, or the whole notebook ("") with readers and editors.
-  share : (text, bool, vec principal, vec principal) -> (Result_26);
+  share : (text, bool, vec principal, vec principal) -> (Result_28);
   // What a viewer may know about a share: the notebook's name, whether it is public, and their role.
   share_info : (text) -> (opt record { text; bool }) query;
   // Share a note with everyone (`public`) or with `principals` (readers); replaces an earlier share.
-  share_note : (text, bool, vec principal) -> (Result_26);
-  shares : () -> (Result_27) query;
+  share_note : (text, bool, vec principal) -> (Result_28);
+  shares : () -> (Result_29) query;
+  // The last `n` transfers agents made with this space's funds, newest first (owner).
+  spends : (nat32) -> (Result_30) query;
   // A finished quiz or deck session on a shared note; the owner sees who scored what.
-  submit_attempt : (text, nat32, nat32) -> (Result_28);
+  submit_attempt : (text, nat32, nat32) -> (Result_31);
   // Convert everything that arrived since the last run, now instead of at the next 10-minute tick.
-  sweep_deposits : () -> (Result_6);
+  sweep_deposits : () -> (Result_7);
   // Convert whatever ICP sits on the account (minus one fee) into cycles now.
-  sweep_topups : () -> (Result_29);
+  sweep_topups : () -> (Result_15);
   // Pull `amount_e8s` the caller approved on the ICP ledger and turn it into this canister's cycles.
-  top_up : (nat64) -> (Result_29);
+  top_up : (nat64) -> (Result_15);
   // Pull `amount_e8s` that `payer` (an OISY wallet, for instance) approved for this canister on the
   // ICP ledger and convert it; the ledger's allowance is the authorization, the owner just triggers it.
-  top_up_from : (principal, nat64) -> (Result_29);
+  top_up_from : (principal, nat64) -> (Result_15);
   topups : (nat32) -> (vec TopUp) query;
   // Hand the notebook to a new owner. Only the registry calls this, after a sale or an ICRC-7
   // transfer it brokered. Agent keys and the auto top-up payer belonged to the old owner, so they go.
-  transfer_owner : (principal) -> (Result_8);
+  transfer_owner : (principal) -> (Result_9);
   // Every replica must agree on the response: keep the body, the status, and only the two headers
   // this notebook reads (dates, cookies and request ids differ from replica to replica).
   transform_fetch : (TransformArgs) -> (HttpRequestResult) query;
-  unshare_note : (text) -> (Result_8);
+  unshare_note : (text) -> (Result_9);
   // How big and how recently used this notebook is, for the registry's numbers and the town's
   // quests. Counts only, nothing from inside the notes.
   usage : () -> (Usage) query;
-  who_is_here : (text) -> (Result_17) query;
+  who_is_here : (text) -> (Result_19) query;
   // Create or overwrite a file.
-  write : (text, text) -> (Result_30);
+  write : (text, text) -> (Result_32);
   // Import many files at once (an Obsidian import); bad names are reported, not fatal.
-  write_many : (vec record { text; text }, bool) -> (Result_31);
+  write_many : (vec record { text; text }, bool) -> (Result_33);
   // An editor's write to a shared note (owner-style rules apply; never under Agents/).
-  write_shared : (text, text) -> (Result_30);
+  write_shared : (text, text) -> (Result_32);
 }

@@ -329,7 +329,10 @@ fn viewer(agent: Option<String>) -> String {
 fn publish_problem(i: PublishInput) -> Result<ProblemView, String> {
     require_flag("problems")?;
     let me = msg_caller();
-    owns(me, i.notebook)?;
+    // the space itself may publish, for its agent (notebook `/v1/publish`)
+    if me != i.notebook {
+        owns(me, i.notebook)?;
+    }
     let title = text_ok(&i.title, MAX_TITLE, "title")?;
     let statement = text_ok(&i.statement, MAX_STATEMENT, "statement")?;
     let field = i.field.trim().to_lowercase();

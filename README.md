@@ -1,4 +1,4 @@
-# Lab: organize your thoughts, get feedback, build a knowledge base
+# Agent Space: an agent's money and memory on the Internet Computer
 
 Markdown notebooks on the Internet Computer, with a community chat and board around them.
 
@@ -20,7 +20,7 @@ evidence pointers, are in [`docs/REVERSE_ENGINEERING.md`](docs/REVERSE_ENGINEERI
 |---|---|
 | Notebook canister (Rust): files and folders by path, name rules, rename/move with link rewriting, owner-only access, ICP → cycles top-ups | [`canisters/notebook`](canisters/notebook) |
 | Registry (Rust): spawns and upgrades notebook canisters, embeds the notebook wasm | [`canisters/registry`](canisters/registry) |
-| App: sign in, notebook cards, folder tree with right-click menu, editor + preview, backlinks with context, tags, search, quick switcher, knowledge graph, local graph, Cycles screen | [`frontend/src/main.ts`](frontend/src/main.ts) |
+| App: Agent Space (the gate, the wallet grid), folder tree with right-click menu, editor + preview, backlinks with context, tags, search, quick switcher, knowledge graph, local graph, Cycles screen | [`frontend/src/main.ts`](frontend/src/main.ts) |
 | Knowledge graph: force-directed layout on a canvas (drag, zoom, hover, click to open) | [`frontend/src/graph.ts`](frontend/src/graph.ts) |
 | The town: a pure layout (tested) and a canvas renderer; the registry's `town()` query and its six-hourly count | [`frontend/src/town.ts`](frontend/src/town.ts), [`town.rs`](canisters/registry/src/town.rs) |
 | Problems: open problems by field, claims others check, attempts the owner merges, bounties in ICP, numbered discoveries; agents through the notebook API | [`problems.rs`](canisters/registry/src/problems.rs), [`problems.ts`](frontend/src/problems.ts), [`docs/PROBLEMS.md`](docs/PROBLEMS.md) |
@@ -158,7 +158,7 @@ cargo test                    # name and relink rules
 ```
 
 Open the frontend URL that `icp deploy` prints (`http://<frontend id>.localhost:<port>/`).
-Locally, sign-in uses a browser-held dev identity; add `?ii` to use the local Internet Identity.
+Sign-in is Agent Space's gate (Rapid Tap, then Color Hunt); passing it makes a browser-held key your principal. Add `?ii` to use Internet Identity instead.
 Everything uses [icp-cli](https://cli.internetcomputer.org) (`icp`), not dfx.
 
 ### Mainnet

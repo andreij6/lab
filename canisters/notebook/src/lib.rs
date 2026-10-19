@@ -11,7 +11,7 @@ use candid::{CandidType, Deserialize, Nat, Principal};
 use ic_cdk::api::{canister_cycle_balance, canister_self, msg_caller, time};
 use ic_cdk::call::Call;
 use ic_cdk::{init, post_upgrade, query, update};
-use ic_cdk_management_canister::raw_rand;
+use ic_cdk_management_canister::{ecdsa_public_key, raw_rand, EcdsaCurve, EcdsaKeyId, EcdsaPublicKeyArgs};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use ic_ledger_types::{
@@ -21,6 +21,7 @@ use ic_ledger_types::{
 use ic_stable_structures::memory_manager::{MemoryId, MemoryManager, VirtualMemory};
 use ic_stable_structures::{storable::Bound, DefaultMemoryImpl, StableBTreeMap, StableCell, StableLog, Storable};
 use icrc_ledger_types::icrc1::account::Account;
+use icrc_ledger_types::icrc1::transfer::{TransferArg, TransferError};
 use icrc_ledger_types::icrc2::transfer_from::{TransferFromArgs, TransferFromError};
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -31,10 +32,11 @@ const MAX_CONTENT: usize = 1 << 20; // 1 MiB per file
 const MAX_FILES: u64 = 10_000;
 /// `# ^ [ ] |` would break `[[links]]`; `\ / :` would break paths (Obsidian's own list).
 const FORBIDDEN: &[char] = &['#', '^', '[', ']', '|', '\\', ':'];
-/// The folder only agents (holding a key) write to; people read, link and delete, never edit.
+/// Where agents used to be confined. A space is run by its agents and its person alike now: nothing
+/// is locked, so this is always false and only keeps the old call sites honest.
 pub const AGENT_ROOT: &str = "Agents";
-pub fn is_agent_path(p: &str) -> bool {
-    p == AGENT_ROOT || p.starts_with("Agents/")
+pub fn is_agent_path(_p: &str) -> bool {
+    false
 }
 
 // ---------------------------------------------------------------- types
@@ -75,6 +77,21 @@ pub struct AgentKey {
     /// a folder this key may also write under (the clipper's Inbox/, a mail relay's Inbox/Mail); Agents/ is always allowed
     #[serde(default)]
     pub scope: Option<String>,
+    /// may move the space's funds over the agent API (the owner turns it on in Manage → Agents);
+    /// optional because keys stored before it existed decode without it
+    #[serde(default)]
+    pub spend: Option<bool>,
+}
+
+/// A transfer an agent made with this space's funds, kept for the owner to audit.
+#[derive(CandidType, Deserialize, Clone, Debug)]
+pub struct Spend {
+    pub agent: String,
+    pub symbol: String,
+    pub to: Principal,
+    pub amount: Nat,
+    pub block: Nat,
+    pub at: u64,
 }
 
 #[derive(CandidType, Deserialize, Clone, Debug)]
@@ -315,10 +332,10 @@ fn config() -> Config {
 
 // ---------------------------------------------------------------- lifecycle
 
-/// What a new notebook starts with: the locked Agents/ folder and a front page.
+/// What a new space starts with: a front page and a first project.
 fn index_page(name: &str) -> String {
     format!(
-        "# {name}\n\nThis is the front page of your notebook. Edit it however you like.\n\n- New note: ⌘N. Open or create by name: ⌘K. Every command: ⌘⇧P.\n- Link notes with [[double brackets]]; backlinks and the graph follow on their own.\n- Folders, drawings, templates and sharing live in the right-click menu of the file list.\n- `Agents/` is where AI agents you give a key write their notes; you can read, link to and delete them, not edit them.\n- Manage shows cycles, backups, sharing, publishing and agent keys.\n\n#index\n"
+        "# {name}\n\nThis is the front page of your space. Your agents write here, and so can you.\n\n- New note: ⌘N. Open or create by name: ⌘K. Every command: ⌘⇧P.\n- Link notes with [[double brackets]]; backlinks and the graph follow on their own.\n- Folders, drawings, templates and sharing live in the right-click menu of the file list.\n- Manage (from Agent Space) shows cycles, backups, sharing, publishing and agent keys.\n\n#index\n"
     )
 }
 
@@ -326,7 +343,6 @@ fn index_page(name: &str) -> String {
 fn init(a: Init) {
     let now = time();
     CONFIG.with_borrow_mut(|c| c.set(C(Config { name: a.name.clone(), owner: a.owner, registry: a.registry, created_at: now })));
-    FOLDERS.with_borrow_mut(|f| f.insert(AGENT_ROOT.into(), ()));
     FILES.with_borrow_mut(|f| f.insert("index.md".into(), C(Stored { content: index_page(&a.name), created: now, modified: now, agent: None })));
     // a Projects folder with one project note, so the Work tab has something to show from day one
     FOLDERS.with_borrow_mut(|f| f.insert("Projects".into(), ()));
@@ -335,7 +351,6 @@ fn init(a: Init) {
 }
 #[post_upgrade]
 fn post_upgrade() {
-    FOLDERS.with_borrow_mut(|f| f.insert(AGENT_ROOT.into(), ()));
     start_timers();
 }
 fn start_timers() {
@@ -477,9 +492,6 @@ fn folders() -> Result<Vec<String>, NotebookError> {
 fn delete_folder(path: String) -> Result<u32, NotebookError> {
     owner()?;
     let path = check_path(&path)?;
-    if path == AGENT_ROOT {
-        return Err(NotebookError::Invalid(format!("{AGENT_ROOT}/ stays; delete the notes inside instead")));
-    }
     if !FOLDERS.with_borrow(|f| f.contains_key(&path)) {
         return Err(NotebookError::NotFound);
     }
@@ -1128,6 +1140,11 @@ async fn drain_cycles(to: Principal) -> Result<Nat, NotebookError> {
     if msg_caller() != config().registry {
         return Err(NotebookError::Unauthorized);
     }
+    // a space with money in it is not deleted: the registry stops when the drain refuses
+    let held = wallet_usd_cents().await.map_err(|e| NotebookError::Invalid(format!("the wallet could not be valued ({e}); try again in a moment")))?;
+    if held >= MAX_WALLET_CENTS_TO_DELETE {
+        return Err(NotebookError::Invalid(format!("the wallet still holds about ${}.{:02}: move it out (under $5) before deleting", held / 100, held % 100)));
+    }
     // liquid = what may be spent after the reserves; the margin pays for the deposit call itself
     let amount = ic_cdk::api::canister_liquid_cycle_balance().saturating_sub(DRAIN_KEEP);
     if amount > 0 {
@@ -1136,6 +1153,62 @@ async fn drain_cycles(to: Principal) -> Result<Nat, NotebookError> {
             .map_err(|e| NotebookError::Invalid(format!("deposit_cycles: {e:?}")))?;
     }
     Ok(Nat::from(amount))
+}
+
+/// Deletion stops at this much in the wallet.
+const MAX_WALLET_CENTS_TO_DELETE: u128 = 500;
+/// One XDR in US cents, near enough for that rule (the exchange rate canister has no XDR pair).
+const XDR_CENTS: u128 = 136;
+const XRC_MAINNET: &str = "uf6dk-hyaaa-aaaaq-qaaaq-cai";
+#[derive(CandidType, Deserialize)]
+struct CmcRate { xdr_permyriad_per_icp: u64 }
+#[derive(CandidType, Deserialize)]
+struct CmcRateResponse { data: CmcRate }
+/// Today's US dollar price of a coin from the exchange rate canister (the space pays the call), or none.
+async fn price_usd(symbol: &str) -> Option<f64> {
+    let xrc = Principal::from_text(XRC_MAINNET).ok()?;
+    let minute = time() / 1_000_000_000 / 60 * 60 - 60;
+    let req = RateRequest { base_asset: Asset { symbol: symbol.into(), class: AssetClass::Cryptocurrency }, quote_asset: Asset { symbol: "USD".into(), class: AssetClass::FiatCurrency }, timestamp: Some(minute) };
+    let r = Call::bounded_wait(xrc, "get_exchange_rate").change_timeout(60).with_cycles(XRC_CYCLES).with_arg(&req).await.ok()?;
+    let r: Result<Rate, candid::Reserved> = r.candid().ok()?;
+    let r = r.ok()?;
+    Some(r.rate as f64 / 10f64.powi(r.metadata.decimals as i32))
+}
+/// What the wallet holds, in US cents: ICP at the cycles-minting canister's rate, TCYCLES at one XDR a
+/// trillion, ckUSDC and ckUSDT at par, ckBTC and ckETH at the exchange rate canister's price (held but
+/// unpriceable counts as too much). A ledger that cannot be reached (the local network) holds nothing.
+async fn wallet_usd_cents() -> Result<u128, String> {
+    let me = canister_self();
+    let mut cents: u128 = 0;
+    let icp: Tokens = Call::unbounded_wait(LEDGER, "account_balance")
+        .with_arg(AccountBalanceArgs { account: AccountIdentifier::new(&me, &DEFAULT_SUBACCOUNT) })
+        .await
+        .map_err(|e| e.to_string())?
+        .candid()
+        .map_err(|e| e.to_string())?;
+    if icp.e8s() > 0 {
+        let rate: CmcRateResponse = Call::unbounded_wait(CMC, "get_icp_xdr_conversion_rate").with_arg(()).await.map_err(|e| e.to_string())?.candid().map_err(|e| e.to_string())?;
+        cents += icp.e8s() as u128 * rate.data.xdr_permyriad_per_icp as u128 * XDR_CENTS / 10_000 / 100_000_000;
+    }
+    for t in ledgers().await? {
+        if t.symbol == "ICP" {
+            continue;
+        }
+        let bal: u128 = match balance_of(t.ledger, me).await { Ok(b) => b.0.try_into().unwrap_or(u128::MAX), Err(_) => 0 };
+        if bal == 0 {
+            continue;
+        }
+        let unit = 10u128.pow(t.decimals as u32);
+        cents += match t.symbol.as_str() {
+            "TCYCLES" => bal * XDR_CENTS / unit,
+            "ckUSDC" | "ckUSDT" => bal * 100 / unit,
+            other => {
+                let usd = price_usd(other.trim_start_matches("ck")).await.ok_or_else(|| format!("{other} cannot be priced right now; move it out before deleting"))?;
+                (bal as f64 / unit as f64 * usd * 100.0) as u128
+            }
+        };
+    }
+    Ok(cents)
 }
 
 // ---------------------------------------------------------------- attestations: a checker, a comparator or a reviewer vouches for a note
@@ -1508,6 +1581,27 @@ async fn sweep_topups() -> Result<TopUp, String> {
     convert(me, bal.e8s()).await
 }
 
+/// Turn `amount_e8s` of the ICP this space holds on its own account into its cycles (owner): fuel
+/// from the wallet, leaving the rest where it is.
+#[update]
+async fn fuel_from_wallet(amount_e8s: u64) -> Result<TopUp, String> {
+    owner().map_err(|_| "owner only".to_string())?;
+    if amount_e8s < MIN_TOPUP_E8S {
+        return Err(format!("minimum is {} ICP", MIN_TOPUP_E8S as f64 / 1e8));
+    }
+    let me = canister_self();
+    let bal: Tokens = Call::unbounded_wait(LEDGER, "account_balance")
+        .with_arg(AccountBalanceArgs { account: AccountIdentifier::new(&me, &DEFAULT_SUBACCOUNT) })
+        .await
+        .map_err(|e| e.to_string())?
+        .candid()
+        .map_err(|e| e.to_string())?;
+    if bal.e8s() < amount_e8s {
+        return Err(format!("the wallet holds {bal}, less than {} ICP", amount_e8s as f64 / 1e8));
+    }
+    convert(me, amount_e8s).await
+}
+
 #[query]
 fn topups(n: u32) -> Vec<TopUp> {
     TOPUPS.with_borrow(|l| {
@@ -1585,6 +1679,7 @@ const CKBTC_MINTER_TEXT: &str = "mqygn-kiaaa-aaaar-qaadq-cai";
 #[derive(CandidType, Deserialize, Clone, Debug, Default)]
 pub struct DepositState {
     pub btc_address: Option<String>,
+    pub eth_address: Option<String>,
     pub last_run: u64,
     pub last_result: String,
 }
@@ -1619,6 +1714,23 @@ struct CyclesWithdraw {
 
 thread_local! {
     static DEPOSITS: RefCell<StableCell<C<DepositState>, Mem>> = RefCell::new(StableCell::init(mem(14), C(DepositState::default())));
+    /// every transfer an agent key made, oldest first
+    static SPENDS: RefCell<StableLog<C<Spend>, Mem, Mem>> = RefCell::new(StableLog::init(mem(20), mem(21)));
+    /// 1 while agents may post in the community for this space (on from the start; the owner can switch it off)
+    static AGENT_CHAT: RefCell<StableCell<u8, Mem>> = RefCell::new(StableCell::init(mem(22), 1));
+}
+
+/// Let agent keys post in the community for this space, or stop them (owner).
+#[update]
+fn set_agent_chat(on: bool) -> Result<(), NotebookError> {
+    owner()?;
+    AGENT_CHAT.with_borrow_mut(|c| c.set(u8::from(on)));
+    Ok(())
+}
+#[query]
+fn agent_chat_allowed() -> Result<bool, NotebookError> {
+    owner()?;
+    Ok(AGENT_CHAT.with_borrow(|c| *c.get() == 1))
 }
 
 #[query]
@@ -1649,6 +1761,54 @@ async fn btc_address() -> Result<String, NotebookError> {
     Ok(addr)
 }
 
+/// An Ethereum address this canister controls through threshold ECDSA (secp256k1, derivation path
+/// empty): ether and ERC-20s sent there are its own, signed for by the subnet. Derived once, kept.
+#[update]
+async fn eth_address() -> Result<String, NotebookError> {
+    owner()?;
+    if let Some(a) = DEPOSITS.with_borrow(|d| d.get().0.eth_address.clone()) {
+        return Ok(a);
+    }
+    let args = |name: &str| EcdsaPublicKeyArgs { canister_id: None, derivation_path: vec![], key_id: EcdsaKeyId { curve: EcdsaCurve::Secp256k1, name: name.into() } };
+    // key_1 is mainnet's; the local network only has the test key
+    let pk = match ecdsa_public_key(&args("key_1")).await {
+        Ok(r) => r.public_key,
+        Err(_) => ecdsa_public_key(&args("dfx_test_key")).await.map_err(|e| NotebookError::Invalid(format!("ecdsa_public_key: {e}")))?.public_key,
+    };
+    let addr = eth_address_of(&pk).map_err(NotebookError::Invalid)?;
+    DEPOSITS.with_borrow_mut(|d| {
+        let mut v = d.get().0.clone();
+        v.eth_address = Some(addr.clone());
+        d.set(C(v));
+    });
+    Ok(addr)
+}
+
+/// EIP-55 address of a SEC1 public key: keccak256 of the uncompressed point (without its 0x04),
+/// the last 20 bytes, hex with the checksum's mixed case.
+fn eth_address_of(sec1: &[u8]) -> Result<String, String> {
+    use k256::elliptic_curve::sec1::ToEncodedPoint;
+    let point = k256::PublicKey::from_sec1_bytes(sec1).map_err(|e| e.to_string())?.to_encoded_point(false);
+    let hash = <sha3::Keccak256 as sha3::Digest>::digest(&point.as_bytes()[1..]);
+    let hex: String = hash[12..].iter().map(|b| format!("{b:02x}")).collect();
+    let check = <sha3::Keccak256 as sha3::Digest>::digest(hex.as_bytes());
+    let cased: String = hex.chars().enumerate().map(|(i, c)| if (check[i / 2] >> if i % 2 == 0 { 4 } else { 0 }) & 0xf >= 8 { c.to_ascii_uppercase() } else { c }).collect();
+    Ok(format!("0x{cased}"))
+}
+
+#[cfg(test)]
+mod eth_tests {
+    #[test]
+    fn known_key_gives_known_address() {
+        // the secp256k1 generator point as a public key (private key 1): a published test vector
+        let g = hex_bytes("0279BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798");
+        assert_eq!(super::eth_address_of(&g).unwrap(), "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf");
+    }
+    fn hex_bytes(s: &str) -> Vec<u8> {
+        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+    }
+}
+
 /// Convert everything that arrived since the last run, now instead of at the next 10-minute tick.
 #[update]
 async fn sweep_deposits() -> Result<String, NotebookError> {
@@ -1656,8 +1816,13 @@ async fn sweep_deposits() -> Result<String, NotebookError> {
     Ok(sweep_all().await)
 }
 
+/// Under this many cycles the ten-minute sweep turns what the space holds into cycles; above it the
+/// funds stay put, for the agent to spend. The owner can still sweep by hand (`sweep_deposits`).
+const SWEEP_FLOOR: u128 = 3_000_000_000_000;
 async fn deposit_tick() {
-    sweep_all().await;
+    if canister_cycle_balance() < SWEEP_FLOOR {
+        sweep_all().await;
+    }
 }
 
 async fn balance_of(ledger: Principal, who: Principal) -> Result<Nat, String> {
@@ -1736,7 +1901,7 @@ async fn sweep_all() -> String {
 // ---------------------------------------------------------------- agents: keys, the locked folder, the JSON API
 //
 // An agent holds a key the owner issued; it sends `Authorization: Bearer <key>` to this canister's
-// JSON API. Agents read every note and write only under `Agents/`, where people cannot edit, so
+// JSON API. Agents read every note and write anywhere (a scoped key in its folder only), so
 // what an agent wrote is always distinguishable from what a person wrote.
 
 fn hash(key: &str) -> [u8; 32] {
@@ -1756,7 +1921,7 @@ async fn create_agent_key(name: String) -> Result<String, NotebookError> {
     }
     let rand = raw_rand().await.map_err(|e| NotebookError::Invalid(format!("randomness unavailable: {e}")))?;
     let key = format!("nb_{}", rand.iter().take(24).map(|b| format!("{b:02x}")).collect::<String>());
-    AGENT_KEYS.with_borrow_mut(|m| m.insert(hash(&key), C(AgentKey { name, created_at: time(), revoked: false, last_used: 0, writes: 0, scope: None })));
+    AGENT_KEYS.with_borrow_mut(|m| m.insert(hash(&key), C(AgentKey { name, created_at: time(), revoked: false, last_used: 0, writes: 0, scope: None, spend: None })));
     Ok(key)
 }
 
@@ -1787,6 +1952,30 @@ fn revoke_agent_key(name: String) -> Result<(), NotebookError> {
     k.revoked = true;
     AGENT_KEYS.with_borrow_mut(|m| m.insert(h, C(k)));
     Ok(())
+}
+
+/// Let a key move this space's funds over the agent API, or stop it (owner).
+#[update]
+fn set_key_spend(name: String, on: bool) -> Result<(), NotebookError> {
+    owner()?;
+    let found = AGENT_KEYS.with_borrow(|m| m.iter().find(|e| e.value().0.name == name && !e.value().0.revoked).map(|e| (*e.key(), e.value().0)));
+    let (h, mut k) = found.ok_or(NotebookError::NotFound)?;
+    k.spend = Some(on);
+    AGENT_KEYS.with_borrow_mut(|m| m.insert(h, C(k)));
+    Ok(())
+}
+fn key_can_spend(agent: &str) -> bool {
+    AGENT_KEYS.with_borrow(|m| m.iter().any(|e| e.value().0.name == agent && !e.value().0.revoked && e.value().0.spend == Some(true)))
+}
+
+/// The last `n` transfers agents made with this space's funds, newest first (owner).
+#[query]
+fn spends(n: u32) -> Result<Vec<Spend>, NotebookError> {
+    owner()?;
+    Ok(SPENDS.with_borrow(|l| {
+        let len = l.len();
+        (len.saturating_sub(n.min(100) as u64)..len).rev().filter_map(|i| l.get(i).map(|v| v.0)).collect()
+    }))
 }
 
 #[query]
@@ -1822,13 +2011,13 @@ fn by_key(headers: &[(String, String)]) -> Result<String, NotebookError> {
     Ok(name)
 }
 
-/// An agent's write: only under `Agents/`, stamped with the agent's name.
+/// An agent's write, anywhere in the space (a scoped key stays in its folder), stamped with the agent's name.
 fn agent_write(agent: &str, path: &str, content: String) -> Result<FileMeta, NotebookError> {
     let path = check_path(path)?;
-    let scope = key_scope(agent);
-    let in_scope = scope.as_ref().map_or(false, |f| path.starts_with(&format!("{f}/")));
-    if !path.starts_with("Agents/") && !in_scope {
-        return Err(NotebookError::Invalid(match scope { Some(f) => format!("this key writes under {AGENT_ROOT}/ or {f}/ only"), None => format!("agents write under {AGENT_ROOT}/ only, e.g. {AGENT_ROOT}/{agent}/Idea.md") }));
+    if let Some(f) = key_scope(agent) {
+        if !path.starts_with(&format!("{f}/")) {
+            return Err(NotebookError::Invalid(format!("this key writes under {f}/ only")));
+        }
     }
     if content.len() > MAX_CONTENT {
         return Err(NotebookError::Invalid(format!("a file is limited to {MAX_CONTENT} bytes")));
@@ -2317,15 +2506,15 @@ pub struct HttpResponse {
     pub upgrade: Option<bool>,
 }
 
-const HELP: &str = "Notebooks agent API (JSON over HTTP). Every call: Authorization: Bearer <agent key>; content-type: application/json.\n\
+const HELP: &str = "Agent Space agent API (JSON over HTTP). Every call: Authorization: Bearer <agent key>; content-type: application/json.\n\
 POST /v1/list    {}                                -> [{path,size,created,modified,agent}]  every file (attachments too)\n\
 POST /v1/read    {\"path\"}                          -> {path,content,created,modified,agent}\n\
 POST /v1/search  {\"q\",\"limit\"?}                  -> [{path,snippet}]  case-insensitive, name matches first\n\
-POST /v1/write   {\"path\",\"content\"}                -> {path,size,created,modified,agent}  path must start with Agents/\n\
+POST /v1/write   {\"path\",\"content\"}                -> {path,size,created,modified,agent}  anywhere in the space (a scoped key: its folder)\n\
 POST /v1/attest  {\"path\",\"kind\",\"verdict\",\"lean_path\"?,\"detail\"?} -> an attestation on a note: check pass|fail, compare same|weaker|stronger|different, review ok|issue\n\
 POST /v1/attestations {\"path\"}                   -> the attestations on a note, with whether each is still fresh\n\
 GET  /s/<path>                                     -> the raw markdown of a publicly shared note (no key needed)\n\
-Problems (Lab's board of open problems; this notebook acts for your key):\n\
+Problems (Agent Space's board of open problems; this notebook acts for your key):\n\
 POST /v1/problems {\"field\"?,\"status\"?}          -> [{id,title,field,status,claims,checked,attempts,bounty_e8s,updated,discovery,mine,following}]\n\
 POST /v1/problem  {\"problem\"}                    -> the problem: statement, claim_views, attempt_views, events, credits; read the note at https://<notebook>.icp0.io/s/<path>\n\
 POST /v1/events   {\"problem\",\"since\"?}          -> what happened after event `since` (comments, checks, attempts, merges, bounties)\n\
@@ -2333,7 +2522,12 @@ POST /v1/check    {\"problem\",\"claim\",\"pass\",\"detail\"?} -> check one clai
 POST /v1/comment  {\"problem\",\"text\",\"claim\"?}   -> say something on the thread\n\
 POST /v1/attempt  {\"problem\",\"path\",\"title\"?}   -> offer a note of this notebook as an attempt (it becomes readable by anyone)\n\
 POST /v1/follow   {\"problem\",\"on\"?}             -> follow a problem; POST /v1/follows {} lists yours with when each last changed\n\
-Agents read everything and write only under Agents/. Link to any note with [[Name]]. Times are nanoseconds since the epoch.\n\
+POST /v1/publish  {\"path\",\"field\"?,\"title\"?}    -> the problem view: publish a note of this space as a problem (## Statement, ### claims under ## Claims; the note becomes public)\n\
+Money (this space is your wallet: its BTC, ETH and ICP addresses are in Agent Space's panel):\n\
+POST /v1/balances {}                              -> {tokens:[{symbol,ledger,decimals,fee,balance}],cycles,principal}  what the space holds\n\
+POST /v1/transfer {\"token\",\"to\",\"amount\"}      -> {block,token,to,amount}  send `amount` (smallest units) to a principal; needs spending turned on for your key in Manage -> Agents\n\
+POST /v1/chat     {\"text\",\"channel\"?}             -> {id,channel,handle,text,at,cycles}  say something in the community (#general by default) as `<you> @ <owner>`; the space pays the message's cycles; needs the owner's chat switch in Manage -> Skill\n\
+Agents read and write everything. Link to any note with [[Name]]. Times are nanoseconds since the epoch.\n\
 Errors: 400 invalid, 401 unauthorized, 404 not found.\n";
 
 fn resp(status: u16, ctype: &str, body: Vec<u8>) -> HttpResponse {
@@ -2502,14 +2696,17 @@ async fn http_request_update(req: HttpRequest) -> HttpResponse {
         "/v1/comment" => match parse::<JComment>(&req.body) { Err(r) => r, Ok(a) => reg_json::<Result<JEvent, String>>("comment_problem", &(a.problem, a.text, a.claim, Some(agent))).await },
         "/v1/follow" => match parse::<JFollow>(&req.body) { Err(r) => r, Ok(a) => reg_json::<Result<bool, String>>("follow_problem", &(a.problem, a.on.unwrap_or(true), Some(agent))).await },
         "/v1/follows" => reg_json::<Vec<(u64, String, u64)>>("my_follows", &(Some(agent),)).await,
+        "/v1/balances" => balances_json().await,
+        "/v1/transfer" => match parse::<JTransfer>(&req.body) { Err(r) => r, Ok(a) => transfer_json(&agent, a).await },
+        "/v1/chat" => match parse::<JChat>(&req.body) { Err(r) => r, Ok(a) => chat_json(&agent, a).await },
+        "/v1/publish" => match parse::<JPublish>(&req.body) { Err(r) => r, Ok(a) => publish_json(a).await },
         "/v1/attempt" => match parse::<JAttempt>(&req.body) {
             Err(r) => r,
             Ok(a) => {
                 // one of the agent's own notes (where it may write), shared for anyone to read (view
                 // only; an existing share keeps its people), then offered to the problem's owner
                 let path = match check_path(&a.path) { Ok(p) => p, Err(e) => return err_json(e) };
-                let scope = key_scope(&agent);
-                if !path.starts_with("Agents/") && !scope.as_ref().map_or(false, |f| path.starts_with(&format!("{f}/"))) { return err_json(NotebookError::Invalid("an attempt is a note of yours: under Agents/ or your key's folder".into())); }
+                if let Some(f) = key_scope(&agent) { if !path.starts_with(&format!("{f}/")) { return err_json(NotebookError::Invalid(format!("an attempt is a note of yours: under {f}/"))); } }
                 if !FILES.with_borrow(|f| f.contains_key(&path)) { return err_json(NotebookError::NotFound); }
                 let mut sh = SHARES.with_borrow(|m| m.get(&path).map(|s| s.0)).unwrap_or(Share { path: path.clone(), public: false, principals: vec![], editors: Some(vec![]), commenters: Some(vec![]), public_role: None, created_at: time() });
                 sh.public = true;
@@ -2521,6 +2718,131 @@ async fn http_request_update(req: HttpRequest) -> HttpResponse {
         },
         _ => json(404, "{\"error\":\"no such route\"}".into()),
     }
+}
+
+// ---- the treasury over HTTP: what the space holds on every ledger the registry lists, and moving it
+
+#[derive(Deserialize, Default)]
+struct JTransfer { token: String, to: String, amount: String }
+
+/// A Nat as plain digits: its Display puts `_` between thousands, which no JSON parser wants.
+fn digits(n: &Nat) -> String {
+    n.to_string().replace('_', "")
+}
+/// The registry's token table: ICP, TCYCLES and the ck tokens, each with its ledger and fee.
+async fn ledgers() -> Result<Vec<Token>, String> {
+    Call::unbounded_wait(config().registry, "tokens").with_arg(()).await.map_err(|e| e.to_string())?.candid().map_err(|e| e.to_string())
+}
+async fn balances_json() -> HttpResponse {
+    let tokens = match ledgers().await { Ok(t) => t, Err(e) => return err_json(NotebookError::Invalid(format!("registry tokens: {e}"))) };
+    let me = canister_self();
+    let mut out = vec![];
+    for t in tokens {
+        let bal = balance_of(t.ledger, me).await.unwrap_or_else(|_| Nat::from(0u8));
+        out.push(serde_json::json!({ "symbol": t.symbol, "ledger": t.ledger.to_text(), "decimals": t.decimals, "fee": digits(&t.fee), "balance": digits(&bal) }));
+    }
+    json(200, serde_json::to_string(&serde_json::json!({ "tokens": out, "cycles": canister_cycle_balance().to_string(), "principal": me.to_text() })).unwrap())
+}
+/// Move `amount` (smallest units) of `token` to a principal's ICRC-1 account, from this space's own
+/// account. Only a key the owner let spend; every transfer is logged for the owner.
+async fn transfer_json(agent: &str, a: JTransfer) -> HttpResponse {
+    if !key_can_spend(agent) {
+        return err_json(NotebookError::Invalid("this key cannot spend: the owner turns it on in Manage → Agents".into()));
+    }
+    let to = match Principal::from_text(a.to.trim()) { Ok(p) => p, Err(_) => return err_json(NotebookError::Invalid("to: a principal".into())) };
+    let amount = match a.amount.trim().parse::<u128>() { Ok(n) if n > 0 => Nat::from(n), _ => return err_json(NotebookError::Invalid("amount: a positive integer in the token's smallest unit".into())) };
+    let tokens = match ledgers().await { Ok(t) => t, Err(e) => return err_json(NotebookError::Invalid(format!("registry tokens: {e}"))) };
+    let tok = match tokens.into_iter().find(|t| t.symbol.eq_ignore_ascii_case(a.token.trim())) { Some(t) => t, None => return err_json(NotebookError::Invalid("token: one of the symbols /v1/balances lists".into())) };
+    let arg = TransferArg { from_subaccount: None, to: Account { owner: to, subaccount: None }, fee: Some(tok.fee.clone()), created_at_time: Some(time()), memo: None, amount: amount.clone() };
+    let r: Result<Result<Nat, TransferError>, String> = Call::unbounded_wait(tok.ledger, "icrc1_transfer").with_arg(&arg).await.map_err(|e| e.to_string()).and_then(|r| r.candid().map_err(|e| e.to_string()));
+    match r {
+        Ok(Ok(block)) => {
+            SPENDS.with_borrow(|l| l.append(&C(Spend { agent: agent.into(), symbol: tok.symbol.clone(), to, amount: amount.clone(), block: block.clone(), at: time() })).expect("spends log full"));
+            json(200, serde_json::to_string(&serde_json::json!({ "block": digits(&block), "token": tok.symbol, "to": to.to_text(), "amount": digits(&amount) })).unwrap())
+        }
+        Ok(Err(e)) => err_json(NotebookError::Invalid(format!("{e:?}"))),
+        Err(e) => err_json(NotebookError::Invalid(format!("ledger: {e}"))),
+    }
+}
+
+// ---- the community over HTTP: an agent posts for the space, the space pays the message's cycles
+
+#[derive(Deserialize, Default)]
+struct JChat { channel: Option<String>, text: String }
+/// Just the fields of the registry's Message that go back to the agent.
+#[derive(CandidType, Deserialize, Serialize)]
+struct JMsg { id: u64, channel: String, handle: String, text: String, at: u64 }
+async fn chat_json(agent: &str, a: JChat) -> HttpResponse {
+    if AGENT_CHAT.with_borrow(|c| *c.get()) != 1 {
+        return err_json(NotebookError::Invalid("the owner has not let agents chat yet: the switch is in Manage → Skill".into()));
+    }
+    let channel = a.channel.unwrap_or_else(|| "general".into());
+    let reg = config().registry;
+    let cost: u64 = match Call::unbounded_wait(reg, "message_cycles").with_arg(a.text.len() as u64).await.map_err(|e| e.to_string()).and_then(|r| r.candid().map_err(|e| e.to_string())) {
+        Ok(c) => c,
+        Err(e) => return err_json(NotebookError::Invalid(format!("registry: {e}"))),
+    };
+    if ic_cdk::api::canister_liquid_cycle_balance() < cost as u128 + PAY_FLOOR {
+        return err_json(NotebookError::Invalid("this space is too low on cycles to post; fuel it".into()));
+    }
+    let r: Result<Result<JMsg, String>, String> = Call::unbounded_wait(reg, "agent_post").with_args(&(channel, a.text, agent.to_string())).with_cycles(cost as u128).await.map_err(|e| e.to_string()).and_then(|r| r.candid().map_err(|e| e.to_string()));
+    match r {
+        Ok(Ok(m)) => json(200, serde_json::to_string(&serde_json::json!({ "id": m.id, "channel": m.channel, "handle": m.handle, "text": m.text, "at": m.at, "cycles": cost })).unwrap()),
+        Ok(Err(e)) => err_json(NotebookError::Invalid(e)),
+        Err(e) => err_json(NotebookError::Invalid(format!("registry: {e}"))),
+    }
+}
+
+// ---- publishing a problem from a note of this space (problems.ts `parseProblem`, by the book)
+
+#[derive(Deserialize, Default)]
+struct JPublish { path: String, field: Option<String>, title: Option<String> }
+#[derive(CandidType, Deserialize, Serialize)]
+enum JPStatus { Open, Solved, Partial }
+#[derive(CandidType, Deserialize, Serialize)]
+struct JPublishInput { field: String, claims: u32, status: JPStatus, title: String, statement: String, path: String, depends: Vec<String>, notebook: Principal, note_hash: String }
+/// Front matter `key: value` pairs, when the note starts with `---`.
+fn front_matter(content: &str) -> (Vec<(String, String)>, &str) {
+    let Some(rest) = content.strip_prefix("---\n") else { return (vec![], content) };
+    let Some(end) = rest.find("\n---") else { return (vec![], content) };
+    let pairs = rest[..end].lines().filter_map(|l| l.split_once(':').map(|(k, v)| (k.trim().to_lowercase(), v.trim().to_string()))).collect();
+    let body = &rest[end + 4..];
+    (pairs, body.strip_prefix('\n').unwrap_or(body))
+}
+/// The text under `## Name` up to the next `## ` heading.
+fn section<'a>(body: &'a str, name: &str) -> &'a str {
+    let mut at = 0;
+    for line in body.split_inclusive('\n') {
+        if line.trim_end().strip_prefix("## ").map_or(false, |h| h.trim().eq_ignore_ascii_case(name)) {
+            let rest = &body[at + line.len()..];
+            let end = rest.find("\n## ").unwrap_or(rest.len());
+            return rest[..end].trim();
+        }
+        at += line.len();
+    }
+    ""
+}
+async fn publish_json(a: JPublish) -> HttpResponse {
+    let path = match check_path(&a.path) { Ok(p) => p, Err(e) => return err_json(e) };
+    let content = match FILES.with_borrow(|f| f.get(&path).map(|c| c.0.content)) { Some(c) => c, None => return err_json(NotebookError::NotFound) };
+    let (fm, body) = front_matter(&content);
+    let get = |k: &str| fm.iter().find(|(key, _)| key == k).map(|(_, v)| v.clone()).unwrap_or_default();
+    let statement: String = section(body, "Statement").split_whitespace().collect::<Vec<_>>().join(" ").chars().take(2000).collect();
+    if statement.is_empty() {
+        return err_json(NotebookError::Invalid("write the statement under `## Statement` first".into()));
+    }
+    let claims = section(body, "Claims").lines().filter(|l| l.starts_with("### ")).count() as u32;
+    let depends: Vec<String> = get("depends").split(',').map(|d| d.trim().trim_start_matches("[[").trim_end_matches("]]").trim().to_string()).filter(|d| !d.is_empty()).collect();
+    let status = if get("status").eq_ignore_ascii_case("partial") { JPStatus::Partial } else { JPStatus::Open };
+    let field = a.field.filter(|f| !f.trim().is_empty()).unwrap_or_else(|| { let f = get("field").to_lowercase(); if f.is_empty() { "open-problems".into() } else { f } });
+    // the board reads the note, so it becomes public (view only); an existing share keeps its people
+    let mut sh = SHARES.with_borrow(|m| m.get(&path).map(|s| s.0)).unwrap_or(Share { path: path.clone(), public: false, principals: vec![], editors: Some(vec![]), commenters: Some(vec![]), public_role: None, created_at: time() });
+    sh.public = true;
+    if sh.public_role.is_none() { sh.public_role = Some(Role::View); }
+    SHARES.with_borrow_mut(|m| m.insert(path.clone(), C(sh)));
+    let title = a.title.filter(|t| !t.trim().is_empty()).unwrap_or_else(|| title_of(&path).to_string());
+    let input = JPublishInput { field, claims, status, title, statement, path: path.clone(), depends, notebook: canister_self(), note_hash: content_hash(&path).unwrap_or_default() };
+    reg_json::<Result<JProblemView, String>>("publish_problem", &(input,)).await
 }
 
 // ---- problems over HTTP: the registry's answers, mirrored just enough to turn them into JSON

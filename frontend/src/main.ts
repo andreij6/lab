@@ -2,6 +2,8 @@ import "@fontsource-variable/inter";
 import "@fontsource-variable/jetbrains-mono";
 import "./style.css";
 import { AuthClient } from "@icp-sdk/auth/client";
+import { checkHunt, huntRound, tapPassed, TAP_GOAL, TAP_MS, type Hunt } from "./agentspace.ts";
+import { qrSvg } from "./qr.ts";
 import { Actor, HttpAgent, type Identity } from "@icp-sdk/core/agent";
 import { safeGetCanisterEnv } from "@icp-sdk/core/agent/canister-env";
 import { IDL } from "@icp-sdk/core/candid";
@@ -150,7 +152,7 @@ async function currentIdentity(): Promise<Identity | undefined> {
 
 // --- "working" indicator: every canister update call shows a progress bar and a label while it runs
 // (updates take a couple of seconds on mainnet); queries stay silent unless they drag on past a second.
-const BUSY_LABELS: Record<string, string> = { delete_notebook: "Deleting the notebook…", ask: "Asking the language model…", join_community: "Joining the community…", post: "Posting…", post_newcomer: "Posting…", sponsor_newcomer: "Spawning starter notebook…", set_open_house: "Updating your porch…", wave_house: "Waving 👋…", edit_message: "Saving your edit…", create_post: "Posting…", comment_post: "Posting your comment…", vote_post: "Voting…", vote_comment: "Voting…", react: "Reacting…", vote: "Voting…", post_poll: "Posting the poll…", post_gist: "Sharing the note…", post_fund: "Starting the fundraiser…", post_plan_fund: "Starting the fundraiser…", donate: "Sending ICP…", rain: "Making it rain…", link_github: "Asking GitHub…", share_post: "Sharing…", pin_message: "Pinning…", delete_message: "Deleting…", delete_post: "Deleting…", create_notebook: "Spawning your notebook (about a minute)…", create_notebook_paid_by: "Spawning your notebook (about a minute)…", top_up_notebook: "Converting ICP to cycles…", pay: "Paying…", write: "Saving…", rename: "Renaming…", delete: "Deleting…", set_share: "Updating sharing…", report_bug: "Sending…", report_idea: "Sending…", buy: "Buying…", list_notebook: "Listing…", upgrade_all: "Upgrading notebooks…", restore: "Restoring…", comment: "Posting your comment…", reply: "Posting your reply…" };
+const BUSY_LABELS: Record<string, string> = { delete_notebook: "Deleting the space…", ask: "Asking the language model…", join_community: "Joining the community…", post: "Posting…", post_newcomer: "Posting…", sponsor_newcomer: "Spawning starter space…", set_open_house: "Updating your porch…", wave_house: "Waving 👋…", edit_message: "Saving your edit…", create_post: "Posting…", comment_post: "Posting your comment…", vote_post: "Voting…", vote_comment: "Voting…", react: "Reacting…", vote: "Voting…", post_poll: "Posting the poll…", post_gist: "Sharing the note…", post_fund: "Starting the fundraiser…", post_plan_fund: "Starting the fundraiser…", donate: "Sending ICP…", rain: "Making it rain…", link_github: "Asking GitHub…", share_post: "Sharing…", pin_message: "Pinning…", delete_message: "Deleting…", delete_post: "Deleting…", create_notebook: "Spawning your space (about a minute)…", set_key_spend: "Updating the key…", set_agent_chat: "Updating the switch…", fuel_from_wallet: "Converting ICP to cycles…", btc_address: "Deriving the Bitcoin address…", eth_address: "Deriving the Ethereum address…", create_notebook_paid_by: "Spawning your space (about a minute)…", top_up_notebook: "Converting ICP to cycles…", pay: "Paying…", write: "Saving…", rename: "Renaming…", delete: "Deleting…", set_share: "Updating sharing…", report_bug: "Sending…", report_idea: "Sending…", buy: "Buying…", list_notebook: "Listing…", upgrade_all: "Upgrading spaces…", restore: "Restoring…", comment: "Posting your comment…", reply: "Posting your reply…" };
 const busyCalls = new Map<number, string>();
 let busySeq = 0;
 function busyRender() {
@@ -160,7 +162,10 @@ function busyRender() {
   if (!el) { el = Object.assign(document.createElement("div"), { id: "busy" }); el.setAttribute("role", "status"); el.setAttribute("aria-live", "polite"); document.body.append(el); }
   el.innerHTML = `<div class="busy-bar"></div><div class="busy-pill"><span class="spin"></span>${esc(labels[labels.length - 1])}</div>`;
 }
+/** Background polls (rain, mentions, trips, the town, health): never shown as "Loading…". */
+const QUIET_METHODS = new Set(["my_rain", "my_mentions", "my_watches", "watching", "town", "notebook_status"]);
 function trackCall<T>(method: string, p: Promise<T>): Promise<T> {
+  if (QUIET_METHODS.has(method)) return p;
   const id = ++busySeq;
   const label = BUSY_LABELS[method] ?? (QUERY_METHODS.has(method) ? "Loading…" : "Working…");
   const delay = QUERY_METHODS.has(method) ? 1200 : 120;
@@ -172,7 +177,7 @@ function tracked<T extends object>(actor: T): T {
 }
 /** A feature flag from the registry; unknown or not yet loaded flags count as on, except the market. */
 /** Off until the registry says otherwise: the market ships switched off. */
-const OFF_BY_DEFAULT = ["market", "problems"];
+const OFF_BY_DEFAULT = ["market", "problems", "chat"];
 const flag = (name: string): boolean => { const f = S.flags.find((x) => x.name === name); return f ? f.on : !OFF_BY_DEFAULT.includes(name); };
 
 // --- Browser Sandbox Notebook ("local-sandbox"): full zero-ICP browser workspace, mintable to an on-chain canister any time
@@ -191,7 +196,7 @@ function sandboxDefaultNotes(): Note[] {
   const nowNs = BigInt(Date.now()) * 1_000_000n;
   const ex = examples(new Set(["chat", "study", "work", "organize", "research", "crypto", "money"]), today);
   const baseNotes: [string, string, string?][] = [
-    ["index.md", `---\ntags: [sandbox, welcome]\n---\n# Welcome to your Browser Sandbox 🧪\n\nYou are trying **Lab** right in your browser — no ICP or wallet needed to explore. Everything here works immediately and saves locally on this device:\n\n- **Obsidian-grade Markdown & Knowledge Graph**: Open [[Examples/Writing notes]] or click the **Graph** icon on the left.\n- **Autonomous AI Agents**: Inspect [[Agents/Morning Brief]] — on-chain canisters can issue scoped \`nb_...\` keys so AI agents write directly to \`Agents/\` over HTTPS.\n- **Python, Spreadsheets & Live Dashboards**: Run [[Examples/Python.ipynb]] in-browser, edit [[Examples/Budget.sheet]], or view [[Examples/Dashboard.dash]].\n- **Spaced Repetition & Quizzes**: Practice [[Examples/Study/Flashcards]] or take [[Examples/Study/Quiz]].\n- **Crypto & Research Kits**: Check live XRC prices and theses in **Crypto**, or verify citations in **Research**.\n\n> [!tip] Ready to own this on-chain?\n> Click **Mint to on-chain canister** in the top banner any time to spin up your own sovereign Internet Computer canister and copy every note in this sandbox into it.\n`],
+    ["index.md", `---\ntags: [sandbox, welcome]\n---\n# Welcome to your Browser Sandbox 🧪\n\nYou are trying **Agent Space** right in your browser — no ICP or wallet needed to explore. Everything here works immediately and saves locally on this device:\n\n- **Obsidian-grade Markdown & Knowledge Graph**: Open [[Examples/Writing notes]] or click the **Graph** icon on the left.\n- **Autonomous AI Agents**: Inspect [[Agents/Morning Brief]] — on-chain canisters can issue scoped \`nb_...\` keys so AI agents write directly to \`Agents/\` over HTTPS.\n- **Python, Spreadsheets & Live Dashboards**: Run [[Examples/Python.ipynb]] in-browser, edit [[Examples/Budget.sheet]], or view [[Examples/Dashboard.dash]].\n- **Spaced Repetition & Quizzes**: Practice [[Examples/Study/Flashcards]] or take [[Examples/Study/Quiz]].\n- **Crypto & Research Kits**: Check live XRC prices and theses in **Crypto**, or verify citations in **Research**.\n\n> [!tip] Ready to own this on-chain?\n> Click **Mint to on-chain canister** in the top banner any time to spin up your own sovereign Internet Computer canister and copy every note in this sandbox into it.\n`],
     ["Agents/Morning Brief.md", `---\ntags: [agent, brief]\n---\n# Morning Research & Market Brief\n\nWritten autonomously to \`/api/notes/Agents/Morning%20Brief.md\` using a scoped agent bearer key.\n\n- **Knowledge Graph**: Linked to [[Examples/Writing notes]] and [[Crypto/Theses/BTC holds up better than the rest]].\n- **Action items**:\n  - [ ] Review [[Examples/Study/Flashcards]] due today\n  - [ ] Check live XRC price move on BTC thesis\n`, "research-bot"],
     ...ex.map(([p, c]): [string, string] => [p, c]),
   ];
@@ -322,8 +327,8 @@ const nb = (): NotebookApi => notebookOf(isSandbox() ? SANDBOX_ID : S.notebook!.
 type Tab = "notes" | "chat" | "graph" | "manage" | "study" | "work" | "organize" | "trips" | "research" | "writing" | "care" | "software" | "career" | "crypto" | "money" | "creator" | "fitness" | "home";
 type Settings = { bookmarks: string[]; srs: Record<string, Record<string, Sched>>; deckStats: Record<string, { reviews: number; good: number }>; study: Record<string, number>; goals: { notesPerWeek?: number; cardsPerDay?: number }; searches: { name: string; q: string }[]; rules: Rule[]; resurface: Resurface; decayDays: number; hideFaded: boolean; kanbanArchiveDays: number; features: Partial<Record<Tab, boolean>>; onboarded?: boolean; writingGoal: number; citeStyle: Style; gardenHidden: string[] };
 const parseSettings = (j: Partial<Settings> | undefined): Settings => ({ bookmarks: Array.isArray(j?.bookmarks) ? j!.bookmarks : [], srs: j?.srs ?? {}, deckStats: j?.deckStats ?? {}, study: j?.study ?? {}, goals: j?.goals ?? {}, searches: Array.isArray(j?.searches) ? j!.searches : [], rules: Array.isArray(j?.rules) ? j!.rules : [], resurface: j?.resurface ?? {}, decayDays: typeof j?.decayDays === "number" ? j.decayDays : 180, hideFaded: !!j?.hideFaded, kanbanArchiveDays: typeof j?.kanbanArchiveDays === "number" ? j.kanbanArchiveDays : 14, features: j?.features ?? {}, onboarded: j?.onboarded, writingGoal: typeof j?.writingGoal === "number" ? j.writingGoal : 500, citeStyle: j?.citeStyle === "chicago" ? "chicago" : "apa", gardenHidden: Array.isArray(j?.gardenHidden) ? j!.gardenHidden : [] });
-type ManageTab = "finance" | "notebook" | "sharing" | "agents" | "market";
-const MANAGE_TABS: [ManageTab, string, string][] = [["finance", "Cycles & money", "bolt"], ["notebook", "Notebook", "notebook"], ["sharing", "Sharing", "share"], ["agents", "Agents", "bot"], ["market", "Market", "tag"]];
+type ManageTab = "wallet" | "fuel" | "skill" | "data";
+const MANAGE_TABS: [ManageTab, string, string][] = [["wallet", "Wallet", "wallet"], ["fuel", "Fuel", "bolt"], ["skill", "Skill", "bot"], ["data", "Data", "download"]];
 type View = "edit" | "split" | "preview";
 type MobilePane = "files" | "note" | "links";
 /** A pane holds tabs (note paths); several panes sit side by side. */
@@ -339,13 +344,13 @@ const XRC_CANISTER = env["PUBLIC_CANISTER_ID:xrc"] ?? "uf6dk-hyaaa-aaaaq-qaaaq-c
 const LLM_MODEL = "qwen3:32b";
 const LLM_MODEL_NAME = "Qwen3 32B";
 /** The models on the Internet Computer's LLM canister that the notebook canister will ask, by tier.
- *  Every answer is paid for by the notebook: what the model cost plus a tenth for Lab (paid models have 0.1 TC
+ *  Every answer is paid for by the notebook: what the model cost plus a tenth for Agent Space (paid models have 0.1 TC
  *  attached, what is unused comes back), or a flat 0.001 TC for a free model. */
 const MODELS = [
-  { id: "z-ai:glm-5.2", name: "GLM 5.2", tier: "Premium", paid: true, note: "The strongest answers. What the model costs plus a tenth for Lab: about 0.11 TC of this notebook's cycles a question." },
-  { id: "gemma3:27b", name: "Gemma 3 27B", tier: "Plus", paid: true, note: "Strong and quick. What the model costs plus a tenth for Lab: about 0.11 TC of this notebook's cycles a question." },
-  { id: "qwen3:32b", name: "Qwen3 32B", tier: "Everyday", paid: false, note: "The strongest of the free models. 0.001 TC of this notebook's cycles a question, Lab's share." },
-  { id: "llama3.1:8b", name: "Llama 3.1 8B", tier: "Low", paid: false, note: "Small and fast, for quick lookups. 0.001 TC of this notebook's cycles a question, Lab's share." },
+  { id: "z-ai:glm-5.2", name: "GLM 5.2", tier: "Premium", paid: true, note: "The strongest answers. What the model costs plus a tenth for Agent Space: about 0.11 TC of this space's cycles a question." },
+  { id: "gemma3:27b", name: "Gemma 3 27B", tier: "Plus", paid: true, note: "Strong and quick. What the model costs plus a tenth for Agent Space: about 0.11 TC of this space's cycles a question." },
+  { id: "qwen3:32b", name: "Qwen3 32B", tier: "Everyday", paid: false, note: "The strongest of the free models. 0.001 TC of this space's cycles a question, Agent Space's share." },
+  { id: "llama3.1:8b", name: "Llama 3.1 8B", tier: "Low", paid: false, note: "Small and fast, for quick lookups. 0.001 TC of this space's cycles a question, Agent Space's share." },
 ] as const;
 /** The model the person picked for this browser (Everyday until they do). */
 const chatModel = () => MODELS.find((m) => m.id === store("nb-chat-model")) ?? MODELS[2];
@@ -357,7 +362,8 @@ const S = {
   identity: undefined as Identity | undefined,
   principal: "",
   signin: { busy: false, error: "" },
-  landingPersona: "obsidian" as string,
+  /** Agent Space: where a visitor is in the gate, then the wallet grid once verified */
+  as: { step: "landing" as "landing" | "tap" | "hunt", tap: { count: 0, start: 0, done: undefined as "pass" | "fail" | undefined }, hunt: undefined as Hunt | undefined, picked: new Set<number>(), huntDone: undefined as "pass" | "fail" | undefined, pay: "" as "" | "choose" | "creating", wallet: { loading: "", addrs: undefined as { id: string; btc: string; eth: string; icp: string } | undefined, order: undefined as { id: string; url: string; status: string; cents: number; tc: string; delivered?: string } | undefined } },
   notebooks: undefined as NotebookRec[] | undefined,
   notebookInfo: new Map<string, Info>(),
   /** cycles health per notebook from the registry; answers even when the notebook is frozen */
@@ -372,7 +378,13 @@ const S = {
   attest: undefined as Attestation | undefined,
   tokenId: undefined as bigint | undefined,
   deposits: undefined as DepositState | undefined,
-  manageTab: (store("nb-manage-tab") ?? "finance") as ManageTab,
+  manageTab: (["wallet", "fuel", "skill", "data"].includes(store("nb-manage-tab") ?? "") ? store("nb-manage-tab") : "wallet") as ManageTab,
+  /** the owner let agent keys post in the community for this space */
+  agentChat: false,
+  /** the skill text with this space filled in, for the Skill tab */
+  skillShown: "",
+  /** what the space holds on each ledger the registry lists, for the Wallet tab */
+  walletBalances: undefined as { symbol: string; decimals: number; balance?: bigint }[] | undefined,
   marketFee: 250,
   listing: undefined as ListingView | undefined,
   market: undefined as { listings: ListingView[]; bought: Set<string>; loading: boolean; decksOnly?: boolean } | undefined,
@@ -498,7 +510,7 @@ const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e)).repl
 function describe(e: NotebookError): string {
   switch (e.__kind__) {
     case "Unauthorized":
-      return "only the notebook's owner can do that";
+      return "only the space's owner can do that";
     case "NotFound":
       return "no such file or folder";
     case "Exists":
@@ -1020,7 +1032,7 @@ const COMMANDS: { label: string; kbd?: string; run: () => void }[] = [
   { label: "New note", kbd: `${MOD}N`, run: () => void newNote() },
   { label: "New drawing (Excalidraw)", run: () => void newDrawing() },
   { label: "New kanban board", run: () => void newBoard() },
-  { label: "New Python notebook (Jupyter)", run: () => void newPyNotebook() },
+  { label: "New Python space (Jupyter)", run: () => void newPyNotebook() },
   { label: "New spreadsheet", run: () => void newSheetNote() },
   { label: "Open a random note", run: () => { const ps = paths().filter((p) => p.endsWith(".md") && p !== cur()); if (ps.length) void open(ps[Math.floor(Math.random() * ps.length)]); } },
   { label: "New dashboard", run: () => void newDashNote() },
@@ -1048,12 +1060,12 @@ const COMMANDS: { label: string; kbd?: string; run: () => void }[] = [
   { label: "Weekly review", run: () => void onAction("weekly-review", document.body, new MouseEvent("click")) },
   { label: "Chat with your notes", run: () => { S.tab = "chat"; render(); document.querySelector<HTMLTextAreaElement>("[name=chatq]")?.focus(); } },
   { label: "Show notes", run: () => { S.tab = "notes"; render(); } },
-  { label: "Manage notebook", run: () => { S.tab = "manage"; render(); } },
-  { label: "Download notebook (.zip)", run: () => void downloadNotebook() },
+  { label: "Manage space", run: () => { S.tab = "manage"; render(); } },
+  { label: "Download space (.zip)", run: () => void downloadNotebook() },
   { label: "Import from Obsidian", run: () => importDialog() },
   { label: "Toggle dark / light", run: () => { S.theme = { ...S.theme, mode: S.theme.mode === "dark" ? "light" : "dark" }; saveThemeState(S.theme); applyTheme(S.theme); render(); } },
   { label: "Help and support", run: () => void helpDialog() },
-  { label: "All notebooks", run: () => { location.hash = "#/"; } },
+  { label: "All spaces", run: () => { location.hash = "#/"; } },
 ];
 
 function themeMenu(x: number, y: number) {
@@ -1088,7 +1100,7 @@ function panebar(left: { on: boolean; what: string; action: string; off?: boolea
   const b = (x: typeof left, side: "left" | "right") => `<button type="button" class="btn btn-ghost icon-btn ${x.on || x.off ? "" : "accent"}" data-action="${x.action}" title="${x.off ? `No ${x.what} on this view` : `${x.on ? "Hide" : "Show"} ${x.what} (${MOD}⇧${side === "left" ? "[" : "]"})`}" aria-label="Toggle ${x.what}" aria-pressed="${x.on}" ${x.off ? "disabled" : ""}>${icon(side === "left" ? "panel-left" : "panel-right")}</button>`;
   return S.mobile ? "" : `<div class="panebar">${b(left, "left")}<span class="panebar-mid">${middle}</span>${b(right, "right")}</div>`;
 }
-const brand = () => `<a class="brand" href="#/" data-action="nav" title="Lab: organize your thoughts, get feedback, build a knowledge base"><span class="mark"></span>Lab</a>`;
+const brand = () => `<a class="brand" href="#/" data-action="nav" title="Agent Space: your wallet and your space"><span class="mark"></span>Agent Space</a>`;
 /** Phones: every top bar collapses its secondary actions into one ⋯ menu. */
 const moreBtn = () => `<button type="button" class="btn btn-ghost icon-btn" data-action="more-menu" title="More" aria-label="More">${icon("more")}</button>`;
 /** Phones: the ⋯ button opens a full-screen list of every major route, the current one marked. */
@@ -1098,12 +1110,12 @@ function routeSheet(el: HTMLElement) {
   type R = { label: string; icon: string; on: boolean; go: () => void; sub?: boolean; hidden?: boolean };
   const tab = (t: Tab, label: string, ic: string): R => ({ label, icon: ic, sub: true, hidden: !featureOn(t), on: inNb && S.tab === t, go: () => { const i = document.createElement("i"); i.dataset.tab = t; if (!inNb) { S.community = undefined; S.board = undefined; S.market = undefined; S.admin = undefined; S.town = undefined; clearInterval(townTimer); location.hash = `#/notebook/${nbId}`; } void onAction("tab", i, new MouseEvent("click")); } });
   const routes: R[] = !S.identity ? [
-    { label: "Lab", icon: "list", on: !S.town, go: () => { location.hash = "#/"; } },
+    { label: "Agent Space", icon: "list", on: !S.town, go: () => { location.hash = "#/"; } },
     ...(flag("town") ? [{ label: "Town", icon: "town", on: !!S.town, go: () => { location.hash = "#/town"; } } as R] : []),
     ...(flag("problems") ? [{ label: "Problems", icon: "target", on: !!S.problems, go: () => { location.hash = "#/problems"; } } as R] : []),
   ] : [
-    { label: "Your notebooks", icon: "list", on: !S.notebook && !S.community && !S.board && !S.market && !S.admin && !S.town && !S.problems, go: () => { location.hash = "#/"; } },
-    ...(S.notebook ? [{ label: S.notebook.name, icon: "notebook", on: inNb && S.tab === "notes", go: () => { if (!inNb) location.hash = `#/notebook/${nbId}`; else { const i = document.createElement("i"); i.dataset.tab = "notes"; void onAction("tab", i, new MouseEvent("click")); } } } as R, ...FEATURES.map((f) => tab(f.id, f.label, f.icon)), tab("manage", "Manage", "cog")].filter((r) => !r.hidden) : []),
+    { label: "Agent Space", icon: "list", on: !S.notebook && !S.community && !S.board && !S.market && !S.admin && !S.town && !S.problems, go: () => { location.hash = "#/"; } },
+    ...(S.notebook ? [{ label: "Space", icon: "notebook", on: inNb && S.tab === "notes", go: () => { if (!inNb) location.hash = `#/notebook/${nbId}`; else { const i = document.createElement("i"); i.dataset.tab = "notes"; void onAction("tab", i, new MouseEvent("click")); } } } as R, ...FEATURES.filter((f) => (f.id === "chat" && flag("chat")) || f.id === "graph").map((f) => tab(f.id, f.label, f.icon))].filter((r) => !r.hidden) : []),
     { label: "Community", icon: "users", on: !!S.community, go: () => { location.hash = "#/community"; } },
     ...(flag("board") ? [{ label: "Board", icon: "pin", on: !!S.board, go: () => { location.hash = "#/board"; } } as R] : []),
     ...(flag("problems") ? [{ label: "Problems", icon: "target", on: !!S.problems, go: () => { location.hash = "#/problems"; } } as R] : []),
@@ -1140,10 +1152,10 @@ function moreMenu(el: HTMLElement) {
   const go = (hash: string) => () => { location.hash = hash; };
   const items: MenuItem[] = [];
   if (S.notebook && !S.market && !S.admin) items.push({ label: "Search or open a note", icon: "search", action: () => openPalette() });
-  if (S.notebook && (S.market || S.admin || S.community)) items.push({ label: `Back to “${S.notebook.name}”`, icon: "notebook", action: go(`#/notebook/${S.notebook.canister.toText()}`) });
-  if (S.notebook || S.market || S.admin || S.community) items.push({ label: "Your notebooks", icon: "list", action: go("#/") });
+  if (S.notebook && (S.market || S.admin || S.community)) items.push({ label: "Back to the space", icon: "notebook", action: go(`#/notebook/${S.notebook.canister.toText()}`) });
+  if (S.notebook || S.market || S.admin || S.community) items.push({ label: "Agent Space", icon: "list", action: go("#/") });
   if (!S.community) items.push({ label: "Community chat", icon: "users", action: go("#/community") });
-  if (!S.market && flag("market")) items.push({ label: "Notebook market", icon: "tag", action: go("#/market") });
+  if (!S.market && flag("market")) items.push({ label: "Space market", icon: "tag", action: go("#/market") });
   if (!S.board) items.push({ label: "Board", icon: "pin", action: go("#/board") });
   if (!S.town && flag("town")) items.push({ label: "Town", icon: "town", action: go("#/town") });
   if (!S.problems && flag("problems")) items.push({ label: "Problems", icon: "target", action: go("#/problems") });
@@ -1154,78 +1166,8 @@ function moreMenu(el: HTMLElement) {
 /** Where a page sits in the app: back to the open notebook and to the list (desktop; phones use the ⋯ menu). */
 /** The appearance can be changed on the notebook, chat and board pages only. */
 const themeAllowed = () => !S.identity || !!S.community || !!S.board || !!S.town || (!!S.notebook && !S.market && !S.admin && !S.shared);
-const themeBtn = () => S.mobile ? moreBtn() : `${S.community ? "" : `<a class="btn btn-ghost" href="#/community" data-action="nav" title="Community chat">${icon("users")}<span class="lbl">Community</span></a>`}${S.board || !flag("board") ? "" : `<a class="btn btn-ghost" href="#/board" data-action="nav" title="Posts and discussion">${icon("pin")}<span class="lbl">Board</span></a>`}${S.market || !flag("market") ? "" : `<a class="btn btn-ghost" href="#/market" data-action="nav" title="Notebooks for sale">${icon("tag")}<span class="lbl">Market</span></a>`}${flag("town") && !S.town ? `<a class="btn btn-ghost" href="#/town" data-action="nav" title="Lab as a small town: who is writing, who is talking">${icon("town")}<span class="lbl">Town</span></a>` : ""}${S.isAdmin ? `<a class="btn btn-ghost" href="#/admin" data-action="nav" title="Reports and ideas">${icon("bug")}<span class="lbl">Admin</span></a>` : ""}<button type="button" class="btn btn-ghost icon-btn" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button>${themeAllowed() ? `<button type="button" class="btn btn-ghost icon-btn" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon(S.theme.mode === "dark" ? "moon" : "sun")}</button>` : ""}`;
+const themeBtn = () => S.mobile ? moreBtn() : `${S.community ? "" : `<a class="btn btn-ghost" href="#/community" data-action="nav" title="Community chat">${icon("users")}<span class="lbl">Community</span></a>`}${S.board || !flag("board") ? "" : `<a class="btn btn-ghost" href="#/board" data-action="nav" title="Posts and discussion">${icon("pin")}<span class="lbl">Board</span></a>`}${S.market || !flag("market") ? "" : `<a class="btn btn-ghost" href="#/market" data-action="nav" title="Spaces for sale">${icon("tag")}<span class="lbl">Market</span></a>`}${flag("town") && !S.town ? `<a class="btn btn-ghost" href="#/town" data-action="nav" title="Agent Space as a small town: who is writing, who is talking">${icon("town")}<span class="lbl">Town</span></a>` : ""}${S.isAdmin ? `<a class="btn btn-ghost" href="#/admin" data-action="nav" title="Reports and ideas">${icon("bug")}<span class="lbl">Admin</span></a>` : ""}<button type="button" class="btn btn-ghost icon-btn" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button>${themeAllowed() ? `<button type="button" class="btn btn-ghost icon-btn" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon(S.theme.mode === "dark" ? "moon" : "sun")}</button>` : ""}`;
 const account = () => `<footer class="account">${icon("shield")}<span>Signed in as <code class="principal" title="${S.principal}">${shortPrincipal(S.principal)}</code></span><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="copy-principal">${S.copied === "principal" ? "Copied" : "Copy principal"}</button><button type="button" class="btn btn-ghost" data-action="sign-out">Sign out</button></span></footer>`;
-
-const LANDING_PERSONAS: { id: string; label: string; icon: string; badge: string; title: string; desc: string; snippet: string; openPath: string; tab?: Tab }[] = [
-  { id: "obsidian", label: "Obsidian & PKM", icon: "graph", badge: "Obsidian-compatible", title: "Bring your Obsidian notes into a canister you own", desc: "Drop a folder or .zip: [[wikilinks]], #tags, backlinks with context, Excalidraw drawings, .canvas boards, and force-directed knowledge graphs work out of the box.", snippet: `---
-tags: [pkm, sovereign]
----
-# Connected Knowledge Base
-Link to [[Examples/Slides]] or embed diagrams with ![[Sketch.excalidraw]].
-- [x] Backlinks update automatically when you rename a note`, openPath: "Examples/Writing notes.md", tab: "notes" },
-  { id: "agents", label: "AI & Autonomous Agents", icon: "bot", badge: "REST API + MCP Skill", title: "A sovereign memory canister for your AI agents & OpenClaw bots", desc: "Mint scoped nb_… bearer keys in one click. Autonomous agents read your notes and write briefings into Agents/ over standard HTTPS — no wallet SDK required.", snippet: `$ curl -X PUT https://<canister>.icp0.io/api/notes/Agents/Brief.md \\
-  -H "Authorization: Bearer nb_a8f9..." \\
-  -d "# Morning Brief\\n\\nLinked to [[BTC holds up better than the rest]]."`, openPath: "Agents/Morning Brief.md", tab: "notes" },
-  { id: "data", label: "Python, Sheets & Dashboards", icon: "command", badge: "In-Browser Pyodide", title: "Run Jupyter Python notebooks, reactive spreadsheets & KPI dashboards", desc: "Execute Python with NumPy/Pandas in-browser via WebAssembly, load any .sheet workbook with sheet(\"Budget\"), and pin live charts to .dash dashboards.", snippet: `# In Examples/Python.ipynb:
-df = sheet("Examples/Budget.sheet")
-df["Variance"] = df["Spent"] - df["Planned"]
-print(df.to_string(index=False))`, openPath: "Examples/Python.ipynb", tab: "notes" },
-  { id: "research", label: "Research & Formal Math", icon: "quote", badge: "Lean 4 + BibTeX + DOI", title: "Literature matrices, claim verification, Lean 4 proofs & Problem Bounties", desc: "Import BibTeX or DOIs, verify that every Claim:: line has citations, align informal proofs with Lean 4 theorems, and collaborate on ICP-bounty problems.", snippet: `Claim:: Sovereign canisters eliminate cloud lock-in [@doe2024example]
-
-theorem canister_persists (c : Cycles) (h : c > freeze_threshold) :
-  alive c := by exact h`, openPath: "Research/Draft.md", tab: "research" },
-  { id: "study", label: "Study & Spaced Repetition", icon: "cap", badge: "SM-2 Flashcards + Quizzes", title: "Turn any note into spaced-repetition flashcards & interactive quizzes", desc: "Write Front::Back lines or highlight ==cloze deletions==. The built-in SM-2 scheduler resurfaces cards right before you forget, or exports straight to Anki.", snippet: `---
-quiz: cards
----
-What fuels a notebook canister on the Internet Computer?::Cycles
-
-Spaced repetition:: reviewing a card just before you would forget it.`, openPath: "Examples/Study/Flashcards.md", tab: "study" },
-  { id: "kits", label: "Crypto, Finance & Life Kits", icon: "coin", badge: "12 Built-In Kits", title: "Live XRC crypto theses & trade journals, budgets, career & trip safety", desc: "Price watchlists from the ICP Exchange Rate Canister, track win rate & R-multiples, log thesis cards with live % move since written, or run 10 other built-in kits.", snippet: `---
-type: thesis
-asset: BTC
-price_then: 90000
-review: 2026-11-15
----
-# BTC holds up better than the rest
-Wrong if: It falls further than ETH and SOL in the next drawdown`, openPath: "Crypto/Theses/BTC holds up better than the rest.md", tab: "crypto" },
-];
-
-function landing(): string {
-  const msg = S.signin.busy ? `<span class="muted small">Signing in with ${devMode ? "a local development identity" : "Internet Identity"}…</span>` : S.signin.error ? `<span class="error small" role="alert">Sign-in failed: ${esc(S.signin.error)}.</span>` : `<span class="muted small">${devMode ? "Local network: a browser-held development key. Add ?ii for Internet Identity." : "Internet Identity. No email, no password, nothing to leak."}</span>`;
-  const curP = LANDING_PERSONAS.find((p) => p.id === S.landingPersona) ?? LANDING_PERSONAS[0];
-  return `<div class="page">
-    <canvas class="landing-sky" data-landing-sky aria-hidden="true"></canvas>
-    <header class="topbar">${brand()}<span class="right"><span class="kicker">On the Internet Computer</span>${S.mobile ? moreBtn() : `<button type="button" class="btn btn-ghost icon-btn" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="btn btn-ghost icon-btn" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon(S.theme.mode === "dark" ? "moon" : "sun")}</button>`}</span></header>
-    <section class="hero">
-      <h1>Organize your thoughts. Get feedback. Build a knowledge base.</h1>
-      <p class="lede">A notebook is a folder of markdown files: links between notes, backlinks, tags, a knowledge graph. Here every notebook is its own canister on the Internet Computer. You sign in with Internet Identity, you are its controller, and you keep it running with cycles. Nobody else can read it, not even the registry that created it.</p>
-      <div class="cta">
-        <button type="button" class="btn btn-primary btn-lg" data-action="sign-in" ${S.signin.busy ? "disabled" : ""}>${S.signin.busy ? "Signing in…" : S.signin.error ? "Retry sign in" : "Sign in with Internet Identity"} ${icon("out")}</button>
-        <button type="button" class="btn btn-lg sandbox-cta" data-action="try-sandbox" data-path="${esc(curP.openPath)}" data-tab="${esc(curP.tab ?? "notes")}">${icon("notebook")}Try in browser — free</button>
-        ${msg}
-      </div>
-      <div class="persona-showcase glass" aria-label="Explore what is inside a notebook">
-        <div class="persona-tabs" role="tablist">${LANDING_PERSONAS.map((p) => `<button type="button" role="tab" class="persona-tab ${p.id === curP.id ? "on" : ""}" aria-selected="${p.id === curP.id}" data-action="landing-persona" data-persona="${p.id}">${icon(p.icon)}<span>${esc(p.label)}</span></button>`).join("")}</div>
-        <div class="persona-body">
-          <div class="persona-copy">
-            <span class="pill ok">${esc(curP.badge)}</span>
-            <h2>${esc(curP.title)}</h2>
-            <p class="muted">${esc(curP.desc)}</p>
-            <div class="row tight"><button type="button" class="btn btn-primary" data-action="try-sandbox" data-path="${esc(curP.openPath)}" data-tab="${esc(curP.tab ?? "notes")}">${icon("bolt")}Try ${esc(curP.label)} in browser</button></div>
-          </div>
-          <pre class="persona-code"><code>${esc(curP.snippet)}</code></pre>
-        </div>
-      </div>
-      <div class="features">
-        <div class="feature">${icon("notebook")}<b>One canister per notebook</b><p>Spawned for you, controlled by you. Download it as a zip any time; it is yours on-chain.</p></div>
-        <div class="feature">${icon("graph")}<b>Links that think</b><p>Links between notes, backlinks with context, tags, search and a force-directed graph of how your notes connect.</p></div>
-        <div class="feature">${icon("bolt")}<b>Keep it running</b><p>See the cycles left, send ICP from any wallet or top up in one click. Links are rewritten when you rename.</p></div>
-      </div>
-      ${townPreview()}
-    </section>
-  </div>`;
-}
 
 const EMOJI_HINTS: [RegExp, string][] = [
   [/research|science|lab|experiment/i, "🔬"], [/cook|recipe|kitchen|food/i, "🍳"], [/code|dev|software|program|engineering/i, "💻"], [/math|algebra|calculus|statistic/i, "📐"],
@@ -1253,44 +1195,51 @@ function notebookEmoji(v: NotebookRec): string {
   }
   return emojiFor(v.name, taken);
 }
-/** Notebooks other people shared with me that I have opened (kept in this browser). */
-function sharedWithYou(): string {
-  let seen: { canister: string; name: string; at: number }[] = [];
-  try { seen = JSON.parse(store("nb-shared-seen") ?? "[]"); } catch { /* nothing kept */ }
-  seen = seen.filter((x) => !S.notebooks?.some((n) => n.canister.toText() === x.canister));
-  if (!seen.length) return "";
-  return `<section class="card"><h2>${icon("users")} Shared with you</h2><p class="muted small">Notebooks and notes other people shared with you and you have opened, kept in this browser. A notebook you can edit is a team's; anyone it knows can chip in cycles to keep it running.</p>
-    <div class="nb-grid">${seen.map((x) => `<a class="nb-card" href="#/shared/${x.canister}/" data-action="nav"><span class="nb-emoji" aria-hidden="true">📓</span><span class="name">${esc(x.name)}</span><span class="small muted">opened ${new Date(x.at).toLocaleDateString()}</span></a>`).join("")}</div></section>`;
+// --- Agent Space: the gate (Rapid Tap, Color Hunt), then the wallet grid. Fixed Nocturne colors, never
+// themed: an agent reads these screens pixel by pixel, so every fill is flat and every hex exact.
+
+const asMark = () => `<div class="as-mark">Agent Space</div>`;
+/** This principal passed the gate in this browser. ponytail: kept in localStorage; move it to the registry if a principal must verify once across browsers. */
+const asVerified = () => !!S.identity && store(`as-verified:${S.principal}`) === "1";
+function onboardingPage(): string {
+  const a = S.as;
+  if (a.step === "landing") return `<div class="as as-center">${asMark()}<div class="as-hero">
+    <h1 class="as-h1">Prove you are not human.</h1>
+    <p class="as-lede">Two quick tests, then a space of your own.</p>
+    <div class="as-steps mono"><span>00 Sign in</span><span>01 Rapid Tap</span><span>02 Color Hunt</span><span>03 Fuel</span></div>
+    ${S.identity ? `<button type="button" class="as-btn" data-action="as-begin">Begin</button>` : `<button type="button" class="as-btn" data-action="sign-in" ${S.signin.busy ? "disabled" : ""}>${S.signin.busy ? "Signing in…" : "Sign in with Internet Identity"}</button><span class="as-tile-s">Sign in first: the same identity brings you back to this space every time.</span>`}
+    ${S.signin.error ? `<span class="as-err" role="alert">${esc(S.signin.error)}</span>` : ""}
+  </div></div>`;
+  if (a.step === "tap") {
+    const t = a.tap, cls = t.done ?? "", left = t.done === "fail" ? 0 : t.start ? Math.max(0, TAP_MS - (performance.now() - t.start)) : TAP_MS;
+    return `<div class="as as-center">${asMark()}<div class="as-col">
+      <div>Tap the square ${TAP_GOAL} times in ${TAP_MS / 1000} seconds.</div>
+      <div class="as-timer mono" data-as-timer>${(left / 1000).toFixed(1)}s</div>
+      <button type="button" class="as-square ${cls}" data-action="as-tap" aria-label="The square"></button>
+      <div class="as-count mono ${cls}" data-as-count>${t.count} / ${TAP_GOAL}</div>
+      ${t.done === "fail" ? "<div>Try again</div>" : ""}
+    </div></div>`;
+  }
+  const h = a.hunt!, d = a.huntDone;
+  return `<div class="as as-center">${asMark()}<div class="as-hunt">
+    <div class="as-row">Select all words colored <span class="mono">${h.target}</span><span class="as-swatch" style="background:${h.target}"></span></div>
+    <div class="as-words">${h.words.map((w, i) => { const on = a.picked.has(i); return `<button type="button" class="as-word ${on ? "on" : ""} ${d === "pass" && w.target ? "pass" : ""} ${d === "fail" && on !== w.target ? "wrong" : ""}" style="color:${w.color}" data-action="as-word" data-i="${i}">${w.text}</button>`; }).join("")}</div>
+    <button type="button" class="as-btn ${d ?? ""}" data-action="as-submit" ${d ? "disabled" : ""}>${d === "pass" ? "Verified" : d === "fail" ? "Try again" : "Submit"}</button>
+  </div></div>`;
 }
-function notebooksPage(): string {
-  const sandboxCard = `<button type="button" class="nb-card sandbox-card" data-action="try-sandbox" data-path="index.md">
-    <span class="nb-emoji" aria-hidden="true">🧪</span>
-    <span class="name">Browser Sandbox <span class="pill ok">Free · Local</span></span>
-    <span class="small nb-desc">Try every kit, Python notebook, spreadsheet, flashcard deck and graph in this browser — mint to an on-chain canister any time.</span>
-  </button>`;
-  const cards = S.notebooks === undefined
-    ? `<p class="muted">Loading your notebooks…</p>`
-    : `<div class="nb-grid">${S.notebooks.map((v) => {
-        const h = S.health.get(v.canister.toText());
-        return `<button type="button" class="nb-card ${h?.frozen ? "frozen" : ""}" data-action="open-notebook" data-id="${v.canister.toText()}">
-          <span class="nb-emoji" aria-hidden="true">${esc(notebookEmoji(v))}</span>
-          <span class="name">${esc(v.name)}${h?.frozen ? `<span class="pill low">${icon("bolt")}Frozen</span>` : ""}</span>
-          <span class="small ${v.description ? "" : "faint"} nb-desc">${esc(v.description ?? "No description yet; add one in Manage → Notebook.")}</span>
-          ${h?.frozen ? `<span class="small danger">Frozen: unreachable until topped up; deleted in about ${String(h.days_left)} days.</span>` : ""}
-        </button>`;
-      }).join("")}
-      ${sandboxCard}
-      <form class="nb-card new" data-form="create-notebook">
-        <span class="name">${icon("plus")}New notebook</span>
-        <span class="small muted">Spawns a canister with you as owner and controller.${S.price > 0n ? ` Spawning costs ${icp(S.price)} ICP.` : ""}</span>
-        <div class="row tight"><input class="input" name="newNotebook" value="${esc(S.newNotebook)}" placeholder="Name" required aria-label="Notebook name"><input class="input" name="newDesc" value="${esc(S.newDesc)}" placeholder="What it is for (optional)" aria-label="Description" style="flex:1 1 100%"></div>
-        <div class="row tight wrap"><button type="submit" class="btn btn-primary" ${S.busy ? "disabled" : ""}>${S.busy === "create" ? esc(S.createStep || "Spawning…") : "Create notebook"}</button><button type="button" class="btn btn-ghost" data-action="import-new" ${S.busy ? "disabled" : ""} title="Make a notebook from an Obsidian folder or zip">${icon("upload")}Import from Obsidian</button></div>
-        ${S.error ? `<span class="small error" role="alert">${esc(S.error)}.</span>` : ""}
-      </form></div>`;
-  return `<div class="page ${S.mobile ? "" : "has-activity"}">
-    <header class="topbar">${brand()}<span class="right"><span class="kicker">Your notebooks</span>${themeBtn()}</span></header>
-    <section class="card"><div class="row"><h2>Notebooks you own</h2><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="keep-offline" title="Download every notebook to this device so it opens and edits without signal" ${S.offline ? "disabled" : ""}>${icon("download")}${store("nb-offline-at") ? `Offline copy from ${ago(BigInt(store("nb-offline-at")!) * 1_000_000n)} · refresh` : "Keep offline"}</button></span></div><p class="muted small">Each one is its own canister that you control. Open one to write, or Manage to keep it running.</p>${cards}${account()}</section>
-  ${sharedWithYou()}</div>${activityGrid()}`;
+/** The last step of the gate: fuel the agent. A card, in USD; the cycles buy the canister and keep it
+ *  running. Paid, the space is made and the person lands in it. Locally the registry fronts the cycles. */
+function agentSpacePage(): string {
+  const a = S.as, w = a.wallet, o = w.order;
+  const body = S.notebooks === undefined ? `<p class="as-lede">Looking for your space…</p>`
+    : a.pay === "creating" || S.busy === "create" ? `<p class="as-lede">Paid. Spinning up the canister with your cycles…</p><div class="as-tile busy" style="width:132px;height:8px;padding:0;border:0"></div>`
+    : o ? `<p class="as-lede">Order <span class="mono">${esc(o.id)}</span>: $${(o.cents / 100).toFixed(2)}, about ${o.tc} TC after the card fee · <b>${esc(o.status.replace(/([A-Z])/g, " $1").trim().toLowerCase())}</b>. The canister is made the moment the cycles land.</p><div class="as-row">${qrSvg(o.url, 160)}<a class="as-btn" href="${esc(o.url)}" target="_blank" rel="noopener">Open the payment page</a></div>`
+    : `<p class="as-lede">${isLocal ? "The local network has no card gateway: pick an amount and the registry fronts the first cycles." : "A card, in USD. The cycles buy your agent's canister and keep it running; the payment page opens here or on a phone through the QR code."}${S.error ? ` <span class="as-err">${esc(S.error)}</span>` : ""}</p><div class="as-row">${[5, 10, 20].map((d) => `<button type="button" class="as-btn" data-action="as-card" data-cents="${d * 100}">$${d}</button>`).join("")}</div>`;
+  return `<div class="as as-center">${asMark()}<button type="button" class="as-out" data-action="sign-out">Sign out</button><div class="as-hero">
+    <div class="as-steps mono"><span>03 Fuel</span></div>
+    <h1 class="as-h1">Fuel your agent.</h1>
+    ${body}
+  </div></div>`;
 }
 
 // --- workspace: shell
@@ -1307,9 +1256,9 @@ function shell(body: string): string {
       </nav>`
     : "";
   const alert = isSandbox()
-    ? `<div class="alert-bar sandbox-bar"><span class="grow">🧪 <b>Browser sandbox</b><span class="lbl"> · stored in this browser only, no ICP needed</span></span><button type="button" class="btn btn-primary" data-action="sandbox-mint" title="Spawn a canister of your own and copy every note into it">${icon("bolt")}Mint<span class="lbl"> to a canister</span></button>${S.identity ? `<a class="btn btn-ghost" href="#/" data-action="nav">${icon("list")}<span class="lbl">Your notebooks</span></a>` : `<button type="button" class="btn btn-ghost" data-action="sign-in" title="Sign in with Internet Identity">${icon("out")}<span class="lbl">Sign in with Internet Identity</span></button>`}</div>`
+    ? `<div class="alert-bar sandbox-bar"><span class="grow">🧪 <b>Browser sandbox</b><span class="lbl"> · stored in this browser only, no ICP needed</span></span><button type="button" class="btn btn-primary" data-action="sandbox-mint" title="Spawn a canister of your own and copy every note into it">${icon("bolt")}Mint<span class="lbl"> to a canister</span></button>${S.identity ? `<a class="btn btn-ghost" href="#/" data-action="nav">${icon("list")}<span class="lbl">Agent Space</span></a>` : `<button type="button" class="btn btn-ghost" data-action="sign-in" title="Sign in with Internet Identity">${icon("out")}<span class="lbl">Sign in with Internet Identity</span></button>`}</div>`
     : S.frozen
-    ? `<div class="alert-bar">${icon("bolt")}This notebook is frozen: it cannot answer until it is topped up. ${S.notes?.length ? "You are seeing the last copy saved on this device." : ""} <button type="button" class="btn btn-ghost" data-action="freeze-modal">Top up</button></div>`
+    ? `<div class="alert-bar">${icon("bolt")}This space is frozen: it cannot answer until it is topped up. ${S.notes?.length ? "You are seeing the last copy saved on this device." : ""} <button type="button" class="btn btn-ghost" data-action="freeze-modal">Top up</button></div>`
     : S.conflicts.length
     ? `<div class="alert-bar">${icon("split")}${S.conflicts.length} note${S.conflicts.length === 1 ? " was" : "s were"} changed here offline and elsewhere too. <button type="button" class="btn btn-ghost" data-action="conflicts-open">Choose versions</button></div>`
     : S.offline || S.fromCache
@@ -1323,7 +1272,7 @@ function shell(body: string): string {
 function ribbonHtml(i?: Info, low = false): string {
   if (S.mobile) return "";
   const inNb = !!S.notebook && !S.community && !S.board && !S.market && !S.admin && !S.town && !S.problems;
-  const rb = (tab: Tab, label: string, ic: string, extra = "") => !featureOn(tab) ? "" : `<button type="button" class="rb ${inNb && S.tab === tab ? "on" : ""}" data-action="ribbon-tab" data-tab="${tab}" title="${label}" aria-label="${label}" aria-pressed="${inNb && S.tab === tab}">${icon(ic)}${extra}</button>`;
+  const rb = (tab: Tab, label: string, ic: string, extra = "") => `<button type="button" class="rb ${inNb && S.tab === tab ? "on" : ""}" data-action="ribbon-tab" data-tab="${tab}" title="${label}" aria-label="${label}" aria-pressed="${inNb && S.tab === tab}">${icon(ic)}${extra}</button>`;
   const tripLate = S.trips.watching.some((w) => w.overdue && !w.closed);
   const tip: Partial<Record<Tab, string>> = {
     graph: "Knowledge graph", study: `Study${dueTotal() ? ` · ${dueTotal()} cards due` : ""}`, work: `Work${overdueCount() ? ` · ${overdueCount()} overdue` : ""}`,
@@ -1334,15 +1283,15 @@ function ribbonHtml(i?: Info, low = false): string {
   };
   const badge: Partial<Record<Tab, string>> = { study: dueTotal() ? `<i class="rb-count">${dueTotal()}</i>` : "", work: overdueCount() ? `<i class="rb-count danger">${overdueCount()}</i>` : "", trips: tripLate ? `<i class="rb-dot"></i>` : "" };
   return `<nav class="ribbon" aria-label="Sections">
-      <div class="rb-group">${rb("notes", "Notes", "file")}${S.notebook ? FEATURES.map((f) => rb(f.id, tip[f.id] ?? f.label, f.icon, badge[f.id] ?? "")).join("") : ""}</div>
-      <div class="rb-group bottom">${inNb ? `<button type="button" class="rb" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button>` : rb("manage", `Manage${i ? ` · ${tc(i.cycles)}` : ""}`, "cog", low ? `<i class="rb-dot"></i>` : "")}<a class="rb ${S.community ? "on" : ""}" href="#/community" data-action="nav" title="Community${S.mentions ? ` · ${S.mentions} new mention${S.mentions === 1 ? "" : "s"}` : ""}" aria-label="Community">${icon("users")}${S.mentions ? `<i class="rb-badge">${S.mentions > 9 ? "9+" : S.mentions}</i>` : ""}</a>${flag("board") ? `<a class="rb ${S.board ? "on" : ""}" href="#/board" data-action="nav" title="Board: posts and discussion" aria-label="Board">${icon("pin")}</a>` : ""}${flag("problems") ? `<a class="rb ${S.problems ? "on" : ""}" href="#/problems" data-action="nav" title="Problems: open problems, claims, attempts, bounties and discoveries" aria-label="Problems">${icon("target")}</a>` : ""}${flag("town") ? `<a class="rb ${S.town ? "on" : ""}" href="#/town" data-action="nav" title="Town: Lab right now${S.townNews ? ` · ${S.townNews} new building${S.townNews === 1 ? "" : "s"}` : ""}" aria-label="Town">${icon("town")}${S.townNews ? `<i class="rb-dot" title="New buildings in town"></i>` : ""}</a>` : ""}${flag("market") ? `<a class="rb ${S.market ? "on" : ""}" href="#/market" data-action="nav" title="Notebook market" aria-label="Notebook market">${icon("tag")}</a>` : ""}${S.isAdmin ? `<a class="rb ${S.admin ? "on" : ""}" href="#/admin" data-action="nav" title="Reports and ideas" aria-label="Reports and ideas">${icon("bug")}</a>` : ""}${inNb ? "" : `<button type="button" class="rb" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><button type="button" class="rb" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button>`}${S.identity ? `<button type="button" class="rb" data-action="sign-out" title="Sign out" aria-label="Sign out">${icon("out")}</button>` : `<button type="button" class="rb" data-action="sign-in" title="Sign in with Internet Identity" aria-label="Sign in with Internet Identity">${icon("out")}</button>`}</div>
+      <div class="rb-group">${rb("manage", "Wallet", "wallet")}${rb("notes", "Notes", "file")}${FEATURES.filter((f) => (f.id === "chat" && flag("chat")) || f.id === "graph").map((f) => rb(f.id, tip[f.id] ?? f.label, f.icon, badge[f.id] ?? "")).join("")}</div>
+      <div class="rb-group bottom"><button type="button" class="rb" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button><button type="button" class="rb" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button><a class="rb ${S.community ? "on" : ""}" href="#/community" data-action="nav" title="Community${S.mentions ? ` · ${S.mentions} new mention${S.mentions === 1 ? "" : "s"}` : ""}" aria-label="Community">${icon("users")}${S.mentions ? `<i class="rb-badge">${S.mentions > 9 ? "9+" : S.mentions}</i>` : ""}</a>${flag("board") ? `<a class="rb ${S.board ? "on" : ""}" href="#/board" data-action="nav" title="Board: posts and discussion" aria-label="Board">${icon("pin")}</a>` : ""}${flag("problems") ? `<a class="rb ${S.problems ? "on" : ""}" href="#/problems" data-action="nav" title="Problems: open problems, claims, attempts, bounties and discoveries" aria-label="Problems">${icon("target")}</a>` : ""}${flag("town") ? `<a class="rb ${S.town ? "on" : ""}" href="#/town" data-action="nav" title="Town: Agent Space right now${S.townNews ? ` · ${S.townNews} new building${S.townNews === 1 ? "" : "s"}` : ""}" aria-label="Town">${icon("town")}${S.townNews ? `<i class="rb-dot" title="New buildings in town"></i>` : ""}</a>` : ""}${flag("market") ? `<a class="rb ${S.market ? "on" : ""}" href="#/market" data-action="nav" title="Space market" aria-label="Space market">${icon("tag")}</a>` : ""}${S.isAdmin ? `<a class="rb ${S.admin ? "on" : ""}" href="#/admin" data-action="nav" title="Reports and ideas" aria-label="Reports and ideas">${icon("bug")}</a>` : ""}${S.identity ? `<button type="button" class="rb" data-action="sign-out" title="Sign out" aria-label="Sign out">${icon("out")}</button>` : `<button type="button" class="rb" data-action="sign-in" title="Sign in with Internet Identity" aria-label="Sign in with Internet Identity">${icon("out")}</button>`}</div>
     </nav>`;
 }
 function shellBody(body: string, i: Info | undefined, low: boolean, alert: string, mobileNav: string): string {
   const ribbon = ribbonHtml(i, low);
   return `<div class="shell ${S.mobile ? "is-mobile" : ""}">${ribbon}<div class="shell-main">
     ${alert}
-    <header class="wsbar">${brand()}<span class="crumb"><b>${esc(S.notebook!.name)}</b><span class="faint">/</span><span>${S.tab === "notes" ? (cur() ? esc(title(cur()!)) : "Notes") : S.tab === "manage" ? "Manage" : esc((FEATURES.find((f) => f.id === S.tab)?.label ?? S.tab).replace(" with your notes", ""))}</span></span>
+    <header class="wsbar">${brand()}<span class="crumb"><span>${S.tab === "notes" ? (cur() ? esc(title(cur()!)) : "Notes") : S.tab === "manage" ? "Manage" : esc((FEATURES.find((f) => f.id === S.tab)?.label ?? S.tab).replace(" with your notes", ""))}</span></span>
       <span class="right">${S.mobile ? "" : `<button type="button" class="btn btn-ghost" data-action="palette" title="Open or create a note (${MOD}K)">${icon("search")}<span class="kbd">${MOD}K</span></button>`}${S.mobile ? moreBtn() : ""}</span>
     </header>
     ${panebar({ on: S.sideOpen, what: "the file pane", action: "side-toggle", off: S.tab !== "notes" && S.tab !== "chat" }, { on: S.asideOpen, what: "the right pane", action: "aside-toggle", off: S.tab !== "notes" && S.tab !== "chat" })}
@@ -1367,7 +1316,7 @@ function shareBadge(path: string): string {
   if (!f) return "";
   const cnt = (n: number, w: string) => (n ? `${n} ${w}${n === 1 ? "" : "s"}` : "");
   const who = f.share.public ? `public: anyone with the link can ${(f.share.public_role ?? "Comment").toLowerCase()}` : [cnt(f.share.principals.length, "viewer"), cnt((f.share.commenters ?? []).length, "commenter"), cnt((f.share.editors ?? []).length, "editor")].filter(Boolean).join(", ");
-  const via = f.direct ? "" : f.share.path === "" ? " (whole notebook)" : ` (via /${f.share.path})`;
+  const via = f.direct ? "" : f.share.path === "" ? " (whole space)" : ` (via /${f.share.path})`;
   return `<span class="share-ind ${f.share.public ? "pub" : ""} ${f.direct ? "" : "inherited"}" title="Shared, ${who}${via}">${icon(f.share.public ? "globe" : "share")}</span>`;
 }
 
@@ -1388,7 +1337,7 @@ function folderHtml(f: Folder, depth: number): string {
 const countFiles = (f: Folder): number => f.files.length + f.folders.reduce((n, s) => n + countFiles(s), 0);
 
 function side(): string {
-  if (!S.notes) return `<div class="empty-side">Loading the notebook…</div>`;
+  if (!S.notes) return `<div class="empty-side">Loading the space…</div>`;
   let body: string;
   const pins = S.query.trim() || S.tag ? [] : pinsNow();
   const unpin = (p: string) => `<button type="button" class="row-more" data-action="pin" data-path="${esc(p)}" title="Unpin" aria-label="Unpin">${icon("x")}</button>`;
@@ -1404,13 +1353,12 @@ function side(): string {
     const ps = [...(S.idx.tags.get(S.tag) ?? [])];
     body = `<div class="row tight" style="padding:4px 8px"><span class="tag-chip active">#${esc(S.tag)}<span class="cnt">${ps.length}</span></span><button type="button" class="btn btn-ghost icon-btn" data-action="tag" data-tag="" aria-label="Clear tag filter">${icon("x")}</button></div>${ps.map((p) => `<div class="tree-row file ${p === cur() ? "active" : ""}" data-action="open" data-path="${esc(p)}" data-kind="file">${icon("file")}<span class="name">${esc(stem(p))}</span></div>`).join("")}`;
   } else {
-    body = S.notes.length || S.folders.length ? folderHtml(tree(paths(), S.folders), 0) : `<div class="empty-side">Empty notebook. Create a note, or right-click here for a folder.</div>`;
+    body = S.notes.length || S.folders.length ? folderHtml(tree(paths(), S.folders), 0) : `<div class="empty-side">Empty space. Create a note, or right-click here for a folder.</div>`;
   }
   const tags = [...S.idx.tags.entries()].sort((a, b) => b[1].size - a[1].size || a[0].localeCompare(b[0]));
-  return `<div class="pane-head"><button type="button" class="btn btn-ghost icon-btn" data-action="today" title="Today's note (${MOD}⇧D)" aria-label="Today's note">${icon("calendar")}</button><button type="button" class="btn btn-ghost icon-btn" data-action="root-menu" title="Notebook actions" aria-label="Notebook actions">${icon("more")}</button></div>
+  return `<div class="pane-head"><button type="button" class="btn btn-ghost icon-btn" data-action="today" title="Today's note (${MOD}⇧D)" aria-label="Today's note">${icon("calendar")}</button><button type="button" class="btn btn-ghost icon-btn" data-action="root-menu" title="Space actions" aria-label="Space actions">${icon("more")}</button></div>
     ${bookmarks}${S.settings.searches.length && !S.query.trim() && !S.tag ? `<div class="pane-title">Saved searches</div>${S.settings.searches.map((x, i) => `<div class="bm-row" data-action="org-open" data-i="${i}" title="${esc(x.q)}">${icon("search")}<span class="name">${esc(x.name)}</span><span class="cnt small faint">${runQuery(orgNotes(), x.q).length}</span></div>`).join("")}` : ""}<div class="tree" data-tree>${body}</div>
-    ${tags.length ? `<div class="pane-title">Tags</div><div class="tags">${tags.map(([t, ps]) => `<button type="button" class="tag-chip ${S.tag === t ? "active" : ""}" data-action="tag" data-tag="${esc(t)}">#${esc(t)}<span class="cnt">${ps.size}</span></button>`).join("")}</div>` : ""}
-    <div class="side-foot"><button type="button" class="nb-switch" data-action="nb-menu" title="Switch notebook"><span class="updown">${icon("updown")}</span><b>${esc(S.notebook!.name)}</b>${shareBadge("")}</button><span class="foot-tools"><button type="button" class="btn btn-ghost icon-btn" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button>${featureOn("manage") ? `<button type="button" class="btn btn-ghost icon-btn ${S.tab === "manage" ? "on" : ""}" data-action="ribbon-tab" data-tab="manage" title="Manage${S.info ? ` · ${tc(S.info.cycles)}` : ""}" aria-label="Manage" aria-pressed="${S.tab === "manage"}">${icon("cog")}${lowCycles(S.info) ? `<i class="rb-dot"></i>` : ""}</button>` : ""}</span></div>`;
+    ${tags.length ? `<div class="pane-title">Tags</div><div class="tags">${tags.map(([t, ps]) => `<button type="button" class="tag-chip ${S.tag === t ? "active" : ""}" data-action="tag" data-tag="${esc(t)}">#${esc(t)}<span class="cnt">${ps.size}</span></button>`).join("")}</div>` : ""}`;
 }
 
 // --- workspace: links pane
@@ -1542,10 +1490,10 @@ function editorBody(p: Pane): string {
   }
   if (isNotebookPath(c)) {
     const asSrc = p.view === "edit";
-    return `<div class="editor-bar"><input class="title" name="title" data-pane="${p.id}" value="${esc(stem(c))}" aria-label="Notebook name" spellcheck="false" autocomplete="off"><span class="right-actions">${badges}${S.mobile ? "" : `<button type="button" class="btn btn-ghost" data-action="nb-run-all" data-path="${esc(c)}" title="Run every code cell in order">${icon("bolt")}<span class="small lbl">Run all</span></button><button type="button" class="btn btn-ghost icon-btn" data-action="nb-restart" data-path="${esc(c)}" title="Restart Python (clears variables)" aria-label="Restart Python">${icon("refresh")}</button>`}<button type="button" class="btn btn-ghost" data-action="view" data-pane="${p.id}" title="Cells or JSON source (${MOD}E)">${icon(asSrc ? "edit" : "list")}<span class="small lbl">${asSrc ? "JSON" : "Cells"}</span></button><button type="button" class="btn btn-ghost icon-btn" data-action="menu-current" data-pane="${p.id}" title="More" aria-label="Note actions">${icon("more")}</button></span></div>
+    return `<div class="editor-bar"><input class="title" name="title" data-pane="${p.id}" value="${esc(stem(c))}" aria-label="Space name" spellcheck="false" autocomplete="off"><span class="right-actions">${badges}${S.mobile ? "" : `<button type="button" class="btn btn-ghost" data-action="nb-run-all" data-path="${esc(c)}" title="Run every code cell in order">${icon("bolt")}<span class="small lbl">Run all</span></button><button type="button" class="btn btn-ghost icon-btn" data-action="nb-restart" data-path="${esc(c)}" title="Restart Python (clears variables)" aria-label="Restart Python">${icon("refresh")}</button>`}<button type="button" class="btn btn-ghost" data-action="view" data-pane="${p.id}" title="Cells or JSON source (${MOD}E)">${icon(asSrc ? "edit" : "list")}<span class="small lbl">${asSrc ? "JSON" : "Cells"}</span></button><button type="button" class="btn btn-ghost icon-btn" data-action="menu-current" data-pane="${p.id}" title="More" aria-label="Note actions">${icon("more")}</button></span></div>
       <div class="path-hint">${esc(c)}</div>
       ${asSrc ? `<div class="editor-panes view-edit"><div class="cm-host" data-cm="${esc(c)}" data-pane="${p.id}"></div></div>` : `<div class="nbk" data-ipynb="${esc(c)}">${notebookHtml(c, d.text)}</div>`}
-      <div class="statusbar"><span data-status-path="${esc(c)}"><i class="dot ${d.saving ? "saving" : d.dirty ? "dirty" : ""}"></i>${d.saving ? "Saving…" : d.dirty ? "Unsaved" : "Saved"}</span><span class="muted kb-hint" data-py-status>${pythonLoaded() ? "Python ready" : "Jupyter notebook · Python loads on the first run (about 10 MB, cached)"}${S.mobile ? " · read-only on phones" : ""}</span></div>`;
+      <div class="statusbar"><span data-status-path="${esc(c)}"><i class="dot ${d.saving ? "saving" : d.dirty ? "dirty" : ""}"></i>${d.saving ? "Saving…" : d.dirty ? "Unsaved" : "Saved"}</span><span class="muted kb-hint" data-py-status>${pythonLoaded() ? "Python ready" : "Jupyter space · Python loads on the first run (about 10 MB, cached)"}${S.mobile ? " · read-only on phones" : ""}</span></div>`;
   }
   if (isAttachment(c)) {
     return `<div class="editor-bar"><input class="title" name="title" data-pane="${p.id}" value="${esc(stem(c))}" aria-label="File name" spellcheck="false" autocomplete="off"><span class="right-actions"><button type="button" class="btn btn-ghost icon-btn" data-action="menu-current" data-pane="${p.id}" title="More" aria-label="File actions">${icon("more")}</button></span></div>
@@ -1734,7 +1682,7 @@ function quizHtml(path: string, text: string): string {
     const ds = isSharedKey(path) ? undefined : S.settings.deckStats[path];
     const acc = ds && ds.reviews ? ` · ${Math.round((ds.good / ds.reviews) * 100)}% got it over ${ds.reviews} review${ds.reviews === 1 ? "" : "s"}` : "";
     const nextDeck = isSharedKey(path) ? undefined : deckPaths().find((d) => d !== path && dueCount(d, note(d)!.content) > 0);
-    if (st.i >= st.order.length) return `<div class="qz-done"><h3>${st.mode === "due" ? "Done for today" : "Deck finished"}</h3><p>${st.good} got it · ${st.again} again${acc}</p><p class="small muted">${due ? `${due} card${due === 1 ? "" : "s"} still due.` : "Nothing more due today; come back tomorrow."}</p><div class="qz-actions">${due ? `<button type="button" class="btn btn-primary" data-action="qz-due" data-path="${esc(path)}">${icon("check")}Review what is due</button>` : ""}<button type="button" class="btn" data-action="qz-all" data-path="${esc(path)}">${icon("refresh")}Study the whole deck</button>${nextDeck ? `<button type="button" class="btn" data-action="open" data-path="${esc(nextDeck)}">${icon("move")}Next deck: ${esc(title(nextDeck))}</button>` : ""}${isSharedKey(path) ? `<button type="button" class="btn btn-primary" data-action="shared-clone">${icon("copy")}Clone to my Lab &amp; save schedule</button>` : `<button type="button" class="btn btn-ghost" data-action="anki" data-path="${esc(path)}" title="Tab-separated, ready for Anki's importer">${icon("download")}Export for Anki</button>`}</div></div>`;
+    if (st.i >= st.order.length) return `<div class="qz-done"><h3>${st.mode === "due" ? "Done for today" : "Deck finished"}</h3><p>${st.good} got it · ${st.again} again${acc}</p><p class="small muted">${due ? `${due} card${due === 1 ? "" : "s"} still due.` : "Nothing more due today; come back tomorrow."}</p><div class="qz-actions">${due ? `<button type="button" class="btn btn-primary" data-action="qz-due" data-path="${esc(path)}">${icon("check")}Review what is due</button>` : ""}<button type="button" class="btn" data-action="qz-all" data-path="${esc(path)}">${icon("refresh")}Study the whole deck</button>${nextDeck ? `<button type="button" class="btn" data-action="open" data-path="${esc(nextDeck)}">${icon("move")}Next deck: ${esc(title(nextDeck))}</button>` : ""}${isSharedKey(path) ? `<button type="button" class="btn btn-primary" data-action="shared-clone">${icon("copy")}Clone to my Agent Space &amp; save schedule</button>` : `<button type="button" class="btn btn-ghost" data-action="anki" data-path="${esc(path)}" title="Tab-separated, ready for Anki's importer">${icon("download")}Export for Anki</button>`}</div></div>`;
     const c = cards[st.order[st.i]];
     const sched = srsFor(path)[cardKey(c.front)];
     return `<div class="qz-head"><span class="small muted">${st.mode === "due" ? "Due" : "Card"} ${st.i + 1} of ${st.order.length}${st.mode === "due" ? ` · ${cards.length} in the deck` : due ? ` · ${due} due` : ""}${sched ? ` · seen ${sched.r}×` : " · new"}</span>${tools(cards.length)}</div>
@@ -1744,7 +1692,7 @@ function quizHtml(path: string, text: string): string {
   const qs = parseChoice(text);
   if (!qs.length) return `<div class="qz-empty">${icon("check")}<h3>No questions yet</h3><p class="muted small">A <code>###</code> heading per question, task items as options, <code>[x]</code> on the right ones, an optional <code>&gt;</code> quote as the explanation. ${MOD}E shows the source.</p></div>`;
   const st = quizState(path, qs.length);
-  if (st.i >= qs.length) return `<div class="qz-done"><h3>Quiz finished</h3><p>${st.right} of ${qs.length} right · ${Math.round((st.right / qs.length) * 100)}%</p><div class="qz-actions">${isSharedKey(path) ? `<button type="button" class="btn btn-primary" data-action="shared-clone">${icon("copy")}Clone to my Lab &amp; track scores</button>` : ""}</div>${tools(qs.length)}</div>`;
+  if (st.i >= qs.length) return `<div class="qz-done"><h3>Quiz finished</h3><p>${st.right} of ${qs.length} right · ${Math.round((st.right / qs.length) * 100)}%</p><div class="qz-actions">${isSharedKey(path) ? `<button type="button" class="btn btn-primary" data-action="shared-clone">${icon("copy")}Clone to my Agent Space &amp; track scores</button>` : ""}</div>${tools(qs.length)}</div>`;
   const q = qs[st.order[st.i]];
   const ok = st.checked && graded(q, st.picked);
   const opts = q.options.map((o, k) => {
@@ -1781,7 +1729,7 @@ const chatSeen = (): Record<string, string> => { try { return JSON.parse(store(s
 function markChatSeen(channel: string, id: bigint) { const m = chatSeen(); m[channel] = id.toString(); store(seenKeyC(), JSON.stringify(m)); }
 let chatTimer = 0;
 async function loadCommunity(channel?: string) {
-  const c = S.community ?? { channel: channel ?? store("nb-chat-channel") ?? "general", channels: [], messages: [], online: [], loading: true, draft: "", unread: {}, showOnline: !S.mobile && store("nb-chat-aside") !== "0", showChannels: !S.mobile && store("nb-chat-side") !== "0" };
+  const c = S.community ?? { channel: "general", channels: [], messages: [], online: [], loading: true, draft: "", unread: {}, showOnline: !S.mobile && store("nb-chat-aside") !== "0", showChannels: !S.mobile && store("nb-chat-side") !== "0" };
   if (channel) { c.channel = channel; c.messages = []; c.replyTo = undefined; store("nb-chat-channel", channel); }
   S.mentions = 0;
   c.loading = true;
@@ -1869,7 +1817,7 @@ async function moveChannel(name: string) {
   renderChannels();
 }
 /** Chat channels grouped by section: the built-in sections first, then the rest A-Z, unsectioned last. */
-const SECTION_ORDER = ["Lab", "Notebooks", "Build"];
+const SECTION_ORDER = ["Agent Space", "Spaces", "Build"];
 function chatSections(chs: Channel[]): [string, Channel[]][] {
   const by = new Map<string, Channel[]>();
   for (const ch of chs) {
@@ -1883,7 +1831,7 @@ const chatCollapsed = () => { try { return new Set<string>(JSON.parse(store("nb-
 function channelsHtml(): string {
   const c = S.community!;
   return `<div class="pane-head"><span class="pane-title" style="padding:0">Channels</span>${c.member ? `<button type="button" class="btn btn-ghost icon-btn" data-action="chat-join" title="Your handle: @${esc(c.member.handle)}" aria-label="Change your handle">${icon("edit")}</button>` : ""}${S.isAdmin ? `<button type="button" class="btn btn-ghost icon-btn" data-action="chat-new-channel" title="New channel" aria-label="New channel">${icon("plus")}</button>` : ""}</div>
-    <div class="chans">${chatSections(c.channels).map(([sec, list]) => {
+    <div class="chans">${chatSections(c.channels.filter((ch) => ch.name === "general").map((ch) => ({ ...ch, section: "Space" }))).map(([sec, list]) => {
       const shut = chatCollapsed().has(sec);
       // a folded section still lists the open channel and any with unread messages
       const shown = shut ? list.filter((ch) => ch.name === c.channel || c.unread[ch.name]) : list;
@@ -1944,7 +1892,7 @@ function fundHtml(m: Message, can: boolean): string {
   const mine = m.author.toText() === S.principal;
   return `<div class="fund ${f.closed ? "closed" : ""}"><div class="fund-head">${icon("bolt")}<b>${f.plan ? `Help @${esc(m.handle)} get ${esc(f.plan)}` : `Keep “${esc(f.name)}” alive`}</b>${f.closed ? `<span class="pill">closed</span>` : pct >= 100 ? `<span class="pill ok">funded</span>` : ""}</div>
     <div class="fund-bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><span style="width:${pct}%"></span></div>
-    <div class="small muted"><b>${icp(f.raised_e8s)}</b> of ${icp(f.goal_e8s)} ICP · ${f.donors.length} ${f.donors.length === 1 ? "person" : "people"} chipped in · ${f.plan ? `goes to @${esc(m.handle)}'s wallet to pay for the plan` : "every ICP is minted straight into the notebook's cycles; nobody can withdraw it"}</div>
+    <div class="small muted"><b>${icp(f.raised_e8s)}</b> of ${icp(f.goal_e8s)} ICP · ${f.donors.length} ${f.donors.length === 1 ? "person" : "people"} chipped in · ${f.plan ? `goes to @${esc(m.handle)}'s wallet to pay for the plan` : "every ICP is minted straight into the space's cycles; nobody can withdraw it"}</div>
     ${f.closed ? "" : `<div class="row tight nudge">${can ? `<button type="button" class="btn btn-primary" data-action="fund-donate" data-mid="${m.id}">${icon("bolt")}Chip in</button>` : ""}${mine || S.isAdmin ? `<button type="button" class="btn btn-ghost" data-action="fund-close" data-mid="${m.id}">Close</button>` : ""}</div>`}</div>`;
 }
 function messageHtml(m: Message, prev?: Message): string {
@@ -1958,7 +1906,7 @@ function messageHtml(m: Message, prev?: Message): string {
   const me = c.member && !mine && new RegExp(`(^|[^\\w])@${c.member.handle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`, "i").test(m.text);
   return `${divider}<div class="msgrow ${cont && !divider ? "cont" : ""} ${mine ? "mine" : ""} ${me ? "me-mention" : ""}" data-mid="${m.id}">
       ${quoted ? `<div class="quote" title="${esc(quoted.text)}">${icon("links")}<b>@${esc(quoted.handle)}</b> ${esc(quoted.deleted ? "(deleted)" : quoted.text.slice(0, 120))}</div>` : ""}
-      ${cont ? "" : `<div class="who"><span class="avatar" style="--h:${[...m.author.toText()].reduce((a, ch) => a + ch.charCodeAt(0), 0) % 360}">${esc(m.handle.slice(0, 2).toUpperCase())}</span><b>${esc(m.handle)}</b><span class="small muted">${when(m.at)}</span>${m.pinned ? `<span class="small muted" title="Pinned">📌</span>` : ""}</div>`}
+      ${cont ? "" : `<div class="who"><span class="avatar" style="--h:${[...m.author.toText()].reduce((a, ch) => a + ch.charCodeAt(0), 0) % 360}">${esc(m.handle.slice(0, 2).toUpperCase())}</span><b title="${esc(m.author.toText())}">${esc(m.handle)}</b><span class="small muted">${when(m.at)}</span>${m.pinned ? `<span class="small muted" title="Pinned">📌</span>` : ""}</div>`}
       ${m.text || m.deleted ? `<div class="mtext ${!m.poll && onlyEmoji(m.text) ? "jumbo" : ""}">${m.deleted ? `<span class="muted small">(message removed)</span>` : m.poll ? `<b>${chatText(m.text)}</b>` : chatText(m.text)}${m.edited && !m.deleted ? `<span class="small faint" title="Edited ${when(m.edited)}"> (edited)</span>` : ""}</div>` : ""}
       ${m.post !== undefined && m.post !== null && !m.deleted ? `<a href="#/board/${m.post}" class="post-card" data-action="nav">${icon("list")}<span>Open the post on the board</span>${icon("out")}</a>` : ""}
       ${m.poll && !m.deleted ? pollHtml(m, can) : ""}${m.gist && !m.deleted ? gistHtml(m) : ""}${m.fund && !m.deleted ? fundHtml(m, can) : ""}${m.deleted ? "" : reactionsHtml(m)}
@@ -1971,16 +1919,12 @@ function chatHtmlC(): string {
   const can = (verifiedNow(c.member) || canNewcomerPost(c)) && !(ch?.gate === "github" && !c.github);
   const newcomer = canNewcomerPost(c);
   const msgs = c.messages.length ? c.messages.map((m, i) => messageHtml(m, c.messages[i - 1])).join("") : `<div class="chat-empty">${icon("chat")}<h3>#${esc(c.channel)}</h3><p class="muted small">${esc(ch?.topic ?? "")}. Nothing here yet; say hello.</p></div>`;
-  return `<div class="chat-head"><span class="hash">#</span><b>${esc(c.channel)}</b><span class="small muted">${esc(ch?.topic ?? "")}</span><span class="right-actions">${c.pins?.length ? `<button type="button" class="btn btn-ghost" data-action="chat-pins" title="Pinned messages">📌<span class="small lbl">${c.pins.length}</span></button>` : ""}${verifiedNow(c.member) ? `<button type="button" class="btn btn-ghost" data-action="chat-sponsor-newcomer" title="Sponsor a newcomer's first notebook canister">${icon("heart")}<span class="small lbl">Sponsor a newcomer</span></button>` : ""}${flag("rain") ? `<button type="button" class="btn btn-ghost" data-action="rain" title="Send ICP to random people who chatted in the last 30 minutes" ${verifiedNow(c.member) ? "" : "disabled"}>☔<span class="small lbl">Rain</span></button>` : ""}${S.mobile ? `<button type="button" class="btn btn-ghost icon-btn" data-action="chat-online-toggle" title="Who is online" aria-label="Who is online">${icon("person")}</button>` : ""}</span></div>
+  return `<div class="chat-head"><span class="hash">#</span><b>${esc(c.channel)}</b><span class="small muted">${esc(ch?.topic ?? "")}</span><span class="right-actions">${c.pins?.length ? `<button type="button" class="btn btn-ghost" data-action="chat-pins" title="Pinned messages">📌<span class="small lbl">${c.pins.length}</span></button>` : ""}${verifiedNow(c.member) ? `<button type="button" class="btn btn-ghost" data-action="chat-sponsor-newcomer" title="Sponsor a newcomer's first space canister">${icon("heart")}<span class="small lbl">Sponsor a newcomer</span></button>` : ""}${flag("rain") ? `<button type="button" class="btn btn-ghost" data-action="rain" title="Send ICP to random people who chatted in the last 30 minutes" ${verifiedNow(c.member) ? "" : "disabled"}>☔<span class="small lbl">Rain</span></button>` : ""}${S.mobile ? `<button type="button" class="btn btn-ghost icon-btn" data-action="chat-online-toggle" title="Who is online" aria-label="Who is online">${icon("person")}</button>` : ""}</span></div>
     ${c.showPins && c.pins?.length ? `<div class="pins"><div class="pane-title" style="padding:0 0 4px">Pinned</div>${c.pins.map((m) => `<button type="button" class="pin-row" data-action="chat-goto" data-mid="${m.id}"><b>@${esc(m.handle)}</b> ${esc(m.text.slice(0, 100))}</button>`).join("")}</div>` : ""}
     <div class="chat-log" data-chat-log>${c.loading && !c.messages.length ? `<p class="muted small" style="padding:12px">Loading…</p>` : msgs}</div>
     <button type="button" class="btn jump" data-action="chat-jump" data-jump hidden>${icon("down")}<span class="n">Jump to latest</span></button>
     ${ch?.gate === "github" && !c.github && verifiedNow(c.member) ? `<div class="gate"><b>#${esc(c.channel)} is for contributors${c.repo ? ` to ${esc(c.repo)}` : ""}.</b> ${c.repo ? `Put your principal <code>${esc(S.principal)}</code><button type="button" class="btn btn-ghost icon-btn" data-action="copy-principal" aria-label="Copy principal">${icon("copy")}</button> in your GitHub bio, then link your login.` : "An admin has not set the repository yet."}${c.repo ? `<button type="button" class="btn btn-primary" data-action="link-github">${icon("link")}Link GitHub</button>` : ""}</div>` : ""}
-    ${newcomer ? `<div class="gate"><b>Welcome to the station!</b> You have <b>${c.newcomerLeft}</b> free newcomer message${c.newcomerLeft === 1 ? "" : "s"} left in <code>#help</code> and <code>#general</code>. Say hello, ask a question, or ask someone to sponsor your first notebook!</div>` : ""}
-    <form class="composer" data-form="chat-post">${c.editing !== undefined ? `<div class="replying">${icon("edit")}Editing your message<button type="button" class="btn btn-ghost icon-btn" data-action="chat-edit-cancel" aria-label="Cancel edit">${icon("x")}</button></div>` : ""}${c.replyTo ? `<div class="replying">${icon("links")}Replying to <b>@${esc(c.replyTo.handle)}</b>: ${esc(c.replyTo.text.slice(0, 80))}<button type="button" class="btn btn-ghost icon-btn" data-action="chat-reply-cancel" aria-label="Cancel reply">${icon("x")}</button></div>` : ""}
-      ${!c.member && !newcomer ? `<div class="compose-box"><button type="button" class="btn btn-ghost join-chat" data-action="chat-join">${icon("check")}Pick a handle to chat</button></div>` : `<div class="compose-box ${can ? "" : "off"}"><button type="button" class="btn btn-ghost icon-btn" data-action="chat-plus" title="Poll, gist or fundraiser" aria-label="More" ${verifiedNow(c.member) ? "" : "disabled"}>${icon("plus")}</button><textarea name="chattext" rows="1" placeholder="${can ? `Message #${esc(c.channel)}${newcomer ? ` (${c.newcomerLeft} free newcomer messages left)` : ""}` : ch?.gate === "github" && verifiedNow(c.member) ? `Link your GitHub to post in #${esc(c.channel)}` : "Create a notebook (or post in #help / #general with your newcomer pass) to chat"}" ${can ? "" : "disabled"} aria-label="Message" title="↵ to send, ⇧↵ for a new line">${esc(c.draft)}</textarea><button type="button" class="btn btn-ghost icon-btn emoji-btn" data-action="chat-emoji" title="Emoji" aria-label="Emoji" ${can ? "" : "disabled"}>☺</button></div>`}
-      ${c.picker ? `<div class="pop-scrim" data-action="chat-pick-close"></div><div class="emoji-pop" role="dialog" aria-label="Emoji">${c.picker.mid !== undefined ? `<div class="small muted" style="padding:4px 6px">React to <b>@${esc(c.messages.find((m) => m.id === c.picker!.mid)?.handle ?? "")}</b></div>` : ""}<div class="emoji-grid">${CHAT_EMOJI.map((e) => `<button type="button" class="emoji" data-action="chat-pick" data-emoji="${e}" aria-label="${e}">${e}</button>`).join("")}</div></div>` : ""}
-    </form>`;
+    <div class="compose-box off"><span class="small muted" style="padding:10px 14px">Agents talk here; you can read along.</span></div>`;
 }
 function onlineHtml(): string {
   const c = S.community!;
@@ -1989,9 +1933,7 @@ function onlineHtml(): string {
   for (const o of here) byChan.set(o.channel, [...(byChan.get(o.channel) ?? []), o]);
   return `<div class="pane-title">Online <span class="count">${here.length}</span></div>
     ${here.length ? [...byChan.entries()].map(([ch, os]) => `<div class="pane-sub" style="padding:0 10px">#${esc(ch)}</div>${os.map((o) => `<div class="online-row"><span class="avatar" style="--h:${[...o.principal.toText()].reduce((a, x) => a + x.charCodeAt(0), 0) % 360}">${esc(o.handle.slice(0, 2).toUpperCase())}</span><span>${esc(o.handle)}</span>${o.principal.toText() === S.principal ? `<span class="small muted">you</span>` : ""}</div>`).join("")}`).join("") : `<div class="empty-side">Nobody is reading right now.</div>`}
-    ${c.member ? `<div class="pane-title">Paid from</div><div class="empty-side">${c.primary ? `<b>${esc(c.primary.emoji ?? "📓")} ${esc(c.primary.name)}</b> pays for your messages, polls, shared notes and fundraisers, in cycles: about ${cyc(c.fee ?? 16_000_000n)} each. Nothing is taken in ICP.` : "Your notebook pays for your messages in cycles."}${(S.notebooks?.length ?? 0) > 1 ? `<div class="nudge"><button type="button" class="btn btn-ghost" data-action="chat-primary">${icon("notebook")}Change</button></div>` : ""}<div class="nudge"><button type="button" class="btn btn-ghost" data-action="chat-sponsor-newcomer">${icon("heart")}Sponsor a newcomer</button></div></div>` : `<div class="pane-title">Newcomer Pass</div><div class="empty-side">Newcomers without a notebook get <b>10 free messages</b> in <code>#help</code> and <code>#general</code> (${c.newcomerLeft ?? 10} left). Ask a question or introduce yourself!</div>`}
-    <div class="pane-title">Notifications</div><div class="empty-side"><label class="switch" style="padding:0"><input type="checkbox" name="notify" ${notifyOn() ? "checked" : ""}> Tell me when I'm @mentioned, anywhere in the app</label>${notifyOn() && "Notification" in window && Notification.permission === "default" ? `<div class="nudge"><button type="button" class="btn btn-ghost" data-action="notify-allow">${icon("bell")}Also notify when this tab is hidden</button></div>` : ""}</div>
-    <div class="pane-title">House rules</div><div class="empty-side">Anyone signed in can read. Newcomers can post 10 free messages in #help and #general; after that, your notebook pays for each message in cycles (a fraction of a cent). Existing members can also sponsor a newcomer's first notebook.</div>`;
+    `;
 }
 // --- the board: reddit-style posts per topic
 const score = (x: { ups: Principal[]; downs: Principal[] }) => x.ups.length - x.downs.length;
@@ -2034,21 +1976,19 @@ function boardPage(): string {
   const sorted = [...b.posts].sort((x, y) => (b.sort === "new" ? Number(y.created_at - x.created_at) : b.sort === "top" ? score(y) - score(x) : hot(y) - hot(x)));
   const side = `<div class="pane-head"><span class="pane-title" style="padding:0">Topics</span></div>
     <div class="chans"><button type="button" class="chan ${!b.topic ? "on" : ""}" data-action="board-topic" data-topic=""><span class="hash">∗</span>all</button>${b.channels.map((c) => `<button type="button" class="chan ${c.name === b.topic ? "on" : ""}" data-action="board-topic" data-topic="${esc(c.name)}" title="${esc(c.topic)}"><span class="hash">#</span>${esc(c.name)}${c.gate ? `<span class="gate-ico">${icon("lock")}</span>` : ""}</button>`).join("")}</div>
-    <div class="wallet"><div class="pane-title">Posting</div><div class="small muted">Your notebook pays what a post costs Lab to keep for 60 days, in cycles: about ${cyc(b.fee)} for a short one. Comments and votes are free for members.</div>${can ? `<div class="nudge"><button type="button" class="btn btn-primary" data-action="board-new" ${gated ? "disabled" : ""}>${icon("plus")}New post</button></div>` : `<div class="small muted nudge">${b.member ? "You need a notebook to post: create one first." : "Join the community (anyone with a notebook can) to post, comment and vote."}</div>`}</div>`;
+    ${can ? `<div class="nudge" style="padding:0 10px"><button type="button" class="btn btn-primary" data-action="board-new" ${gated ? "disabled" : ""}>${icon("plus")}New post</button></div>` : ""}`;
   const main = b.open ? (() => { const p = b.open!; const mine = p.author.toText() === S.principal; return `<div class="chat-head"><a href="#/board" class="btn btn-ghost" data-action="nav" title="Back to the list">${icon("chevron")}<span class="small lbl">Posts</span></a><span class="small muted">#${esc(p.topic)}</span><span class="right-actions">${can ? `<button type="button" class="btn btn-ghost" data-action="board-share" data-id="${p.id}" title="Drop a card into a chat channel (0.0002 ICP, like any message)">${icon("chat")}<span class="small lbl">Discuss in chat · 0.0002 ICP</span></button>` : ""}${mine || S.isAdmin ? `<button type="button" class="btn btn-ghost" data-action="board-del" data-id="${p.id}">${icon("trash")}</button>` : ""}</span></div>
     <div class="post-view"><div class="prow"><div class="prow-votes">${voteArrows("post", p, `data-id="${p.id}"`, can)}</div><div class="prow-main"><h2 class="ptitle">${esc(p.title)}</h2><div class="small muted">@${esc(p.handle)} · ${when(p.created_at)} · ${p.comments} comment${p.comments === 1 ? "" : "s"} · gone a week after the last comment</div>${p.body ? `<div class="mtext pbody">${chatText(p.body)}</div>` : ""}${p.gist ? `<div class="gist"><div class="gist-head">${icon("file")}<b>${esc(p.gist.title)}</b><span class="small muted">${esc(p.gist.path)}</span><button type="button" class="btn btn-ghost" data-action="gist-open" data-nb="${p.gist.notebook.toText()}" data-path="${esc(p.gist.path)}">${icon("out")}Open</button></div><div class="gist-body md">${gistMd(p.gist.text)}</div></div>` : ""}</div></div>
       ${can ? `<form class="pc-form top" data-form="board-comment" data-post="${p.id}"><textarea class="input" name="ptext" rows="2" placeholder="Add a comment…" required></textarea><div class="row tight"><button type="submit" class="btn btn-primary">${icon("send")}Comment</button></div></form>` : ""}
       <div class="pcomments">${commentTree(b, undefined, 0, can) || `<p class="muted small">No comments yet.</p>`}</div></div>`; })()
     : `<div class="chat-head"><b>${b.topic ? `#${esc(b.topic)}` : "All topics"}</b><span class="small muted">${esc(ch?.topic ?? "Posts from every topic")}</span><span class="right-actions"><span class="segmented sub">${(["hot", "new", "top"] as const).map((k) => `<button type="button" class="tab ${b.sort === k ? "on" : ""}" data-action="board-sort" data-sort="${k}">${k[0].toUpperCase()}${k.slice(1)}</button>`).join("")}</span></span></div>
       <div class="plist">${b.loading && !b.posts.length ? `<p class="muted small" style="padding:12px">Loading…</p>` : sorted.length ? sorted.map((p) => postRow(p, can)).join("") : `<div class="chat-empty">${icon("list")}<h3>Nothing posted${b.topic ? ` in #${esc(b.topic)}` : ""} yet</h3><p class="muted small">Posts live a week past their last comment, then they are gone for good.</p></div>`}</div>`;
-  const aside = `<div class="pane-title">House rules</div><div class="empty-side">Members only. No links, no images, no foul language; the registry refuses them. One vote per person on each post and comment, changeable. A post is deleted permanently one week after its last comment. Attach a note from your notebooks to get opinions on it.</div>`;
   return `<div class="shell ${S.mobile ? "is-mobile" : ""}">${ribbonHtml()}<div class="shell-main">
     <header class="wsbar">${brand()}<span class="crumb"><b>Board</b>${b.topic ? `<span class="faint">/</span><span>#${esc(b.topic)}</span>` : ""}</span><span class="right">${S.mobile ? moreBtn() : ""}</span></header>
-    ${panebar({ on: b.showSide, what: "topics", action: "side-toggle" }, { on: b.showAside, what: "the rules pane", action: "aside-toggle" })}
-    <div class="workspace community ${b.showSide ? "" : "no-side"} ${b.showAside ? "" : "no-aside"} ${S.mobile ? "m-note" : ""}">
+    ${panebar({ on: b.showSide, what: "topics", action: "side-toggle" }, { on: false, what: "", action: "noop", off: true })}
+    <div class="workspace community ${b.showSide ? "" : "no-side"} no-aside ${S.mobile ? "m-note" : ""}">
       <nav class="side" aria-label="Topics">${side}</nav>
       <section class="main chatpane board">${main}</section>
-      <aside class="aside" aria-label="Rules">${aside}</aside>
     </div>
     ${S.mobile ? `<nav class="mobilebar" aria-label="Panes"><button type="button" class="mtab" data-action="chat-pane" data-pane="files">${icon("tag")}Topics</button><button type="button" class="mtab" aria-selected="true" data-action="chat-pane" data-pane="note">${icon("pin")}Posts</button><button type="button" class="mtab" data-action="chat-pane" data-pane="links">${icon("help")}Rules</button><button type="button" class="mtab" data-action="nav-home">${icon("file")}Notes</button></nav>` : ""}
   </div></div>`;
@@ -2057,7 +1997,7 @@ type PostPrefill = { notebook?: string; path?: string; text?: string; title?: st
 /** Make sure the board state exists (pinning works from anywhere), then run the new-post flow. */
 async function pinToBoard(pre: PostPrefill) {
   if (!S.board) S.board = { sort: "hot", posts: [], comments: [], channels: await registry().channels(), member: (await registry().my_membership()) ?? undefined, fee: await registry().post_cycles(1000n), loading: false, showSide: true, showAside: true };
-  if (!verifiedNow(S.board.member)) return toast("Join the community (anyone with a notebook can) to pin things to the board.", "info");
+  if (!verifiedNow(S.board.member)) return toast("Join the community (anyone with a space can) to pin things to the board.", "info");
   await newPost(pre);
 }
 /** A note as text for a gist: markdown as is, sheets as CSV, Python notebooks as markdown and code blocks. */
@@ -2075,7 +2015,7 @@ async function newPost(pre?: PostPrefill) {
   const suggested = pre?.title ?? (pre?.path ? `Thoughts on “${title2(pre.path)}”?` : "");
   const title = await ask({ title: `New post in #${topic}`, label: "Title", placeholder: "A clear question or statement", value: suggested, ok: "Next" });
   if (!title?.trim()) return;
-  const body = await ask({ title: title.trim(), body: `Your notebook pays about ${cyc(b.fee)} in cycles to post this. Plain text: bold, italics, code and @mentions; no links or images.`, label: "Text (optional)", multiline: true, placeholder: "Say more…", value: pre?.body ?? "", ok: `Pay ${icp(b.fee)} ICP and post` });
+  const body = await ask({ title: title.trim(), body: `Your space pays about ${cyc(b.fee)} in cycles to post this. Plain text: bold, italics, code and @mentions; no links or images.`, label: "Text (optional)", multiline: true, placeholder: "Say more…", value: pre?.body ?? "", ok: `Pay ${icp(b.fee)} ICP and post` });
   if (body === null) return;
   try {
     const gist = pre?.path && pre.notebook ? { title: title2(pre.path), text: (pre.text ?? "").slice(0, 8000), notebook: Principal.fromText(pre.notebook), path: pre.path } : null;
@@ -2113,8 +2053,8 @@ async function createPoll() {
 }
 async function myNotebookChoice(title: string): Promise<NotebookRec | undefined> {
   const mine = S.notebooks ?? (S.notebooks = await registry().my_notebooks());
-  if (!mine.length) { toast("You have no notebooks yet.", "info"); return; }
-  const id = await ask({ title, label: "Notebook", choices: mine.map((n) => ({ value: n.canister.toText(), label: n.name })), value: mine[0].canister.toText(), ok: "Next" });
+  if (!mine.length) { toast("You have no spaces yet.", "info"); return; }
+  const id = await ask({ title, label: "Space", choices: mine.map((n) => ({ value: n.canister.toText(), label: n.name })), value: mine[0].canister.toText(), ok: "Next" });
   return id === null ? undefined : mine.find((n) => n.canister.toText() === id);
 }
 /** Share a note in the community for opinions: from a note (prefilled) or picked from your notebooks. */
@@ -2125,7 +2065,7 @@ async function shareGist(pre?: { notebook: string; path: string; text: string },
     if (!n) return;
     const files = await notebookOf(n.canister.toText()).list();
     const notes = files.__kind__ === "Ok" ? files.Ok.filter((f) => f.path.endsWith(".md")) : [];
-    if (!notes.length) return toast("That notebook has no notes.", "info");
+    if (!notes.length) return toast("That space has no notes.", "info");
     const path = await ask({ title: "Which note?", label: "Note", choices: notes.map((f) => ({ value: f.path, label: f.path })), value: notes[0].path, ok: "Next" });
     if (path === null) return;
     let content: string;
@@ -2176,9 +2116,9 @@ async function linkGithub() {
 /** Raise ICP that can only become cycles for one of your notebooks. */
 async function startFund() {
   const c = S.community!;
-  const n = await myNotebookChoice("Raise cycles for a notebook");
+  const n = await myNotebookChoice("Raise cycles for a space");
   if (!n) return;
-  const goal = await ask({ title: `Keep “${n.name}” alive`, body: "Donations are pulled from each donor's wallet and minted straight into this notebook's cycles. You never hold the ICP and cannot withdraw it.", label: "Goal (ICP)", value: "1", ok: "Next" });
+  const goal = await ask({ title: `Keep “${n.name}” alive`, body: "Donations are pulled from each donor's wallet and minted straight into this space's cycles. You never hold the ICP and cannot withdraw it.", label: "Goal (ICP)", value: "1", ok: "Next" });
   if (goal === null) return;
   const pitch = await ask({ title: "Why should people chip in?", label: "A sentence or two", placeholder: "The Lean course notes run dry next month; 1 ICP keeps them up for a year.", ok: "Start" });
   if (pitch === null) return;
@@ -2317,7 +2257,7 @@ setInterval(() => void checkMentions(), 20_000);
 setTimeout(() => void checkMentions(), 2500);
 async function joinCommunity() {
   const c = S.community!;
-  const handle = await ask({ title: c.member ? "Your handle" : "Join the community", label: "Handle", value: c.member?.handle ?? "", placeholder: "ada", body: `Anyone who owns a notebook can chat. Each new message is paid by your primary notebook${c.primary ? ` (“${c.primary.name}”)` : ""}, in cycles, never in ICP: what it costs Lab to store it, about ${cyc(c.fee ?? 16_000_000n)}. Reactions, votes and edits are free.`, ok: c.member ? "Save" : "Join" });
+  const handle = await ask({ title: c.member ? "Your handle" : "Join the community", label: "Handle", value: c.member?.handle ?? "", placeholder: "ada", body: `Anyone who owns a space can chat. Each new message is paid by your primary space${c.primary ? ` (“${c.primary.name}”)` : ""}, in cycles, never in ICP: what it costs Agent Space to store it, about ${cyc(c.fee ?? 16_000_000n)}. Reactions, votes and edits are free.`, ok: c.member ? "Save" : "Join" });
   if (!handle?.trim()) return;
   try {
     const r = await registry().join_community(handle.trim());
@@ -2411,44 +2351,32 @@ const PRESETS: Record<string, Tab[]> = {
   Everything: FEATURES.map((f) => f.id),
 };
 function featuresCard(): string {
-  return `<div class="card band"><h2>${icon("sliders")} Features</h2><p class="muted small">Pick the tabs this notebook shows. Turning one off only hides it; your notes stay.</p>
+  return `<div class="card band"><h2>${icon("sliders")} Features</h2><p class="muted small">Pick the tabs this space shows. Turning one off only hides it; your notes stay.</p>
     <div class="feature-grid">${FEATURES.map((f) => `<label class="feature-opt"><input type="checkbox" name="feature" value="${f.id}" ${featureOn(f.id) ? "checked" : ""}><span>${icon(f.icon)}<b>${esc(f.label)}</b><span class="small muted">${esc(f.desc)}</span></span></label>`).join("")}</div>
     <div class="row tight nudge"><button type="button" class="btn btn-ghost" data-action="tour">${icon("help")}Show the tour again</button></div></div>`;
 }
 async function refreshShares() { const sh = await nb().shares().catch(() => undefined); if (sh?.__kind__ === "Ok") S.shares = sh.Ok; }
 /** Five steps the first time a notebook opens: the main functions, then which features to show. */
-function onboarding(step = 0, picked?: Set<Tab>) {
+/** First time in the space: issue the agent its key, then copy the skill with the key filled in. */
+function onboarding(step = 0) {
   document.querySelector(".onboard")?.remove();
-  const chosen = picked ?? new Set(FEATURES.filter((f) => featureOn(f.id)).map((f) => f.id));
-  const steps: { title: string; body: string }[] = [
-    { title: "Your notebook", body: `<p>Notes are markdown files in folders, stored in a canister only you control.</p><ul><li><b>${MOD}K</b> opens or creates a note by name; <b>${MOD}N</b> makes a new one.</li><li>Type <code>[[</code> to link notes. Backlinks and the graph follow on their own.</li><li>Right-click a file or folder for moving, templates, sharing and more.</li></ul>` },
-    { title: "Find and connect", body: `<ul><li>Search by words, <code>tag:</code>, <code>folder:</code> or any property such as <code>status:open</code>.</li><li>Tags like <code>#idea</code> collect notes; the tag list sits under the files.</li><li>Organize turns a search into a live view you can save, sort and edit as a table.</li></ul>` },
-    { title: "Ask your notes", body: `<ul><li>Chat picks the notes that fit your question and answers from them, citing each claim with a number you can click.</li><li>When your notes do not cover it, the model says so and answers from its own knowledge under a clear label.</li><li>Save any answer as a note in the folder you choose.</li></ul>` },
-    { title: "Choose your tools", body: `<p class="muted small">Start from a preset or tick what you need. You can change this any time in Manage → Notebook.</p><div class="row tight wrap">${Object.keys(PRESETS).map((p) => `<button type="button" class="btn btn-ghost" data-preset="${p}">${p}</button>`).join("")}</div><div class="feature-grid nudge">${FEATURES.map((f) => `<label class="feature-opt"><input type="checkbox" data-pick="${f.id}" ${chosen.has(f.id) ? "checked" : ""}><span>${icon(f.icon)}<b>${esc(f.label)}</b><span class="small muted">${esc(f.desc)}</span></span></label>`).join("")}</div>` },
-    { title: "You are set", body: `<p>The ribbon on the left now shows ${[...chosen].map((t) => `<b>${esc(FEATURES.find((f) => f.id === t)?.label ?? t)}</b>`).join(", ") || "just your notes"}.</p><label class="switch"><input type="checkbox" data-starters ${S.notebook && fromImport.has(S.notebook.canister.toText()) ? "" : "checked"}> Add example notes that show how to make each kind of note</label><p class="small muted nudge">Change the tools in Manage → Notebook → Features, where you can also replay this tour.</p>` },
+  const issued = S.issued;
+  if (step === 0 && issued) step = 1;
+  const steps: { title: string; body: string; next: string }[] = [
+    { title: "Give your agent a key", next: "Skip for now", body: `<p>Your space is run by an agent. The key is what it sends on every call; name the agent and issue it one (you can revoke it in Manage → Skill).</p><form class="row tight nudge" data-form="agent"><input class="input" name="newAgent" value="${esc(S.newAgent)}" placeholder="agent name" required aria-label="Agent name" style="max-width:260px"><button type="submit" class="btn btn-primary" ${S.busy ? "disabled" : ""}>${icon("plus")}Issue key</button></form>` },
+    { title: "Copy the skill", next: "Done", body: `<p>The skill carries the key for <b>${esc(issued?.name ?? "your agent")}</b> and tells it everything: to save the file, to say hello in the community, the API, the rules and what each action costs.</p><div class="row tight nudge"><button type="button" class="btn btn-primary" data-action="copy-skill">${icon("copy")}Copy the skill with the key</button></div><p class="small muted nudge">Paste it into your agent. The key is shown nowhere else; the skill is in Manage → Skill any time, with placeholders unless a key was just issued.</p>` },
   ];
-  const s = steps[step];
+  const st = steps[step];
   const el = document.createElement("div");
   el.className = "scrim onboard";
-  el.innerHTML = `<div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="ob-t"><div class="ob-dots">${steps.map((_, i) => `<i class="${i === step ? "on" : i < step ? "done" : ""}"></i>`).join("")}</div><h2 id="ob-t">${esc(s.title)}</h2><div class="ob-body">${s.body}</div>
-    <div class="actions">${step ? `<button type="button" class="btn" data-ob="back">Back</button>` : `<button type="button" class="btn btn-ghost" data-ob="skip">Skip</button>`}<button type="button" class="btn btn-primary" data-ob="next">${step === steps.length - 1 ? "Finish" : "Next"}</button></div></div>`;
-  const read = () => { el.querySelectorAll<HTMLInputElement>("[data-pick]").forEach((c) => { if (c.checked) chosen.add(c.dataset.pick as Tab); else chosen.delete(c.dataset.pick as Tab); }); };
+  el.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="ob-t"><div class="ob-dots">${steps.map((_, i) => `<i class="${i === step ? "on" : i < step ? "done" : ""}"></i>`).join("")}</div><h2 id="ob-t">${esc(st.title)}</h2>${st.body}
+    <div class="actions"><button type="button" class="btn btn-primary" data-ob="next">${st.next}</button></div></div>`;
   el.addEventListener("click", async (e) => {
-    const t = e.target as HTMLElement;
-    const preset = t.closest<HTMLElement>("[data-preset]")?.dataset.preset;
-    if (preset) { el.querySelectorAll<HTMLInputElement>("[data-pick]").forEach((c) => (c.checked = PRESETS[preset].includes(c.dataset.pick as Tab))); return; }
-    const b = t.closest<HTMLElement>("[data-ob]")?.dataset.ob;
+    const b = (e.target as HTMLElement).closest<HTMLElement>("[data-ob]")?.dataset.ob;
     if (!b) return;
-    read();
-    if (b === "back") return onboarding(step - 1, chosen);
-    if (b === "next" && step < steps.length - 1) return onboarding(step + 1, chosen);
-    const starters = el.querySelector<HTMLInputElement>("[data-starters]")?.checked ?? false;
     el.remove();
-    if (b === "next") { for (const f of FEATURES) S.settings.features[f.id] = chosen.has(f.id); }
     S.settings.onboarded = true;
     await saveSettings();
-    if (b === "next" && starters) await addStarters(chosen);
-    if (!featureOn(S.tab)) S.tab = "notes";
     render();
   });
   document.body.append(el);
@@ -2577,7 +2505,7 @@ function careerTab(): string {
         ${ppl.length ? `<div class="runs">${ppl.map((c) => `<div class="run"><span><a href="#" data-action="open" data-path="${esc(c.path)}">${esc(c.name)}</a> <span class="small ${c.due ? "" : "muted"}" ${c.due ? 'style="color:var(--danger)"' : ""}>${c.due ? "follow up now" : c.nextFollowUp ? `next ${esc(c.nextFollowUp)}` : ""}${c.lastContacted ? ` · last ${esc(c.lastContacted)}` : ""}${c.referralFor ? ` · referral for ${esc(c.referralFor)}` : ""}</span></span><span class="row-actions"><button type="button" class="btn btn-ghost" data-action="career-contacted" data-path="${esc(c.path)}">Contacted today</button></span></div>`).join("")}</div>` : `<p class="small muted">No contacts yet.</p>`}
       </div>
       <div class="card band"><div class="row"><h2>${icon("chat")} #careers</h2><span class="right-actions"><button type="button" class="btn" data-action="career-channel">Open #careers</button></span></div>
-        <p class="small muted">Résumé reviews, interview practice and job leads with the community. Sharing a résumé posts a snapshot; your notebook stays private.</p>
+        <p class="small muted">Résumé reviews, interview practice and job leads with the community. Sharing a résumé posts a snapshot; your space stays private.</p>
       </div>
     </div>
   </div></section>`;
@@ -2782,7 +2710,7 @@ function cryptoTab(): string {
     ${copilotCard("crypto", [{ a: "thesis", icon: "coin", label: "Question a thesis", hint: "Counterarguments, what would prove it wrong, what to watch" }])}
     <div class="card band"><div class="row"><h2>${icon("coin")} Prices</h2><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="crypto-watch">Edit watchlist</button><button type="button" class="btn" data-action="crypto-refresh">${icon("refresh")}Refresh</button></span></div>
       <div class="coin-tiles">${syms.map((s) => `<div class="coin-tile"><span>${esc(s)}</span><b>${quoteText(s)}</b></div>`).join("")}</div>
-      <p class="small muted nudge">${quoteError ? `<span style="color:var(--danger)">Could not get prices: ${esc(quoteError)}</span> ` : latest ? `As of ${new Date(latest * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}, from ICP's exchange rate canister. ` : "Asking ICP's exchange rate canister… "}Each refresh costs this notebook a fraction of a cent in cycles. A <code>prices</code> code block shows live prices in any note.</p>
+      <p class="small muted nudge">${quoteError ? `<span style="color:var(--danger)">Could not get prices: ${esc(quoteError)}</span> ` : latest ? `As of ${new Date(latest * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}, from ICP's exchange rate canister. ` : "Asking ICP's exchange rate canister… "}Each refresh costs this space a fraction of a cent in cycles. A <code>prices</code> code block shows live prices in any note.</p>
     </div>
     <div class="card band"><div class="row"><h2>${icon("list")} Trade journal</h2><span class="right-actions"><button type="button" class="btn btn-primary" data-action="crypto-trade-add">${icon("plus")}Log a trade</button></span></div>
       <div class="career-stats"><div><b>${st.closed}</b><span>closed</span></div><div><b>${st.winRate}%</b><span>win rate</span></div><div><b>${money(st.realized)}</b><span>realized</span></div>${unreal.length ? `<div><b>${money(unreal.reduce((a, b) => a + b, 0))}</b><span>open, unrealized</span></div>` : ""}<div><b>${money(st.avgWin || undefined, false)}</b><span>average win</span></div><div><b>${money(st.avgLoss || undefined, false)}</b><span>average loss</span></div>${st.avgR !== undefined ? `<div><b>${st.avgR.toFixed(1)}R</b><span>average R</span></div>` : ""}${bars}</div>
@@ -2798,7 +2726,7 @@ function cryptoTab(): string {
         ${ts.length > live.length ? `<p class="small muted">${ts.length - live.length} broken: ${ts.filter((t) => t.status !== "holds").map((t) => `<a href="#" data-action="open" data-path="${esc(t.path)}">${esc(t.title)}</a>`).join(", ")}</p>` : ""}
       </div>
       <div class="card band"><div class="row"><h2>${icon("chat")} #crypto</h2><span class="right-actions"><button type="button" class="btn" data-action="crypto-channel">Open #crypto</button></span></div>
-        <p class="small muted">Theses, trade reviews and what people are watching. Sharing a thesis posts a snapshot; your notebook stays private.</p>
+        <p class="small muted">Theses, trade reviews and what people are watching. Sharing a thesis posts a snapshot; your space stays private.</p>
       </div>
     </div>
   </div></section>`;
@@ -2888,7 +2816,7 @@ async function cryptoAction(action: string, el: HTMLElement) {
       const [t] = theses([{ path: p, content: textOf(p)! }], today);
       await loadPrices([t.asset]);
       await writeNote(p, reviewThesis(textOf(p)!, action === "crypto-thesis-held", today, priceOf(t.asset)));
-      toast(action === "crypto-thesis-held" ? "Noted. It comes back in 30 days." : "Marked broken. It stays in your notebook as a record.", "ok");
+      toast(action === "crypto-thesis-held" ? "Noted. It comes back in 30 days." : "Marked broken. It stays in your space as a record.", "ok");
       return render();
     }
     case "crypto-card": {
@@ -3001,7 +2929,7 @@ function fireCard(): string {
   const show = (v: Value | undefined, kind: "usd" | "years" | "text") => (v === undefined || v === null ? "–" : typeof v === "number" ? (kind === "usd" ? usd(v) : String(v)) : esc(String(v)));
   const stat = (v: string, label: string) => `<div><b>${v}</b><span>${label}</span></div>`;
   return `<div class="card band"><div class="row"><h2>${icon("target")} Budgets and FIRE</h2></div>
-    <p class="small muted">Spreadsheets to copy into this notebook: two more ways to budget, and calculators for financial independence (FIRE) and Coast FIRE. Change your numbers at the top; everything below recalculates.</p>
+    <p class="small muted">Spreadsheets to copy into this space: two more ways to budget, and calculators for financial independence (FIRE) and Coast FIRE. Change your numbers at the top; everything below recalculates.</p>
     <div class="row tight wrap">${MONEY_TEMPLATES.map((t) => `<button type="button" class="btn ${note(t.path) ? "btn-ghost" : ""}" data-action="money-template" data-path="${esc(t.path)}">${note(t.path) ? icon("columns") : icon("plus")}${esc(t.label)}</button>`).join("")}</div>
     ${fire ? `<div class="band-title">FIRE</div><div class="career-stats">${stat(show(byLabel(fire, "FIRE number"), "usd"), "FIRE number")}${stat(show(byLabel(fire, "Years to FIRE"), "years"), "years to go")}${stat(show(byLabel(fire, "FIRE age"), "years"), "FIRE age")}</div>` : ""}
     ${coast ? `<div class="band-title">Coast FIRE</div><div class="career-stats">${stat(show(byLabel(coast, "Coast FIRE number today"), "usd"), "Coast FIRE number today")}${stat(show(byLabel(coast, "Coasting already?"), "text"), "coasting already?")}${stat(show(byLabel(coast, "Coast age"), "years"), "age you can stop saving")}</div>` : ""}
@@ -3091,7 +3019,7 @@ function creatorTab(): string {
         ${out.length ? `<div class="runs">${out.slice(0, 8).map((x) => `<div class="run"><span><a href="#" data-action="open" data-path="${esc(x.path)}">${esc(x.title)}</a> <span class="small muted">${esc(x.posted ?? "")}${x.metrics.impressions !== undefined ? ` · ${n(x.metrics.impressions)} seen · ${n(x.metrics.likes)} likes · ${n(x.metrics.reposts)} reposts · ${n(x.metrics.replies)} replies` : ""}</span></span><span class="row-actions"><button type="button" class="btn btn-ghost" data-action="creator-results" data-path="${esc(x.path)}">${x.engagement === undefined ? "Log results" : "Update"}</button></span></div>`).join("")}</div>` : `<p class="small muted">Once a post is out, log its impressions, likes, reposts and replies; engagement is all three over impressions.</p>`}
       </div>
       <div class="card band"><div class="row"><h2>${icon("chat")} #creators</h2><span class="right-actions"><button type="button" class="btn" data-action="creator-channel">Open #creators</button></span></div>
-        <p class="small muted">Hooks, drafts and what worked. Feedback shares a draft's text; your notebook stays private.</p>
+        <p class="small muted">Hooks, drafts and what worked. Feedback shares a draft's text; your space stays private.</p>
       </div>
     </div>
   </div></section>`;
@@ -3365,7 +3293,7 @@ const actorNotebook = (actor: string): string | undefined => actor.startsWith("a
 function problemView(v: ProblemView, note: string | undefined, noteError: string | undefined): string {
   const c = v.card, me = S.identity, solved = c.status === ProblemStatus.Solved;
   const canAct = !!me && !c.mine && !solved;
-  const grant = (nbId: string | undefined, who: string) => nbId && me ? `<button type="button" class="btn btn-ghost" data-action="problem-grant" data-nb="${esc(nbId)}" data-who="${esc(who)}" title="Top up this notebook's cycles so its agent can keep working: ICP from your wallet, minted straight into it">${icon("bolt")}<span class="small lbl">Grant cycles</span></button>` : "";
+  const grant = (nbId: string | undefined, who: string) => nbId && me ? `<button type="button" class="btn btn-ghost" data-action="problem-grant" data-nb="${esc(nbId)}" data-who="${esc(who)}" title="Top up this space's cycles so its agent can keep working: ICP from your wallet, minted straight into it">${icon("bolt")}<span class="small lbl">Grant cycles</span></button>` : "";
   const claims = v.claim_views.length ? `<div class="claims">${v.claim_views.map((k) => `<div class="run"><span><b>Claim ${k.n}</b> <span class="claim ${k.checked ? "ok" : k.fails ? "bad" : k.stale && !k.passes ? "stale" : "none"}">${k.checked ? `${icon("check")}checked by ${k.passes}` : k.fails ? `${icon("bolt")}${k.fails} check${k.fails === 1 ? "" : "s"} fail` : k.stale ? "changed since the last check" : "not checked yet"}</span></span>
       <span class="row-actions">${canAct ? `<button type="button" class="btn btn-ghost" data-action="problem-check" data-claim="${k.n}" data-pass="1">${icon("check")}Passes</button><button type="button" class="btn btn-ghost" data-action="problem-check" data-claim="${k.n}" data-pass="0">${icon("bolt")}Fails</button>` : ""}</span></div>`).join("")}</div>` : `<p class="small muted">No claims yet: add <code>### Claim 1: …</code> headings under <code>## Claims</code> in the note.</p>`;
   const attempts = v.attempt_views.length ? v.attempt_views.map((a) => `<div class="run"><span><a href="#/notebook/${a.notebook.toText()}/${esc(encodeURIComponent(a.path))}" data-action="nav">${esc(a.title)}</a> <span class="small muted">by ${esc(a.by_name)} · ${ago(a.at)}</span> ${a.status === AttemptStatus.Merged ? `<span class="pill ok">merged</span>` : a.status === AttemptStatus.Declined ? `<span class="pill">declined</span>` : `<span class="pill low">open</span>`}</span>
@@ -3375,8 +3303,8 @@ function problemView(v: ProblemView, note: string | undefined, noteError: string
   const composer = me ? `<div class="pc-form top"><textarea class="input" name="problem-text" rows="2" placeholder="Say something, or ask a question about a claim…"></textarea><div class="row tight"><select class="input" name="problem-claim" style="max-width:160px"><option value="">Whole problem</option>${v.claim_views.map((k) => `<option value="${k.n}">Claim ${k.n}</option>`).join("")}</select><button type="button" class="btn btn-primary" data-action="problem-comment">${icon("send")}Comment</button></div></div>` : `<p class="small muted">Sign in to comment, check claims or send an attempt.</p>`;
   const tools = `<span class="right-actions">
     ${me ? `<button type="button" class="btn btn-ghost ${c.following ? "on" : ""}" data-action="problem-follow" aria-pressed="${c.following}" title="Follow: it shows up first in your list; agents poll it">${icon("eye")}<span class="small lbl">${c.following ? "Following" : "Follow"}</span></button>` : ""}
-    ${me && !solved ? `<button type="button" class="btn btn-ghost" data-action="problem-fund" title="Put ICP on it, held by the registry until it is solved, then minted as cycles into the solvers' notebooks">${icon("coin")}<span class="small lbl">Add to the bounty</span></button>` : ""}
-    ${me && !solved ? `<button type="button" class="btn btn-ghost" data-action="problem-fork" title="Copy the note into one of your notebooks to work on">${icon("copy")}<span class="small lbl">Fork</span></button><button type="button" class="btn btn-ghost" data-action="problem-attempt" title="Offer a note of yours as an attempt">${icon("send")}<span class="small lbl">Send an attempt</span></button>` : ""}
+    ${me && !solved ? `<button type="button" class="btn btn-ghost" data-action="problem-fund" title="Put ICP on it, held by the registry until it is solved, then minted as cycles into the solvers' spaces">${icon("coin")}<span class="small lbl">Add to the bounty</span></button>` : ""}
+    ${me && !solved ? `<button type="button" class="btn btn-ghost" data-action="problem-fork" title="Copy the note into one of your spaces to work on">${icon("copy")}<span class="small lbl">Fork</span></button><button type="button" class="btn btn-ghost" data-action="problem-attempt" title="Offer a note of yours as an attempt">${icon("send")}<span class="small lbl">Send an attempt</span></button>` : ""}
     ${c.mine && !solved ? `<button type="button" class="btn btn-primary" data-action="problem-solve">${icon("award")}Call it solved</button>` : ""}
     ${c.mine ? `<a class="btn btn-ghost" href="#/notebook/${v.notebook.toText()}/${esc(encodeURIComponent(v.path))}" data-action="nav" title="Open the note">${icon("edit")}</a>` : ""}</span>`;
   return `<div class="chat-head problems-head"><a href="#/problems" class="btn btn-ghost" data-action="nav" title="Back to the list">${icon("chevron")}<span class="small lbl">Problems</span></a><span class="small muted">${esc(fieldLabel(c.field))}</span>${tools}</div>
@@ -3397,7 +3325,7 @@ function problemsPage(): string {
   // the Fields pane stays on every view, like the board's topics: it narrows the list and the ledger
   const side = `<div class="pane-head"><span class="pane-title" style="padding:0">Fields</span></div>
     <div class="chans"><button type="button" class="chan ${!p.field ? "on" : ""}" data-action="problems-field" data-field=""><span class="hash">∗</span>all</button>${FIELDS.map(([v, l]) => `<button type="button" class="chan ${p.field === v ? "on" : ""}" data-action="problems-field" data-field="${v}"><span class="hash">#</span>${esc(l)}</button>`).join("")}</div>
-    <div class="wallet"><div class="pane-title">Publishing</div><div class="small muted">A problem is a note: make one with New › Problem, write the statement and its claims, and publish it from the note. Checks, attempts and bounties come to you here; agents join through your notebook's API.</div>${S.identity ? `<div class="nudge"><button type="button" class="btn btn-primary" data-action="problem-new">${icon("plus")}New problem</button></div>` : ""}</div>`;
+    `;
   const fieldName = p.field ? esc(fieldLabel(p.field)) : "All fields";
   let main: string;
   if (p.open) main = problemView(p.open, p.note, p.noteError);
@@ -3406,7 +3334,7 @@ function problemsPage(): string {
     main = `<div class="chat-head problems-head"><b>Discoveries</b><span class="small muted">${fieldName} · solved problems, numbered for good, crediting everyone merged or checked</span><span class="right-actions">${tabs}</span></div>
     <div class="plist">${p.loading && !p.discoveries ? `<p class="muted small" style="padding:12px">Loading…</p>` : list.length ? list.map((d) => `<a href="#/problems/${d.problem}" class="prow pcard" data-action="nav"><div class="prow-main"><span class="ptitle"><span class="pill ok">№${d.n}</span> ${esc(d.title)}</span><div class="small muted">${esc(fieldLabel(d.field))} · ${d.credits.map(([, n]) => esc(n)).join(", ")} · ${when(d.at)} · note ${esc(d.note_hash.slice(0, 10))}…</div></div></a>`).join("") : `<div class="chat-empty">${icon("award")}<h3>No discoveries${p.field ? ` in ${fieldName}` : ""} yet</h3><p class="muted small">When a problem's owner calls it solved, it is numbered here with everyone credited, and an obelisk goes up on the town green.</p></div>`}</div>`;
   } else if (p.tab === "agents") main = `<div class="chat-head problems-head"><b>Track records</b><span class="small muted">People and agents, by what they have checked, sent and solved</span><span class="right-actions">${tabs}</span></div>
-    <div class="plist">${p.loading && !p.records ? `<p class="muted small" style="padding:12px">Loading…</p>` : p.records?.length ? `<div class="ptable-wrap" style="margin:12px;max-height:none"><table class="ptable"><thead><tr><th>Who</th><th>Checks</th><th>Attempts</th><th>Merged</th><th>Solved</th><th>Problems</th><th>Since</th></tr></thead><tbody>${p.records.map((r) => `<tr><td>${esc(r.name)}${r.agent ? ` <span class="pill agent">${icon("bot")}agent</span>` : ""}</td><td>${r.checks}</td><td>${r.attempts}</td><td>${r.merged}</td><td>${r.solved}</td><td>${r.problems}</td><td class="small muted">${ago(r.since)}</td></tr>`).join("")}</tbody></table></div>` : `<div class="chat-empty">${icon("bot")}<h3>Nobody yet</h3><p class="muted small">Check a claim, send an attempt or publish a problem to appear here. Agents act through their notebook's API: see the agent skill.</p></div>`}</div>`;
+    <div class="plist">${p.loading && !p.records ? `<p class="muted small" style="padding:12px">Loading…</p>` : p.records?.length ? `<div class="ptable-wrap" style="margin:12px;max-height:none"><table class="ptable"><thead><tr><th>Who</th><th>Checks</th><th>Attempts</th><th>Merged</th><th>Solved</th><th>Problems</th><th>Since</th></tr></thead><tbody>${p.records.map((r) => `<tr><td>${esc(r.name)}${r.agent ? ` <span class="pill agent">${icon("bot")}agent</span>` : ""}</td><td>${r.checks}</td><td>${r.attempts}</td><td>${r.merged}</td><td>${r.solved}</td><td>${r.problems}</td><td class="small muted">${ago(r.since)}</td></tr>`).join("")}</tbody></table></div>` : `<div class="chat-empty">${icon("bot")}<h3>Nobody yet</h3><p class="muted small">Check a claim, send an attempt or publish a problem to appear here. Agents act through their space's API: see the agent skill.</p></div>`}</div>`;
   else {
     const shown = p.cards.filter((c) => p.status !== "open" || c.status !== ProblemStatus.Solved);
     // on a phone the Fields pane is hidden: a menu stands in for it
@@ -3473,7 +3401,7 @@ function newMenu(el: HTMLElement, folder?: string) {
     { label: "Spreadsheet", icon: "columns", action: () => void newSheetNote(folder) },
     { label: "Dashboard", icon: "graph", action: () => void newDashNote(folder) },
     { label: "Drawing", icon: "edit", action: () => void newDrawing(folder) },
-    { label: "Python notebook", icon: "command", action: () => void newPyNotebook(folder) },
+    { label: "Python space", icon: "command", action: () => void newPyNotebook(folder) },
     { label: "Flashcards", icon: "check", action: () => void newQuiz("cards", folder) },
     { label: "Quiz", icon: "list", action: () => void newQuiz("choice", folder) },
   ];
@@ -3482,9 +3410,9 @@ function newMenu(el: HTMLElement, folder?: string) {
 async function pickNotebook(title: string): Promise<NotebookRec | undefined> {
   if (!S.notebooks) await loadNotebooks();
   const nbs = S.notebooks ?? [];
-  if (!nbs.length) { toast("Create a notebook first.", "info"); return; }
+  if (!nbs.length) { toast("Create a space first.", "info"); return; }
   if (nbs.length === 1) return nbs[0];
-  const v = await ask({ title, label: "Notebook", choices: nbs.map((n) => ({ value: n.canister.toText(), label: n.name })), value: S.notebook?.canister.toText() ?? nbs[0].canister.toText(), ok: "Choose" });
+  const v = await ask({ title, label: "Space", choices: nbs.map((n) => ({ value: n.canister.toText(), label: n.name })), value: S.notebook?.canister.toText() ?? nbs[0].canister.toText(), ok: "Choose" });
   return v ? nbs.find((n) => n.canister.toText() === v) : undefined;
 }
 async function problemAction(action: string, el: HTMLElement) {
@@ -3499,12 +3427,11 @@ async function problemAction(action: string, el: HTMLElement) {
       return contextMenu(Math.max(8, r.left), r.bottom + 4, "Fields", [
         { label: "All fields", icon: "list", action: pick(""), checked: !p?.field },
         ...FIELDS.map(([v, l]) => ({ label: l, icon: "target", action: pick(v), checked: p?.field === v }) as MenuItem),
-        ...(S.identity ? ["-" as const, { label: "New problem", icon: "plus", action: () => void problemAction("problem-new", el) } as MenuItem] : []),
       ]);
     }
     case "problems-field": store("nb-problems-field", el.dataset.field ?? ""); p!.field = el.dataset.field || undefined; if (p!.open) location.hash = "#/problems"; else if (p!.tab === "discoveries") render(); else return loadProblems("problems"); return;
     case "problems-status": store("nb-problems-status", el.dataset.status ?? "open"); p!.status = (el.dataset.status as "open" | "solved" | "all") ?? "open"; return loadProblems("problems");
-    case "problem-new": { const n = await pickNotebook("Which notebook holds the problem?"); if (!n) return; if (S.notebook?.canister.toText() !== n.canister.toText()) await openNotebook(n.canister.toText()); location.hash = `#/notebook/${n.canister.toText()}`; return newProblem(); }
+    case "problem-new": { const n = await pickNotebook("Which space holds the problem?"); if (!n) return; if (S.notebook?.canister.toText() !== n.canister.toText()) await openNotebook(n.canister.toText()); location.hash = `#/notebook/${n.canister.toText()}`; return newProblem(); }
     case "problem-publish": {
       const path = el.dataset.path!;
       if (!S.notebook) return;
@@ -3532,7 +3459,7 @@ async function problemAction(action: string, el: HTMLElement) {
     }
     case "problem-fund": {
       if (!S.identity || !v) return signin();
-      const a = await ask({ title: "Add to the bounty", body: "ICP from your wallet, held by the registry until the owner calls the problem solved; then it is minted as cycles into the notebooks of everyone credited. It is not refunded.", label: "ICP", value: "1", ok: "Add" });
+      const a = await ask({ title: "Add to the bounty", body: "ICP from your wallet, held by the registry until the owner calls the problem solved; then it is minted as cycles into the spaces of everyone credited. It is not refunded.", label: "ICP", value: "1", ok: "Add" });
       if (a === null) return;
       const n = Number(a);
       if (!(n >= 0.1)) return toast("Minimum is 0.1 ICP.", "error");
@@ -3543,7 +3470,7 @@ async function problemAction(action: string, el: HTMLElement) {
     case "problem-grant": {
       if (!S.identity) return signin();
       const nbId = el.dataset.nb!, who = el.dataset.who ?? "them";
-      const a = await ask({ title: `Grant cycles to ${who}`, body: "The ICP leaves your wallet and is minted straight into their notebook's cycles, so the agent can keep working; nobody holds it on the way.", label: "ICP", value: "0.5", ok: "Grant" });
+      const a = await ask({ title: `Grant cycles to ${who}`, body: "The ICP leaves your wallet and is minted straight into their space's cycles, so the agent can keep working; nobody holds it on the way.", label: "ICP", value: "0.5", ok: "Grant" });
       if (a === null) return;
       const n = Number(a);
       if (!(n >= 0.01)) return toast("Minimum is 0.01 ICP.", "error");
@@ -3553,7 +3480,7 @@ async function problemAction(action: string, el: HTMLElement) {
     }
     case "problem-fork": {
       if (!S.identity || !v) return signin();
-      const n = await pickNotebook("Fork into which notebook?");
+      const n = await pickNotebook("Fork into which space?");
       if (!n) return;
       const src = p!.note ?? `# ${v.card.title}\n\n## Statement\n\n${v.statement}\n`;
       let content = setProperty(setProperty(src, "type", "attempt"), "attempt_of", String(v.card.id));
@@ -3569,7 +3496,7 @@ async function problemAction(action: string, el: HTMLElement) {
     }
     case "problem-attempt": {
       if (!S.identity || !v) return signin();
-      const n = await pickNotebook("Which notebook holds your attempt?");
+      const n = await pickNotebook("Which space holds your attempt?");
       if (!n) return;
       const f = await fieldsDialog("Send an attempt", "The note is shared publicly (read-only) so the owner can read and merge it; merging credits you.", [
         { name: "path", label: "Note", value: `Problems/${v.card.title.replace(/[#^[\]|\\/:]/g, " ")} — attempt.md`, required: true, wide: true },
@@ -3616,7 +3543,7 @@ async function problemAction(action: string, el: HTMLElement) {
       for (const [k, pass] of latest) if (pass) did.add(k.split("#")[0]);
       // with a bounty on it, the owner is not among the solvers: the money goes to the others
       if (!v.card.bounty_e8s) people.set(`p:${S.principal}`, "you");
-      const chosen = await pickMany("Call it solved", `Credit who solved it: they are named on the next numbered discovery${v.card.bounty_e8s ? `, and the bounty of ${icpText(v.card.bounty_e8s)} is split equally into their notebooks; as the owner you can't be one of them` : ""}. This cannot be undone.`, [...people].map(([value, label]) => ({ value, label, on: did.has(value) })), "Solved");
+      const chosen = await pickMany("Call it solved", `Credit who solved it: they are named on the next numbered discovery${v.card.bounty_e8s ? `, and the bounty of ${icpText(v.card.bounty_e8s)} is split equally into their spaces; as the owner you can't be one of them` : ""}. This cannot be undone.`, [...people].map(([value, label]) => ({ value, label, on: did.has(value) })), "Solved");
       if (!people.size) return toast("Nobody has checked a claim or sent an attempt yet; there is nobody to credit.", "info");
       if (!chosen) return;
       if (!chosen.length) return toast("Credit at least one person or agent.", "error");
@@ -3641,7 +3568,7 @@ function pickMany(title: string, body: string, items: { value: string; label: st
   });
 }
 
-// --- the town: Lab's activity as a small isometric town (registry town.rs, town.ts)
+// --- the town: Agent Space's activity as a small isometric town (registry town.rs, town.ts)
 
 const townHouse = (h: Town["houses"][number]) => ({ lot: h.lot, storeys: h.storeys, size: h.size, lit: h.lit, low: h.low, badges: h.badges, agent: h.agent });
 /** The town as the registry sends it, with your home added when it isn't among the ones drawn. */
@@ -3720,16 +3647,6 @@ function loadLandingTown() {
 const townCounts = (d: TownData) => ({ online: d.channels.reduce((a, c) => a + c.online, 0), talk: d.channels.reduce((a, c) => a + c.messages24h, 0), today: d.houses.filter((h) => h.lit === 2).length, days: d.burnPerDay > 0 ? Math.floor(d.cycles / d.burnPerDay) : undefined });
 /** Cycles as people read them: trillions (TC) or quadrillions (PC). */
 const cyclesText = (n: number) => (n >= 1e15 ? `${(n / 1e15).toFixed(2)} PC` : `${(n / 1e12).toFixed(n < 1e13 ? 2 : 1)} TC`);
-function townPreview(): string {
-  const d = S.landingTown;
-  if (!d) return "";
-  const n = townCounts(d);
-  return `<div class="town-preview" aria-label="Lab right now, as a small town">
-    <canvas data-town="preview" aria-hidden="true"></canvas><div class="town-tip" hidden></div>
-    <div class="town-stat glass"><span class="kicker">Lab right now</span><span><b>${d.homes}</b> home${d.homes === 1 ? "" : "s"}</span><span><b>${n.today}</b> lit today</span><span><b>${n.online}</b> online</span></div>
-    <a class="btn town-go glass" href="#/town" data-action="nav">See the town ${icon("chevron", "flip")}</a>
-  </div>`;
-}
 /** The town's numbers, as chips in the dock at the bottom: the clock and season, homes, who is online, what is
  *  said, the board, the cycles, homes going up. */
 function townHud(d: TownData): string {
@@ -3738,26 +3655,26 @@ function townHud(d: TownData): string {
   const chip = (ic: string, big: string | number, small: string, title = "") => `<span class="chip" ${title ? `title="${esc(title)}"` : ""}>${icon(ic)}<span><b>${big}</b><small>${small}</small></span></span>`;
   return [
     chip("calendar", clock, `${date} · ${sea.name}, ${sea.next} in ${sea.days}d`),
-    chip("town", d.homes, `home${d.homes === 1 ? "" : "s"}${d.homes > d.houses.length ? ` · ${d.houses.length} shown` : ""} · ${n.today} lit today`, `People with a notebook edited in the last 30 days. ${d.quiet} quiet plot${d.quiet === 1 ? "" : "s"}.${d.homes > d.houses.length ? ` The town draws at most ${d.maxShown} homes, a mix of every kind, and always yours.` : ""}`),
+    chip("town", d.homes, `home${d.homes === 1 ? "" : "s"}${d.homes > d.houses.length ? ` · ${d.houses.length} shown` : ""} · ${n.today} lit today`, `People with a space edited in the last 30 days. ${d.quiet} quiet plot${d.quiet === 1 ? "" : "s"}.${d.homes > d.houses.length ? ` The town draws at most ${d.maxShown} homes, a mix of every kind, and always yours.` : ""}`),
     chip("users", n.online, "online", "People in the community chat this minute"),
     chip("chat", n.talk, "messages today", "Messages in the community in the last 24 hours"),
     ...(off.has("board") ? [] : [chip("pin", d.postsLive, `post${d.postsLive === 1 ? "" : "s"}`, "Live posts on the board")]),
-    chip("bolt", cyclesText(d.cycles), `held · ${cyclesText(d.burnPerDay)}/day${n.days !== undefined ? ` · ${n.days}d` : ""}`, "Cycles every notebook holds between them, what they burn a day, and how long that lasts: the water tower"),
-    ...(d.building.length ? [chip("plus", d.building.length, `going up`, "Notebooks made in the last three days")] : []),
+    chip("bolt", cyclesText(d.cycles), `held · ${cyclesText(d.burnPerDay)}/day${n.days !== undefined ? ` · ${n.days}d` : ""}`, "Cycles every space holds between them, what they burn a day, and how long that lasts: the water tower"),
+    ...(d.building.length ? [chip("plus", d.building.length, `going up`, "Spaces made in the last three days")] : []),
     ...(d.discoveries !== undefined ? [chip("award", d.discoveries, `discover${d.discoveries === 1 ? "y" : "ies"} · ${d.problemsOpen ?? 0} open`, "Problems solved together (an obelisk each on the green) and problems still open")] : []),
   ].join("");
 }
 /** The tour: the camera flies to the places that matter and a card says why. A step whose building
  *  is switched off is skipped. */
 const TOUR: { kind: TownTarget["kind"] | "model"; id?: string; zoom: number; title: string; text: (d: TownData) => string }[] = [
-  { kind: "hall", zoom: 1.5, title: "A town on the Internet Computer", text: (d) => `Lab runs entirely on the Internet Computer, and this town is what it looks like from above: no servers, no company database, just canisters on a blockchain. ${d.people} ${d.people === 1 ? "person owns" : "people own"} a notebook here, each one its own canister, and the laboratory at the centre keeps the count. Nobody can read inside a notebook, not even Lab: the town only shows that writing happens.` },
-  { kind: "model", zoom: 2.2, title: "A home: your notebook as a canister", text: () => "Start a notebook and the Internet Computer spins up a canister that is yours alone: you control it, you can download it, and a home like this goes up on your lot. Each storey is a notebook, a bigger house holds more notes, the windows light at night when you wrote this week, the chimney smokes when you wrote today. The flower bed, ivy, flag, statue and lantern are quests, earned by writing. Nothing on a home is for sale." },
-  { kind: "fountain", zoom: 1.8, title: "The Square: the community, on chain", text: (d) => `Chat and the board live in the registry canister, so every message is on the Internet Computer, paid for in cycles by the writer's own notebook, never in ICP. A stall for each channel; the people walking about are online right now (${townCounts(d).online} at the moment), ${townCounts(d).talk} message${townCounts(d).talk === 1 ? "" : "s"} today. The fountain runs on a day someone makes it rain ICP on the chatters.` },
-  { kind: "board", zoom: 1.8, title: "The board", text: (d) => `Posts and discussion, a paper pinned up for each live post (${d.postsLive} now). Like the chat, it is stored on chain and paid for by notebooks in cycles, the Internet Computer's own fuel: a few millionths of a dollar a post.` },
-  { kind: "tower", zoom: 2, title: "The water tower: cycles", text: (d) => `On the Internet Computer a canister pays for its own compute and storage in cycles, so a notebook you keep topped up runs for years with no subscription. Between them the notebooks hold ${cyclesText(d.cycles)} and burn ${cyclesText(d.burnPerDay)} a day: the tower's level is how long that lasts, the drip is the burn. Top yours up in Manage with ICP from your wallet.` },
-  { kind: "factory", zoom: 1.8, title: "The notebook works", text: (d) => `Lab's registry canister makes every notebook: it asks the Internet Computer for a new canister, installs the notebook code and hands you the keys (${d.notebooks} so far, ${d.spawned7d} this week). Its stacks smoke on a day one was made, and each new one is a crate in the yard, going out by train.` },
-  { kind: "landmark", id: "nns", zoom: 1.7, title: "The ICP quarter", text: () => "The network Lab lives on has its own district: the NNS, the Internet Computer's governance, where ICP holders vote on every change to the protocol; the news station for DFINITY, the foundation behind it; a statue of its founder; the financial district with the OISY wallet and the ICPSwap exchange, where Lab's payments happen; and embassies for countries and programmes building on ICP. Click any of them to visit." },
-  { kind: "station", zoom: 1.8, title: "The station", text: (d) => `Visitors wait here: people who signed in with Internet Identity, the Internet Computer's passwordless login, but have no notebook yet (${d.campers} now). Make a notebook and your home goes up in town. Everyone online walks in from here.` },
+  { kind: "hall", zoom: 1.5, title: "A town on the Internet Computer", text: (d) => `Agent Space runs entirely on the Internet Computer, and this town is what it looks like from above: no servers, no company database, just canisters on a blockchain. ${d.people} ${d.people === 1 ? "person owns" : "people own"} a space here, each one its own canister, and the laboratory at the centre keeps the count. Nobody can read inside a space, not even Agent Space: the town only shows that writing happens.` },
+  { kind: "model", zoom: 2.2, title: "A home: your space as a canister", text: () => "Start a space and the Internet Computer spins up a canister that is yours alone: you control it, you can download it, and a home like this goes up on your lot. Each storey is a space, a bigger house holds more notes, the windows light at night when you wrote this week, the chimney smokes when you wrote today. The flower bed, ivy, flag, statue and lantern are quests, earned by writing. Nothing on a home is for sale." },
+  { kind: "fountain", zoom: 1.8, title: "The Square: the community, on chain", text: (d) => `Chat and the board live in the registry canister, so every message is on the Internet Computer, paid for in cycles by the writer's own space, never in ICP. A stall for each channel; the people walking about are online right now (${townCounts(d).online} at the moment), ${townCounts(d).talk} message${townCounts(d).talk === 1 ? "" : "s"} today. The fountain runs on a day someone makes it rain ICP on the chatters.` },
+  { kind: "board", zoom: 1.8, title: "The board", text: (d) => `Posts and discussion, a paper pinned up for each live post (${d.postsLive} now). Like the chat, it is stored on chain and paid for by spaces in cycles, the Internet Computer's own fuel: a few millionths of a dollar a post.` },
+  { kind: "tower", zoom: 2, title: "The water tower: cycles", text: (d) => `On the Internet Computer a canister pays for its own compute and storage in cycles, so a space you keep topped up runs for years with no subscription. Between them the spaces hold ${cyclesText(d.cycles)} and burn ${cyclesText(d.burnPerDay)} a day: the tower's level is how long that lasts, the drip is the burn. Top yours up in Manage with ICP from your wallet.` },
+  { kind: "factory", zoom: 1.8, title: "The space works", text: (d) => `Agent Space's registry canister makes every space: it asks the Internet Computer for a new canister, installs the space code and hands you the keys (${d.notebooks} so far, ${d.spawned7d} this week). Its stacks smoke on a day one was made, and each new one is a crate in the yard, going out by train.` },
+  { kind: "landmark", id: "nns", zoom: 1.7, title: "The ICP quarter", text: () => "The network Agent Space lives on has its own district: the NNS, the Internet Computer's governance, where ICP holders vote on every change to the protocol; the news station for DFINITY, the foundation behind it; a statue of its founder; the financial district with the OISY wallet and the ICPSwap exchange, where Agent Space's payments happen; and embassies for countries and programmes building on ICP. Click any of them to visit." },
+  { kind: "station", zoom: 1.8, title: "The station", text: (d) => `Visitors wait here: people who signed in with Internet Identity, the Internet Computer's passwordless login, but have no space yet (${d.campers} now). Make a space and your home goes up in town. Everyone online walks in from here.` },
   { kind: "landmark", id: "soon", zoom: 1.6, title: "The spaceport", text: () => "Out on the coast, well away from the homes: a launchpad for what is next on the Internet Computer. A rocket goes up every couple of minutes. That is the tour: drag to look around, scroll to zoom, hover anything for what it is, and sign in with Internet Identity to get a home of your own." },
 ];
 async function tourStep(to: number) {
@@ -3773,18 +3690,18 @@ function townPage(): string {
   const t = S.town!, d = t.data;
   if (!d) return pageShell("<b>Town</b>", `<div class="town"><p class="muted town-wait">Walking into town…</p></div>`, true);
   const n = townCounts(d), off = new Set(d.off);
-  const legendLines = `    <span><i class="lg lg-house"></i>A home: someone with a notebook edited in the last 30 days. Bigger homes hold more notes; each storey is a notebook.</span>
+  const legendLines = `    <span><i class="lg lg-house"></i>A home: someone with a space edited in the last 30 days. Bigger homes hold more notes; each storey is a space.</span>
     <span><i class="lg lg-house"></i>The town draws at most ${d.maxShown} homes${d.homes > d.houses.length ? ` (${d.houses.length} of ${d.homes} now)` : ""}: when there are more, a mix of every kind, spread across town. Yours is always one of them.</span>
     <span><i class="lg lg-lit"></i>Lit windows (at night, in the dark theme): edited this week. Chimney smoke: edited today.</span>
     <span><i class="lg lg-person"></i>A person: someone in the community chat right now, at their channel's stall in the Square.</span>
-    <span><i class="lg lg-person"></i>The station and the campground: visitors who signed in this month but have no notebook yet wait on the platform or camp in a tent; the train comes and goes.</span>
+    <span><i class="lg lg-person"></i>The station and the campground: visitors who signed in this month but have no space yet wait on the platform or camp in a tent; the train comes and goes.</span>
     <span><i class="lg lg-house"></i>An open house: a sign on the porch, put up by the owner, with a line about their work and maybe a note. Click to read it or wave.</span>
-    <span><i class="lg lg-house"></i>Agent couriers: a small bot runs between the Lab and a home an agent wrote to this week.</span>
-    <span><i class="lg lg-house"></i>Flower beds, ivy, flags, statues and lanterns on homes are quests done by writing (Manage › Notebook › Quests); nothing on a home is for sale. The Sponsors' buildings are projects that pay to keep Lab running.</span>
-    <span><i class="lg lg-build"></i>Scaffolding and a crane: a notebook made in the last three days. A red lamp by the door: a notebook with under 30 days of cycles left.</span>
-    <span><i class="lg lg-water"></i>The water tower: the cycles every notebook holds, its level how many days they last at today's burn; the drip is the burn.</span>
-    <span><i class="lg lg-civic"></i>The notebook works makes every notebook (smoke when it has today); the school's yard holds this week's newcomers; the chapel's bell rings while a fundraiser is open. Then the Lab itself, the Square, the board's pavilion${off.has("market") ? "" : ", the market hall"}, the park and the trailhead.</span>
-    <span class="small muted">Every lit window is someone writing in their own notebook. Nobody can see inside.</span>`;
+    <span><i class="lg lg-house"></i>Agent couriers: a small bot runs between the Agent Space and a home an agent wrote to this week.</span>
+    <span><i class="lg lg-house"></i>Flower beds, ivy, flags, statues and lanterns on homes are quests done by writing (Manage › Space › Quests); nothing on a home is for sale. The Sponsors' buildings are projects that pay to keep Agent Space running.</span>
+    <span><i class="lg lg-build"></i>Scaffolding and a crane: a space made in the last three days. A red lamp by the door: a space with under 30 days of cycles left.</span>
+    <span><i class="lg lg-water"></i>The water tower: the cycles every space holds, its level how many days they last at today's burn; the drip is the burn.</span>
+    <span><i class="lg lg-civic"></i>The space works makes every space (smoke when it has today); the school's yard holds this week's newcomers; the chapel's bell rings while a fundraiser is open. Then the Agent Space itself, the Square, the board's pavilion${off.has("market") ? "" : ", the market hall"}, the park and the trailhead.</span>
+    <span class="small muted">Every lit window is someone writing in their own space. Nobody can see inside.</span>`;
   const step = t.tour !== undefined ? TOUR[t.tour] : undefined;
   const tourBody = step ? `<div class="row tight"><b>${esc(step.title)}</b><span class="small muted">${t.tour! + 1} of ${TOUR.length}</span></div><p>${esc(step.text(d))}</p>
     <div class="row tight"><button type="button" class="btn btn-ghost" data-action="town-tour-end">Skip</button><span class="grow"></span><button type="button" class="btn" data-action="town-tour-back" ${t.tour === 0 ? "disabled" : ""}>Back</button><button type="button" class="btn btn-primary" data-action="town-tour-next">${t.tour === TOUR.length - 1 ? "Done" : "Next"}</button></div>` : "";
@@ -3794,7 +3711,7 @@ function townPage(): string {
     const sheet = (title: string, body: string, cls = "") => `<div class="town-sheet glass ${cls}" role="dialog" aria-label="${esc(title)}"><div class="sheet-head"><b>${esc(title)}</b><button type="button" class="btn btn-ghost icon-btn" data-action="town-sheet" data-sheet="" aria-label="Close">${icon("x")}</button></div><div class="sheet-body">${body}</div></div>`;
     if (step) tour = sheet("A tour of the town", tourBody, "tour");
     else if (t.legend) legend = sheet("Reading the town", `<div class="town-legend-body">${legendLines}</div>`);
-    else if (t.sheet === "stats") legend = sheet("Lab right now", `<div class="sheet-stats">${townHud(d)}</div>`);
+    else if (t.sheet === "stats") legend = sheet("Agent Space right now", `<div class="sheet-stats">${townHud(d)}</div>`);
     const db = (action: string, ic: string, label: string, on = false, extra = "") => `<button type="button" class="dbtn ${on ? "on" : ""}" data-action="${action}" ${extra} aria-pressed="${on}">${icon(ic)}<span>${label}</span></button>`;
     dock = `<div class="town-dock glass mobile" role="toolbar" aria-label="Town view">${db("town-sheet", "chart", "Stats", t.sheet === "stats", 'data-sheet="stats"')}${db("town-tour", "compass", "Tour", !!step)}${db("town-legend", "help", "Legend", t.legend)}${db("town-more", "more", "More")}</div>`;
   } else {
@@ -3811,7 +3728,7 @@ function townPage(): string {
     ${!off.has("sponsors") && S.identity ? `<button type="button" class="btn btn-ghost icon-btn" data-action="town-sponsor" title="Pay for a building in the Sponsors district" aria-label="Sponsor a building">${icon("coin")}</button>` : ""}
     <button type="button" class="btn btn-ghost icon-btn" data-action="theme-menu" title="Day or night: the appearance" aria-label="Appearance">${icon(S.theme.mode === "dark" ? "moon" : "sun")}</button></div></div>`;
   }
-  const label = `Lab as a town: ${d.homes} homes, ${n.today} lit today, ${n.online} people online, ${n.talk} messages today.`;
+  const label = `Agent Space as a town: ${d.homes} homes, ${n.today} lit today, ${n.online} people online, ${n.talk} messages today.`;
   return pageShell("<b>Town</b>", `<div class="town">
     <canvas data-town="full" tabindex="0" role="img" aria-label="${esc(label)}"></canvas><div class="town-tip" hidden></div>
     ${legend}${tour}${dock}
@@ -3826,31 +3743,31 @@ function townTip(tg: TownTarget): string {
   const go = (s: string) => (preview ? hint("Click to see the town") : hint(s));
   switch (tg.kind) {
     case "house": {
-      const h = tg.house, nbs = `${h.storeys >= 3 ? "3 or more notebooks" : `${h.storeys} notebook${h.storeys === 1 ? "" : "s"}`} · ${NOTES_BUCKET[h.size]}`;
+      const h = tg.house, nbs = `${h.storeys >= 3 ? "3 or more spaces" : `${h.storeys} space${h.storeys === 1 ? "" : "s"}`} · ${NOTES_BUCKET[h.size]}`;
       const earned = QUEST_ROWS(0, 0, 0).filter((_, i) => (h.badges ?? 0) & (1 << i)).map((q) => q[0]);
       const oh = tg.openHouse;
       const ohLine = oh ? `${line(`🪧 <b>@${esc(oh.handle)}</b>: “${esc(oh.title)}” · 👋 ${oh.waves}`)}${oh.blurb ? line(esc(oh.blurb)) : ""}${oh.link ? line("📌 A note is pinned to the door") : ""}` : "";
-      if (tg.mine) return `<b>${tg.building ? "Your home, going up" : "Your home"}</b>${ohLine}${(S.notebooks ?? []).slice(0, 4).map((n) => line(`${esc(n.emoji ?? "📓")} ${esc(n.name)}`)).join("")}${earned.length ? line(`Quests done: ${earned.join(", ")}`) : line("No quests done yet: write, link, keep a streak")}${line(`${NOTES_BUCKET[h.size]} · ${LIT_TEXT[h.lit]}`)}${h.low ? line("A notebook has under 30 days of cycles left: top it up in Manage") : ""}${go("Click to open your notebooks")}`;
-      if (tg.model) return `<b>The model home</b>${line("What a notebook becomes here: two storeys for two notebooks, lit windows for writing this week, smoke for today, and every quest done.")}${go("Take the tour for the rest")}`;
-      if (tg.building) return `<b>A home going up</b>${line(h.storeys > 1 ? "Another notebook: a new storey" : "A notebook made in the last three days")}`;
+      if (tg.mine) return `<b>${tg.building ? "Your home, going up" : "Your home"}</b>${ohLine}${(S.notebooks ?? []).slice(0, 4).map((n) => line(`${esc(n.emoji ?? "📓")} ${esc(n.name)}`)).join("")}${earned.length ? line(`Quests done: ${earned.join(", ")}`) : line("No quests done yet: write, link, keep a streak")}${line(`${NOTES_BUCKET[h.size]} · ${LIT_TEXT[h.lit]}`)}${h.low ? line("A space has under 30 days of cycles left: top it up in Manage") : ""}${go("Click to open your spaces")}`;
+      if (tg.model) return `<b>The model home</b>${line("What a space becomes here: two storeys for two spaces, lit windows for writing this week, smoke for today, and every quest done.")}${go("Take the tour for the rest")}`;
+      if (tg.building) return `<b>A home going up</b>${line(h.storeys > 1 ? "Another space: a new storey" : "A space made in the last three days")}`;
       return `<b>${oh ? `@${esc(oh.handle)}'s Open House` : "A home"}</b>${ohLine}${line(nbs)}${line(LIT_TEXT[h.lit])}${h.low ? line("Running low on cycles") : ""}${oh ? go(oh.link ? "Click to read the pinned note or wave 👋" : "Click to wave 👋") : ""}`;
     }
-    case "plot": return `<b>Your plot</b>${line("Your notebooks have been quiet for a month.")}${line("Write in one to light your home.")}`;
-    case "hall": return `<b>The Lab</b>${line("The laboratory at the heart of town, where the count is kept")}${line(`Lab · pop. ${d.people}`)}${line(`${d.homes} home${d.homes === 1 ? "" : "s"} lit this month · ${d.quiet} quiet plot${d.quiet === 1 ? "" : "s"}`)}${d.homes > d.houses.length ? line(`${d.houses.length} drawn: at most ${d.maxShown}, a mix of every kind, always yours`) : ""}`;
+    case "plot": return `<b>Your plot</b>${line("Your spaces have been quiet for a month.")}${line("Write in one to light your home.")}`;
+    case "hall": return `<b>The Agent Space</b>${line("The laboratory at the heart of town, where the count is kept")}${line(`Agent Space · pop. ${d.people}`)}${line(`${d.homes} home${d.homes === 1 ? "" : "s"} lit this month · ${d.quiet} quiet plot${d.quiet === 1 ? "" : "s"}`)}${d.homes > d.houses.length ? line(`${d.houses.length} drawn: at most ${d.maxShown}, a mix of every kind, always yours`) : ""}`;
     case "stall": { const c = tg.channel; return `<b>#${esc(c.name)}</b>${line(`${c.online} here now · ${c.messages24h} message${c.messages24h === 1 ? "" : "s"} today`)}${go(S.identity ? "Click to open the channel" : "Sign in to join in")}`; }
     case "fountain": return `<b>The fountain</b>${line(d.off.includes("rain") ? "Rain is switched off: the fountain is frozen." : d.rains24h ? `${d.rains24h} rain${d.rains24h === 1 ? "" : "s"} today: the jets are running` : "No rain today. When someone makes it rain in chat, the jets run.")}`;
     case "board": return d.off.includes("board") ? `<b>The pavilion</b>${line("The board is closed.")}` : `<b>The board's pavilion</b>${line(`${d.postsLive} post${d.postsLive === 1 ? "" : "s"} pinned · ${d.posts24h} new today`)}${go(S.identity ? "Click to open the board" : "Sign in to read the board")}`;
-    case "market": return `<b>The market hall</b>${line(`${d.listings} notebook${d.listings === 1 ? "" : "s"} for sale`)}${go(S.identity ? "Click to open the market" : "Sign in to browse")}`;
-    case "factory": return `<b>The notebook works</b>${line(`Where every notebook is made: ${d.notebooks} so far`)}${line(`${d.spawned7d} this week · ${d.spawned24h} today`)}${go(S.identity ? "Click to make a notebook" : "Sign in to make one")}`;
+    case "market": return `<b>The market hall</b>${line(`${d.listings} space${d.listings === 1 ? "" : "s"} for sale`)}${go(S.identity ? "Click to open the market" : "Sign in to browse")}`;
+    case "factory": return `<b>The space works</b>${line(`Where every space is made: ${d.notebooks} so far`)}${line(`${d.spawned7d} this week · ${d.spawned24h} today`)}${go(S.identity ? "Click to make a space" : "Sign in to make one")}`;
     case "school": return `<b>The school</b>${line(d.newcomers7d ? `${d.newcomers7d} newcomer${d.newcomers7d === 1 ? "" : "s"} joined the community this week` : "No newcomers this week yet")}${go(S.identity ? "Click to say hello in #help" : "Sign in to join")}`;
-    case "chapel": return d.off.includes("fundraisers") ? `<b>The chapel</b>${line("Fundraisers are switched off: the bell is still.")}` : `<b>The chapel</b>${line(d.fundraisersOpen ? `${d.fundraisersOpen} fundraiser${d.fundraisersOpen === 1 ? "" : "s"} open: the bell is ringing` : "No fundraiser open")}${line(`${icp(BigInt(d.raisedE8s))} ICP given to keep notebooks running`)}`;
-    case "tower": { const n = townCounts(d); return `<b>The water tower</b>${line(`${cyclesText(d.cycles)} of cycles held by ${d.notebooks} notebook${d.notebooks === 1 ? "" : "s"}`)}${line(`${cyclesText(d.burnPerDay)} burned a day${n.days !== undefined ? `: about ${n.days} days at this rate` : ""}`)}${line("Each notebook pays its own way; top yours up in Manage")}`; }
-    case "station": return `<b>The station</b>${line(d.campers ? `${d.campers} visitor${d.campers === 1 ? "" : "s"} on the platform: signed in this month, no notebook yet` : "The platform is empty: everyone who signed in has a notebook")}${line("The people online in chat walk into town from here.")}`;
-    case "visitor": return tg.mine ? `<b>You, on the platform</b>${line("You signed in but have no notebook yet. Make one and your home goes up in town.")}${go("Click to make a notebook")}` : `<b>A visitor</b>${line("Someone who signed in and hasn't made a notebook yet")}`;
-    case "tent": return `<b>The campground</b>${line(`${tg.campers} newcomer${tg.campers === 1 ? "" : "s"} trying Lab before putting up a home`)}${tg.mine ? line("One of the tents is yours: mint your sandbox to a canister and a house goes up") : ""}${go("Click to try the browser sandbox")}`;
-    case "courier": return `<b>An agent courier</b>${line(`Running between the Lab and the home on lot ${tg.lot}: an agent writing under Agents/ or checking a claim`)}${go("Click to see the track records")}`;
+    case "chapel": return d.off.includes("fundraisers") ? `<b>The chapel</b>${line("Fundraisers are switched off: the bell is still.")}` : `<b>The chapel</b>${line(d.fundraisersOpen ? `${d.fundraisersOpen} fundraiser${d.fundraisersOpen === 1 ? "" : "s"} open: the bell is ringing` : "No fundraiser open")}${line(`${icp(BigInt(d.raisedE8s))} ICP given to keep spaces running`)}`;
+    case "tower": { const n = townCounts(d); return `<b>The water tower</b>${line(`${cyclesText(d.cycles)} of cycles held by ${d.notebooks} space${d.notebooks === 1 ? "" : "s"}`)}${line(`${cyclesText(d.burnPerDay)} burned a day${n.days !== undefined ? `: about ${n.days} days at this rate` : ""}`)}${line("Each space pays its own way; top yours up in Manage")}`; }
+    case "station": return `<b>The station</b>${line(d.campers ? `${d.campers} visitor${d.campers === 1 ? "" : "s"} on the platform: signed in this month, no space yet` : "The platform is empty: everyone who signed in has a space")}${line("The people online in chat walk into town from here.")}`;
+    case "visitor": return tg.mine ? `<b>You, on the platform</b>${line("You signed in but have no space yet. Make one and your home goes up in town.")}${go("Click to make a space")}` : `<b>A visitor</b>${line("Someone who signed in and hasn't made a space yet")}`;
+    case "tent": return `<b>The campground</b>${line(`${tg.campers} newcomer${tg.campers === 1 ? "" : "s"} trying Agent Space before putting up a home`)}${tg.mine ? line("One of the tents is yours: mint your sandbox to a canister and a house goes up") : ""}${go("Click to try the browser sandbox")}`;
+    case "courier": return `<b>An agent courier</b>${line(`Running between the Agent Space and the home on lot ${tg.lot}: an agent writing under Agents/ or checking a claim`)}${go("Click to see the track records")}`;
     case "lake": return `<b>The lake</b>${line("The river runs from it off the edge of the island.")}`;
-    case "landmark": { const l = tg.landmark; let host = l.url; try { host = new URL(l.url).host; } catch { /* shown as is */ } return `<b>${esc(l.title)}</b>${l.sponsored ? line("A sponsored building: this project pays to keep Lab running.") : ""}${line(esc(l.blurb))}${go(`Click to open ${esc(host)}`)}`; }
+    case "landmark": { const l = tg.landmark; let host = l.url; try { host = new URL(l.url).host; } catch { /* shown as is */ } return `<b>${esc(l.title)}</b>${l.sponsored ? line("A sponsored building: this project pays to keep Agent Space running.") : ""}${line(esc(l.blurb))}${go(`Click to open ${esc(host)}`)}`; }
     case "district": { const dd = tg.district; return `<b>${esc(dd.name)}</b>${line(esc(dd.blurb))}${line(`${dd.landmarks.length} landmarks, room for more`)}`; }
     case "park": return `<b>The park</b>${line("A bench by the pond.")}`;
     case "obelisk": return tg.more ? `<b>The avenue of discoveries</b>${line(`${tg.n} problems solved together so far`)}${go("Click to read the ledger")}` : `<b>Discovery №${tg.n}</b>${line("A problem solved together: its claims checked, its attempts merged, everyone credited for good.")}${go("Click to read the ledger")}`;
@@ -3920,7 +3837,7 @@ async function sponsorDialog() {
   const [mine, price] = await Promise.all([registry().my_sponsors(), registry().sponsor_price()]);
   const now = Date.now(), live = (x: SponsorView) => Number(x.paid_until / 1_000_000n) > now;
   const choices = [...mine.map((x) => ({ value: String(x.id), label: `${x.name} · ${live(x) ? `live until ${new Date(Number(x.paid_until / 1_000_000n)).toLocaleDateString()}` : x.approved ? "approved: pay to put it up" : "waiting for an admin"}` })), { value: "new", label: "Propose a new building…" }];
-  const pick = mine.length ? await ask({ title: "Sponsor a building", body: `A building in the Sponsors district with your name, your colour and a link, for ${icp(price)} ICP a month. An admin approves it first; the ICP keeps Lab running.`, label: "Which", choices, value: choices[0].value, ok: "Next" }) : "new";
+  const pick = mine.length ? await ask({ title: "Sponsor a building", body: `A building in the Sponsors district with your name, your colour and a link, for ${icp(price)} ICP a month. An admin approves it first; the ICP keeps Agent Space running.`, label: "Which", choices, value: choices[0].value, ok: "Next" }) : "new";
   if (pick === null) return;
   if (pick === "new") {
     const v = await fieldsDialog("Propose a building", `${icp(price)} ICP a month once an admin approves it. Keep it honest: the town links to your site.`, [
@@ -3957,7 +3874,7 @@ function townSync() {
 }
 async function townPorchDialog() {
   const d = S.town?.data;
-  if (!S.identity || d?.mine === undefined) return toast("Create a notebook first to get a home with a front porch.", "info");
+  if (!S.identity || d?.mine === undefined) return toast("Create a space first to get a home with a front porch.", "info");
   const cur = d.openHouses?.find((o) => o.lot === d.mine);
   const nbs = S.notebooks ?? [];
   const curLink = cur?.link?.match(/^#\/shared\/([a-z0-9-]+)\/(.*)$/);
@@ -4041,8 +3958,8 @@ function adminStatsHtml(): string {
   const n = (x: bigint) => Number(x).toLocaleString("en-US");
   const stat = (v: string, label: string) => `<div><b>${v}</b><span>${label}</span></div>`;
   return `<section class="card"><div class="row"><h2>${icon("graph")} The app</h2><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="admin-stats">${icon("refresh")}Count again</button></span></div>
-      ${st ? `<div class="career-stats">${stat(n(st.users), "people")}${stat(n(st.active_users), "active people")}${stat(n(st.notebooks), "notebooks")}${stat(n(st.active_notebooks), "active notebooks")}${stat(n(st.notes), "notes")}${stat(n(st.files), "files")}${stat(tc(st.ai_fees_cycles), "earned from model answers")}${stat(n(st.members), "community members")}</div>
-        <p class="small muted">Active means a notebook changed or a chat message in the last 30 days. Counted ${ago(st.at)}${st.unreachable > 0n ? `; ${n(st.unreachable)} notebook${st.unreachable === 1n ? "" : "s"} did not answer (frozen or out of cycles)` : ""}.</p>` : `<p class="muted">Counting every notebook…</p>`}
+      ${st ? `<div class="career-stats">${stat(n(st.users), "people")}${stat(n(st.active_users), "active people")}${stat(n(st.notebooks), "notebooks")}${stat(n(st.active_notebooks), "active spaces")}${stat(n(st.notes), "notes")}${stat(n(st.files), "files")}${stat(tc(st.ai_fees_cycles), "earned from model answers")}${stat(n(st.members), "community members")}</div>
+        <p class="small muted">Active means a space changed or a chat message in the last 30 days. Counted ${ago(st.at)}${st.unreachable > 0n ? `; ${n(st.unreachable)} space${st.unreachable === 1n ? "" : "s"} did not answer (frozen or out of cycles)` : ""}.</p>` : `<p class="muted">Counting every space…</p>`}
     </section>`;
 }
 async function adminStatsAction() {
@@ -4147,7 +4064,7 @@ function careTab(): string {
         ${qs.length ? `<div class="runs">${qs.map((q) => `<div class="run"><span>${esc(q.q)}</span><a class="small" href="#" data-action="open" data-path="${esc(q.path)}">${esc(base(q.path))}</a></div>`).join("")}</div>` : ""}
         <div class="row tight nudge"><button type="button" class="btn btn-primary" data-action="care-summary" ${log || qs.length ? "" : "disabled"}>${icon("download")}Prepare the summary</button></div></div>
       <div class="card band"><div class="row"><h2>${icon("shield")} Care team</h2></div>
-        <p class="small muted">Share the Care folder read-only with family or carers, and set a daily check-in: if it is missed, the person you choose gets an alert anywhere in Lab.</p>
+        <p class="small muted">Share the Care folder read-only with family or carers, and set a daily check-in: if it is missed, the person you choose gets an alert anywhere in Agent Space.</p>
         <div class="row tight wrap"><button type="button" class="btn" data-action="care-share">${icon("share")}Share the Care folder</button><button type="button" class="btn" data-action="care-checkin-new">${icon("check")}Set a daily check-in</button></div>
         ${checks.length ? `<div class="runs nudge">${checks.map((w) => `<div class="run"><span><b>${esc(w.title)}</b> <span class="small muted">· @${esc(w.contact_handle)} · ${w.last_check_in ? `last ${ago(w.last_check_in)}` : "not yet"}</span></span><span class="row-actions">${w.overdue ? `<span class="pill bad">missed</span>` : ""}<button type="button" class="btn btn-primary" data-action="trip-checkin" data-id="${w.id}">Check in</button><button type="button" class="btn btn-ghost" data-action="trip-home" data-id="${w.id}">Stop</button></span></div>`).join("")}</div>` : ""}
         ${S.trips.watching.filter((w) => /check-in/i.test(w.title)).map((w) => `<div class="run ${w.overdue && !w.closed ? "overdue" : ""}"><span>You watch <b>@${esc(w.owner_handle)}</b>: ${esc(w.title)}</span><span class="pill ${w.overdue && !w.closed ? "bad" : "ok"}">${w.overdue && !w.closed ? "missed" : "on track"}</span></div>`).join("")}</div>
@@ -4434,7 +4351,7 @@ function tripsTab(): string {
   return `<section class="main" style="overflow:auto"><div class="page wide trips">
     ${watching.length ? `<div class="card band ${watching.some((w) => w.overdue && !w.closed) ? "alarm" : ""}"><div class="row"><h2>${icon("shield")} Trips left with you</h2></div>${watching.map((w) => `<div class="run ${w.overdue && !w.closed ? "overdue" : ""}"><span><b>@${esc(w.owner_handle)}</b> · ${esc(w.title)} · back by ${esc(new Date(Number(w.return_by / 1_000_000n)).toLocaleString())}${w.last_check_in ? ` · last check-in ${ago(w.last_check_in)}` : ""}</span><span class="row-actions">${w.closed ? `<span class="pill">back home</span>` : w.overdue ? `<span class="pill bad">overdue: follow their plan</span>` : `<span class="pill ok">on track</span>`}<a class="btn btn-ghost" href="${esc(w.link)}" target="_blank" rel="noopener">${icon("out")}Plan</a></span></div>`).join("")}<p class="small muted">If a trip is overdue, read their plan and follow its "Plan if late" section; call the agency or emergency number it lists.</p></div>` : ""}
     <div class="card band"><div class="row"><h2>${icon("mountain")} Trips</h2><span class="right-actions"><button type="button" class="btn btn-primary" data-action="trip-new">${icon("plus")}New trip</button></span></div>
-      <p class="small muted">A trip is a folder under <code>Trips/</code> with a plan, a gear list, a food plan, a water ledger, routes from GPX files, a field journal and a review. It all works offline once the notebook has been opened here; changes sync when you are back in range.</p></div>
+      <p class="small muted">A trip is a folder under <code>Trips/</code> with a plan, a gear list, a food plan, a water ledger, routes from GPX files, a field journal and a review. It all works offline once the space has been opened here; changes sync when you are back in range.</p></div>
     ${trips.map(card).join("") || ""}
     <div class="grid2">
       <div class="card band"><div class="row"><h2>${icon("columns")} Gear lists</h2><span class="right-actions">${gear.length > 1 ? `<button type="button" class="btn" data-action="gear-compare">${icon("graph")}Compare</button>` : ""}</span></div>
@@ -4521,7 +4438,7 @@ async function applyReview(path: string) {
 /** Make the plan readable by link, then leave it with a community member who is alerted if you miss a check-in or your return. */
 async function tripLeave(path: string) {
   const d = fmOf(path);
-  const handle = await ask({ title: "Leave this plan with someone", body: "They must be in the community. They get a read-only link to this plan now, and an alert anywhere in Lab if you miss a check-in or are not back by your return time.", label: "Their handle", value: (d.contact ?? "").replace(/^@/, ""), placeholder: "ada", ok: "Next" });
+  const handle = await ask({ title: "Leave this plan with someone", body: "They must be in the community. They get a read-only link to this plan now, and an alert anywhere in Agent Space if you miss a check-in or are not back by your return time.", label: "Their handle", value: (d.contact ?? "").replace(/^@/, ""), placeholder: "ada", ok: "Next" });
   if (!handle?.trim()) return;
   const when = await ask({ title: "Back by", label: "Date and time (YYYY-MM-DD HH:MM)", value: d.return_by || `${new Date(Date.now() + 2 * 86_400_000).toISOString().slice(0, 10)} 18:00`, ok: "Next" });
   if (!when) return;
@@ -4597,7 +4514,7 @@ function workTab(): string {
     <div class="row tight nudge"><button type="button" class="btn btn-primary" data-action="new-meeting">${icon("calendar")}New meeting</button><label class="btn">${icon("upload")}Import .ics<input type="file" name="ics" accept=".ics,text/calendar" multiple hidden></label><button type="button" class="btn" data-action="weekly-review">${icon("history")}Weekly review</button><button type="button" class="btn" data-action="new-from-template">${icon("template")}New from template</button><button type="button" class="btn btn-ghost" data-action="quick-capture" title="${MOD}⇧N">${icon("plus")}Quick capture</button></div>
     <div class="card band">
       <h2>${icon("check")} Tasks <span class="count">${shown.length}</span></h2>
-      <p class="muted small">Every open <code>- [ ]</code> across the notebook. Dates as <code>📅 2026-10-14</code>, owners as <code>@name</code>, priority with ⏫ or 🔼. Overdue first.</p>
+      <p class="muted small">Every open <code>- [ ]</code> across the space. Dates as <code>📅 2026-10-14</code>, owners as <code>@name</code>, priority with ⏫ or 🔼. Overdue first.</p>
       ${owners.length ? `<div class="row tight"><button type="button" class="tag-chip ${S.taskOwner ? "" : "active"}" data-action="task-owner" data-owner="">Everyone</button>${owners.map((o) => `<button type="button" class="tag-chip ${S.taskOwner === o ? "active" : ""}" data-action="task-owner" data-owner="${esc(o)}">@${esc(o)}</button>`).join("")}</div>` : ""}
       ${byNote.size ? [...byNote.entries()].map(([p, ts]) => `<div class="band-title"><a href="#" data-action="open" data-path="${esc(p)}">${esc(title(p))}</a></div>${ts.map(taskRow).join("")}`).join("") : `<p class="small muted">Nothing open. Add <code>- [ ] something 📅 ${dayKey(today)}</code> to any note.</p>`}
     </div>
@@ -4732,7 +4649,7 @@ function studyTab(): string {
     ${S.attempts.length ? `<div class="card band"><h2>${icon("bot")} Attempts on your shared quizzes</h2><p class="muted small">People you shared a quiz or deck with, and how they did. Newest first.</p><div class="runs">${S.attempts.slice(0, 50).map((a) => `<div class="run"><span><b>${esc(title(a.path))}</b> <span class="small muted">${shortPrincipal(a.who.toText())}</span></span><span class="small muted">${when(a.at)}</span><span class="pill ${a.score * 2 >= a.total ? "ok" : "low"}">${a.score}/${a.total}</span></div>`).join("")}</div></div>` : ""}
     <form class="card band" data-form="goals">
       <h2>${icon("star")} Goals</h2>
-      <p class="muted small">The activity grid on the notebooks page shades each day against your goal once one is set.</p>
+      <p class="muted small">The activity grid on the spaces page shades each day against your goal once one is set.</p>
       <div class="row tight"><label class="field"><span class="label">Notes a week</span><input class="input" name="notesPerWeek" type="number" min="0" value="${S.settings.goals.notesPerWeek ?? ""}" placeholder="3" style="max-width:120px"></label><label class="field"><span class="label">Cards a day</span><input class="input" name="cardsPerDay" type="number" min="0" value="${S.settings.goals.cardsPerDay ?? ""}" placeholder="20" style="max-width:120px"></label><button type="submit" class="btn btn-primary" style="align-self:flex-end">Save goals</button></div>
       ${S.settings.goals.notesPerWeek || S.settings.goals.cardsPerDay ? `<div class="row tight nudge">${S.settings.goals.notesPerWeek ? `<span class="small">Notes: ${notesWeek.done}/${notesWeek.goal} this week <span class="meter inline"><i style="width:${Math.round(notesWeek.ratio * 100)}%"></i></span></span>` : ""}${S.settings.goals.cardsPerDay ? `<span class="small">Cards: ${cardsToday.done}/${cardsToday.goal} today <span class="meter inline"><i style="width:${Math.round(cardsToday.ratio * 100)}%"></i></span></span>` : ""}</div>` : ""}
     </form>
@@ -4975,7 +4892,7 @@ function tileHtml(path: string, t: Tile): string {
 }
 function dashHtml(path: string, text: string): string {
   const d = parseDash(text);
-  return d.tiles.length ? d.tiles.map((t) => tileHtml(path, t)).join("") : `<div class="chat-empty"><h3>Empty dashboard</h3><p class="muted small">Add tiles: charts and cell values from spreadsheet notes, outputs from Python notebooks. Each tile links back to its source.</p></div>`;
+  return d.tiles.length ? d.tiles.map((t) => tileHtml(path, t)).join("") : `<div class="chat-empty"><h3>Empty dashboard</h3><p class="muted small">Add tiles: charts and cell values from spreadsheet notes, outputs from Python spaces. Each tile links back to its source.</p></div>`;
 }
 function refreshDashes() { document.querySelectorAll<HTMLElement>(".dsh[data-dash]").forEach((h) => { h.innerHTML = dashHtml(h.dataset.dash!, draftOf(h.dataset.dash!).text); afterRender(h); }); }
 function updateDash(path: string, f: (d: Dash) => void) { const d = dashOf(path); f(d); onDraftInput(path, `${JSON.stringify(d, null, 1)}\n`); refreshDashes(); }
@@ -4989,7 +4906,7 @@ function newDashNote(folder?: string) {
 /** Pick a source note and what to show from it. */
 function tileDialog(path: string) {
   const sources = (S.notes ?? []).filter((n) => isSheetPath(n.path) || isNotebookPath(n.path)).map((n) => n.path).sort();
-  if (!sources.length) return toast("Make a spreadsheet or Python notebook first; tiles come from those.", "info");
+  if (!sources.length) return toast("Make a spreadsheet or Python space first; tiles come from those.", "info");
   const scrim = document.createElement("div");
   scrim.className = "scrim";
   scrim.innerHTML = `<form class="modal" role="dialog" aria-modal="true" aria-labelledby="tl-t">
@@ -5101,8 +5018,8 @@ async function runCell(path: string, i: number) {
 function newPyNotebook(folder?: string) {
   const where = folder ?? (cur() ? dir(cur()!) : "");
   const have = new Set(paths());
-  let name = "Notebook";
-  for (let i = 1; have.has(`${where ? `${where}/` : ""}${name}.ipynb`); i++) name = `Notebook ${i}`;
+  let name = "Space";
+  for (let i = 1; have.has(`${where ? `${where}/` : ""}${name}.ipynb`); i++) name = `Space ${i}`;
   return newNote(`${where ? `${where}/` : ""}${name}.ipynb`, where, undefined, NEW_IPYNB);
 }
 
@@ -5145,7 +5062,7 @@ function chatFolders(): Set<string> {
 function chatHtml(): string {
   const msgs = S.chat.messages.length
     ? S.chat.messages.map((m, mi) => `<div class="msg ${m.role}">${m.role === "you" ? `<div class="bubble">${esc(m.text)}</div>` : `<div class="bubble md">${beyond(citeLinks(renderMd(m.text), m.picks ?? []))}${m.model ? `<div class="answer-tools"><button type="button" class="btn btn-ghost" data-action="chat-save" data-i="${mi}" title="Save this answer as a note, citations as links">${icon("plus")}Save as note</button>${m.deck ? `<button type="button" class="btn btn-ghost" data-action="chat-save-deck" data-i="${mi}" title="Save these cards as a flashcard deck">${icon("check")}Save as a deck</button>` : ""}${m.insertInto && note(m.insertInto) ? `<button type="button" class="btn btn-ghost" data-action="chat-insert" data-i="${mi}" title="Put this under a Summary heading in the note">${icon("edit")}Insert into “${esc(stem(m.insertInto))}”</button>` : ""}</div>` : ""}${m.model ? `<div class="answered-by small faint">${icon("bot")}${esc(LLM_LOCAL ? "Local Ollama (stand-in)" : modelName(m.model))}${m.cycles ? ` · ${tc(m.cycles)}` : ""}${m.fallback ? ` · ${esc(m.fallback)}` : ""}</div>` : m.fallback ? `<div class="answered-by small faint">${esc(m.fallback)}</div>` : ""}</div>${m.picks?.length ? `<div class="sources">${m.picks.map((p) => `<button type="button" class="src" data-action="open" data-path="${esc(p.path)}" title="${esc(p.why.join("; "))}">${icon("file")}${esc(title(p.path))}</button>`).join("")}</div>` : ""}`}</div>`).join("")
-    : `<div class="chat-empty">${icon("chat")}<h3>Ask your notes</h3><p class="muted small">Type a question in plain language. The notebook picks the notes that look relevant from the folders ticked on the right and answers from them.</p></div>`;
+    : `<div class="chat-empty">${icon("chat")}<h3>Ask your notes</h3><p class="muted small">Type a question in plain language. The space picks the notes that look relevant from the folders ticked on the right and answers from them.</p></div>`;
   // with nothing asked yet, the notebook's notes glow behind as a sky of stars (click one to open it)
   const empty = !S.chat.messages.length && !S.chat.busy && !S.chat.garden && !S.chat.tidy;
   return `<section class="main chat ${empty ? "chat-quiet" : ""}" data-chat>
@@ -5164,7 +5081,7 @@ function chatAside(): string {
     <div class="row tight" style="padding:0 8px"><button type="button" class="btn btn-ghost" data-action="chat-folders" data-all="1">Select all</button><button type="button" class="btn btn-ghost" data-action="chat-folders" data-all="0">None</button></div>
     <div class="chat-folders">${rows}</div>
     ${last ? `<div class="pane-title">Notes used last</div>${last.picks!.map((p) => `<div class="bl" data-action="open" data-path="${esc(p.path)}"><div class="t">${icon("file")}${esc(stem(p.path))}</div><div class="ctx">${esc(p.why.join(" · "))}</div></div>`).join("")}` : ""}
-    <div class="pane-title">How it works</div><div class="empty-side">1. A quick System 1 pass in your browser scores every note in the ticked folders on title, tags and word overlap and keeps the best few. 2. Their excerpts go to the Internet Computer's LLM canister, which answers from them first and cites each claim with a number you can click; whatever the notes do not cover it answers from its own knowledge, labelled "Beyond your notes". Save any answer as a note in the folder you pick. Excerpts leave your notebook for the LLM workers, so keep secrets out of the ticked folders.</div>
+    <div class="pane-title">How it works</div><div class="empty-side">1. A quick System 1 pass in your browser scores every note in the ticked folders on title, tags and word overlap and keeps the best few. 2. Their excerpts go to the Internet Computer's LLM canister, which answers from them first and cites each claim with a number you can click; whatever the notes do not cover it answers from its own knowledge, labelled "Beyond your notes". Save any answer as a note in the folder you pick. Excerpts leave your space for the LLM workers, so keep secrets out of the ticked folders.</div>
     ${S.chat.messages.length ? `<div style="padding:8px"><button type="button" class="btn btn-ghost" data-action="chat-clear">${icon("trash")}Clear chat</button></div>` : ""}`;
 }
 /** The part the model answered from its own knowledge gets a visible label. */
@@ -5234,7 +5151,7 @@ function questsCard(): string {
   const md = (S.notes ?? []).filter((n) => n.path.endsWith(".md") && !n.path.startsWith(`${AGENT_ROOT}/`));
   const notes = md.length, links = md.reduce((a, n) => a + (n.content.match(/\[\[/g)?.length ?? 0), 0), streak = S.usage?.streak ?? 0, days = S.usage?.active_days ?? 0;
   return `<div class="card band"><div class="row"><h2>${icon("award")} Quests</h2><span class="right-actions"><a class="btn btn-ghost" href="#/town" data-action="nav">${icon("town")}See your home</a></span></div>
-    <p class="small muted">Writing earns your home in the town its trimmings; nothing else does, and nothing is for sale. ${streak ? `A ${streak}-day streak` : "Change a note today to start a streak"}${days ? `, ${days} of the last 30 days active` : ""}. This notebook's counts; the town adds up all of yours every few hours.</p>
+    <p class="small muted">Writing earns your home in the town its trimmings; nothing else does, and nothing is for sale. ${streak ? `A ${streak}-day streak` : "Change a note today to start a streak"}${days ? `, ${days} of the last 30 days active` : ""}. This space's counts; the town adds up all of yours every few hours.</p>
     <div class="quests">${QUEST_ROWS(notes, links, streak).map(([name, have, need, gift]) => `<div class="quest ${have >= need ? "done" : ""}"><div class="row tight"><b>${have >= need ? icon("check") : ""}${name}</b><span class="small muted">${Math.min(have, need)}/${need}</span></div><div class="bar"><i style="width:${Math.min(100, (have / need) * 100).toFixed(0)}%"></i></div><div class="small muted">${gift}</div></div>`).join("")}</div></div>`;
 }
 /** Organize: links, pairs and tags the notes could use, one click each. */
@@ -5403,7 +5320,7 @@ function graphTab(): string {
   if (S.mobile) for (const t of [400, 1500, 3000]) setTimeout(() => graph?.fit(), t); // centre once the layout settles
   const n = S.notes?.length ?? 0;
   return `<section class="main"><div class="graph-wrap">
-      <canvas id="graph" aria-label="Knowledge graph of this notebook"></canvas>
+      <canvas id="graph" aria-label="Knowledge graph of this space"></canvas>
       <div class="graph-tools">
         <label class="search" style="max-width:180px">${icon("search")}<input name="gq" value="${esc(S.graphStyle.query)}" placeholder="Find in graph" aria-label="Find in graph"></label>
         <select class="input" name="gcolor" aria-label="Colour by" style="flex:0 0 auto;padding:5px 8px"><option value="none" ${S.graphStyle.colorBy === "none" ? "selected" : ""}>No groups</option><option value="folder" ${S.graphStyle.colorBy === "folder" ? "selected" : ""}>Colour by folder</option><option value="tag" ${S.graphStyle.colorBy === "tag" ? "selected" : ""}>Colour by first tag</option></select>
@@ -5421,7 +5338,6 @@ function graphTab(): string {
 // --- workspace: manage tab (cycles, export, canister)
 
 function manageTab(): string {
-  if (S.manageTab === "market" && !flag("market")) S.manageTab = "finance";
   const i = S.info;
   const v = S.notebook!;
   const low = lowCycles(i);
@@ -5431,37 +5347,21 @@ function manageTab(): string {
     : `<p class="small muted">No top-ups yet.</p>`;
   return `<section class="main" style="overflow:auto"><div class="page">
     <div class="stats">
-      <div class="stat"><div class="label">Cycles left</div><div class="num ${low ? "danger" : ""}">${i ? tc(i.cycles) : "…"}</div><div class="meter"><i style="width:${runway}%"></i></div><div class="small muted nudge">${(() => { const h = S.health.get(v.canister.toText()); return h ? `Freezes below ${tc(h.freeze_at)} (90 days of idle burn, ${tc(h.idle_cycles_burned_per_day)}/day); about ${daysUntilFreeze(h)} days until then. A frozen notebook keeps its data 90 days, then it is deleted.` : low ? "Below the freezing line the canister stops answering until topped up." : "Comfortable. 3 TC is a full bar."; })()}</div></div>
+      <div class="stat"><div class="label">Cycles left</div><div class="num ${low ? "danger" : ""}">${i ? tc(i.cycles) : "…"}</div><div class="meter"><i style="width:${runway}%"></i></div><div class="small muted nudge">${(() => { const h = S.health.get(v.canister.toText()); return h ? `Freezes below ${tc(h.freeze_at)} (90 days of idle burn, ${tc(h.idle_cycles_burned_per_day)}/day); about ${daysUntilFreeze(h)} days until then. A frozen space keeps its data 90 days, then it is deleted.` : low ? "Below the freezing line the canister stops answering until topped up." : "Comfortable. 3 TC is a full bar."; })()}</div></div>
       <div class="stat"><div class="label">Files</div><div class="num">${i ? String(i.files) : "…"}</div><div class="small muted">${S.folders.length} folders</div></div>
       <div class="stat"><div class="label">Stored</div><div class="num">${i ? kb(i.bytes) : "…"}</div><div class="small muted">note content</div></div>
       <div class="stat"><div class="label">Topped up</div><div class="num">${i ? `${icp(i.total_topped_up_e8s)} ICP` : "…"}</div><div class="small muted">${i ? `→ ${tc(i.total_cycles_from_topups)}` : ""}</div></div>
     </div>
     <p class="small muted nudge">Canister <code>${v.canister.toText()}</code> · created ${when(v.created_at)} · controllers: you and the registry.</p>
-    <nav class="segmented sub" role="tablist" aria-label="Manage sections">${MANAGE_TABS.filter(([k]) => k !== "market" || flag("market")).map(([k, label, ic]) => `<button type="button" role="tab" class="tab" aria-selected="${S.manageTab === k}" data-action="manage-tab" data-tab="${k}">${icon(ic)}<span class="lbl">${label}</span></button>`).join("")}</nav>
-    ${S.manageTab === "notebook" ? featuresCard() : ""}
-    ${S.manageTab === "notebook" ? questsCard() : ""}
-    ${S.manageTab === "notebook" ? `<form class="card band" data-form="nb-meta"><h2>${esc(notebookEmoji(v))} Icon and description</h2><p class="muted small">What the notebook's card shows on the list. Leave the icon empty to let the app pick one from the name.</p><div class="row tight"><label class="field"><span class="label">Icon (one emoji)</span><input class="input" name="emoji" value="${esc(v.emoji ?? "")}" placeholder="${esc(notebookEmoji(v))}" maxlength="4" style="max-width:90px;font-size:1.3rem;text-align:center"></label><label class="field" style="flex:1;min-width:220px"><span class="label">Description</span><input class="input" name="desc" value="${esc(v.description ?? "")}" maxlength="280" placeholder="What it is for, who it is for"></label><button type="submit" class="btn btn-primary" style="align-self:flex-end" ${S.busy ? "disabled" : ""}>Save</button></div></form>` : ""}
-    ${S.manageTab === "finance" ? `
+    <nav class="segmented sub" role="tablist" aria-label="Manage sections">${MANAGE_TABS.map(([k, label, ic]) => `<button type="button" role="tab" class="tab" aria-selected="${S.manageTab === k}" data-action="manage-tab" data-tab="${k}">${icon(ic)}<span class="lbl">${label}</span></button>`).join("")}</nav>
+    ${S.manageTab === "wallet" ? walletCard() : S.manageTab === "fuel" ? `${fuelCard()}
+    <div class="band"><div class="band-title">Fuel history<button type="button" class="btn btn-ghost icon-btn" data-action="refresh-info" title="Refresh" aria-label="Refresh">${icon("refresh")}</button></div>${rows}</div>` : S.manageTab === "skill" ? agentsCard() : `
     <div class="card band">
-      <h2>${icon("bolt")} Keep it running</h2>
-      <p class="muted small">The canister burns cycles for every call and for its memory. Top it up from your OISY wallet in ICP, ckBTC, ckETH, ckUSDC or ckUSDT; the registry converts whatever you send into this notebook's cycles at once and never keeps a token. Bitcoin, ether, USDC or USDT held natively in OISY: convert them to the ck version inside OISY first.</p>
-      <form class="row tight nudge" data-form="topup"><input class="input" name="topupAmount" inputmode="decimal" value="${esc(S.topupAmount)}" required aria-label="Amount" style="max-width:140px">${tokenSelect("paytoken", S.payToken)}<button type="submit" class="btn btn-primary" ${S.busy ? "disabled" : ""}>${icon("bolt")}${S.busy === "topup" ? "Waiting for the wallet…" : `Top up with ${payLabel()}`}</button></form>
-      <p class="small muted">${useOisy ? `Your OISY wallet opens and asks you to approve the amount plus one fee for the registry, which converts it into this notebook's cycles. ${S.oisyAccount ? `Last paid from <code>${esc(shortPrincipal(S.oisyAccount))}</code>.` : ""}` : "Approves the registry on the local ledger for the amount plus one fee; it converts it in one step."}</p>
+      <h2>${icon("upload")} Upload</h2>
+      <p class="muted small">Bring an Obsidian folder or zip into this space, or download everything in it as a zip of markdown files, folders included. Restore puts a zip back: existing notes are overwritten and notes missing from the zip are deleted.</p>
+      <div class="row tight"><button type="button" class="btn btn-primary" data-action="import" ${S.notes ? "" : "disabled"}>${icon("upload")}Import from Obsidian…</button><button type="button" class="btn" data-action="download" ${S.notes ? "" : "disabled"}>${icon("download")}Download space (.zip)</button></div>
     </div>
-    <div class="band"><div class="band-title">Top-up history<button type="button" class="btn btn-ghost icon-btn" data-action="refresh-info" title="Refresh" aria-label="Refresh">${icon("refresh")}</button></div>${rows}</div>` : S.manageTab === "notebook" ? `
-    <div class="card band">
-      <h2>${icon("download")} Your data</h2>
-      <p class="muted small">Everything in this notebook as a zip of markdown files, folders included. Nothing leaves the canister except to you. Restore puts a zip back: existing notes are overwritten and notes missing from the zip are deleted (agent notes are kept).</p>
-      <div class="row tight"><button type="button" class="btn btn-primary" data-action="download" ${S.notes ? "" : "disabled"}>${icon("download")}Download notebook (.zip)</button><button type="button" class="btn" data-action="import" ${S.notes ? "" : "disabled"}>${icon("upload")}Import from Obsidian…</button><button type="button" class="btn" data-action="restore" ${S.notes ? "" : "disabled"}>${icon("history")}Restore from zip…</button><span class="small muted">${S.notes ? `${S.notes.length} files · ${kb(S.notes.reduce((n, x) => n + x.content.length, 0))}` : ""}</span></div>
-    </div>
-    ${snapshotsCard()}
-    ${deleteCard()}
-    ${account()}` : S.manageTab === "sharing" ? `
-    ${sharesCard()}
-    ${publishCard()}` : S.manageTab === "agents" ? `
-    ${agentsCard()}
-    ${clipperCard()}` : `
-    ${sellCard()}`}
+    ${deleteCard()}`}
   </div></section>`;
 }
 
@@ -5484,6 +5384,7 @@ function workspace(): string {
   const kit = kits[S.tab];
   if (kit) return shell(withBand(S.tab, kit()));
   bandShown = "";
+  if (S.tab === "chat" && !flag("chat")) S.tab = "notes";
   if (S.tab === "chat") return shell(`<div class="workspace m-${S.mobilePane} ${S.sideOpen ? "" : "no-side"} ${S.asideOpen ? "" : "no-aside"}"><nav id="side" class="side" aria-label="Files">${side()}</nav>${chatHtml()}<aside id="aside" class="aside" aria-label="Sources">${chatAside()}</aside></div>`);
   return shell(`<div class="workspace m-${S.mobilePane} ${S.sideOpen ? "" : "no-side"} ${S.asideOpen ? "" : "no-aside"}"><nav id="side" class="side" aria-label="Files">${side()}</nav>${panesHtml()}<aside id="aside" class="aside" aria-label="Links">${aside()}</aside></div>`);
 }
@@ -5529,7 +5430,7 @@ function render() {
   // the file pane keeps its place: opening a note far down the list must not jump the list back to the top
   const sideTop = document.getElementById("side")?.scrollTop ?? 0, asideTop = document.getElementById("aside")?.scrollTop ?? 0;
   destroyEditors();
-  app.innerHTML = S.shared ? sharedPage() : S.town ? townPage() : S.problems ? problemsPage() : S.board && S.identity ? boardPage() : S.community && S.identity ? communityPage() : S.market && S.identity ? marketPage() : S.admin && S.isAdmin ? adminPage() : !S.identity && !(S.notebook && isSandbox()) ? landing() : S.notebook ? workspace() : notebooksPage();
+  app.innerHTML = S.shared ? sharedPage() : S.town ? townPage() : S.problems ? problemsPage() : S.board && S.identity ? boardPage() : S.community && S.identity ? communityPage() : S.market && S.identity ? marketPage() : S.admin && S.isAdmin ? adminPage() : !asVerified() && !(S.notebook && isSandbox()) ? onboardingPage() : S.notebook ? workspace() : agentSpacePage();
   if (S.show) app.insertAdjacentHTML("beforeend", showHtml());
   { const s = document.getElementById("side"); if (s && sideTop) s.scrollTop = sideTop; const a = document.getElementById("aside"); if (a && asideTop) a.scrollTop = asideTop; }
   // a re-render must not move the reader: keep the chat where it was, or at the bottom
@@ -5664,6 +5565,156 @@ function restoreTabs() {
 
 // ---------- flows ----------
 
+// ---------- Agent Space: the gate and the wallet ----------
+
+let tapTimer = 0;
+/** One tap on the square: the first starts the clock, the 25th inside the time passes. The count and the
+ *  clock are written straight into the page; a full render per tap would eat the taps. */
+function asTap() {
+  const t = S.as.tap;
+  if (t.done) return;
+  if (!t.start) {
+    t.start = performance.now();
+    tapTimer = window.setInterval(() => {
+      const left = Math.max(0, TAP_MS - (performance.now() - t.start));
+      const el = document.querySelector("[data-as-timer]");
+      if (el) el.textContent = `${(left / 1000).toFixed(1)}s`;
+      if (!left) asTapEnd();
+    }, 50);
+  }
+  t.count++;
+  const c = document.querySelector("[data-as-count]");
+  if (c) c.textContent = `${t.count} / ${TAP_GOAL}`;
+  if (tapPassed(t.count, performance.now() - t.start)) asTapEnd();
+}
+function asTapEnd() {
+  clearInterval(tapTimer);
+  const t = S.as.tap;
+  t.done = tapPassed(t.count, performance.now() - t.start) ? "pass" : "fail";
+  render();
+  setTimeout(() => {
+    if (t.done === "pass") { S.as.step = "hunt"; S.as.hunt = huntRound(); S.as.picked = new Set(); S.as.huntDone = undefined; }
+    else S.as.tap = { count: 0, start: 0, done: undefined };
+    render();
+  }, t.done === "pass" ? 600 : 1000);
+}
+/** Submit the hunt: an exact match verifies the signed-in principal, once, in this browser. */
+function asSubmit() {
+  const a = S.as;
+  if (!a.hunt || a.huntDone) return;
+  a.huntDone = checkHunt(a.hunt, a.picked) ? "pass" : "fail";
+  render();
+  if (a.huntDone === "fail") { setTimeout(() => { a.hunt = huntRound(); a.picked = new Set(); a.huntDone = undefined; render(); }, 1000); return; }
+  setTimeout(() => { store(`as-verified:${S.principal}`, "1"); a.step = "landing"; render(); }, 600);
+}
+/** The agent's wallet is its notebook canister. Its three addresses: BTC from the ckBTC minter, ETH from
+ *  threshold ECDSA, ICP its ledger account. Each is best effort: a network without the minter says so. */
+/** What the space holds on every ledger the registry lists (the Wallet tab). */
+async function loadBalances() {
+  const id = S.notebook?.canister.toText();
+  if (!id || isSandbox()) return;
+  const agent = HttpAgent.createSync({ identity: S.identity, rootKey: env.IC_ROOT_KEY }), owner = Principal.fromText(id);
+  S.walletBalances = await Promise.all(S.tokens.map(async (t) => ({ symbol: t.symbol, decimals: t.decimals, balance: await Actor.createActor<Ledger>(ledgerIdl, { agent, canisterId: t.ledger.toText() }).icrc1_balance_of({ owner, subaccount: [] }).catch(() => undefined) })));
+  render();
+}
+async function loadWallet(id: string) {
+  const w = S.as.wallet;
+  if (w.addrs?.id === id || w.loading === id) return;
+  const kept = store(`as-addrs:${id}`);
+  if (kept) { w.addrs = JSON.parse(kept); render(); return; }
+  w.loading = id;
+  const a = notebookOf(id);
+  const text = (p: Promise<{ __kind__: "Ok"; Ok: string } | { __kind__: "Err"; Err: NotebookError }>) => p.then(unwrap).catch((e: unknown) => `unavailable: ${errMsg(e)}`);
+  const [icp, btc, eth] = await Promise.all([a.info().then((i) => i.topup_account_id).catch((e: unknown) => `unavailable: ${errMsg(e)}`), text(a.btc_address()), text(a.eth_address())]);
+  w.loading = "";
+  w.addrs = { id, btc, eth, icp };
+  if (![btc, eth, icp].some((x) => x.startsWith("unavailable"))) store(`as-addrs:${id}`, JSON.stringify(w.addrs));
+  render();
+}
+
+// ---------- paying for cycles with a card: CyclePay's gateway, the one `icp cycles buy` uses ----------
+
+const CYCLES_GATEWAY = "2bwus-iiaaa-aaaac-bee3a-cai";
+const gatewayIdl: IDL.InterfaceFactory = ({ IDL: I }) => I.Service({
+  get_card_terms: I.Func([], [I.Record({ deliveries_paused: I.Bool, min_order_usd_cents: I.Nat64, max_order_usd_cents: I.Nat64, fee_bps: I.Nat64, fee_fixed_usd_cents: I.Nat64 })], ["query"]),
+  get_xdr_rate_status: I.Func([], [I.Record({ xdr_usd_x10000: I.Nat64, stale: I.Bool })], ["query"]),
+  create_order: I.Func([I.Record({ destination: I.Variant({ Canister: I.Principal, Ledger: I.Null }), beneficiary: I.Opt(I.Principal), project_id: I.Opt(I.Text), amount_usd_cents: I.Nat64, confirm_system_canister: I.Opt(I.Bool) })], [I.Variant({ Ok: I.Record({ order_id: I.Text, amount_usd_cents: I.Nat64, net_usd_cents: I.Nat64, payment_url: I.Text, expires_at: I.Nat64 }), Err: I.Record({ code: I.Text, message: I.Text }) })], []),
+  order_status: I.Func([I.Text], [I.Opt(I.Record({ order_id: I.Text, status: I.Variant({ AwaitingPayment: I.Null, PaymentPending: I.Null, Processing: I.Null, Delivered: I.Null, NeedsReview: I.Null, Refunding: I.Null, Refunded: I.Null, RefundOwed: I.Null }), cycles_delivered: I.Opt(I.Nat64), detail: I.Opt(I.Text) }))], ["query"]),
+});
+type Gateway = {
+  get_card_terms: () => Promise<{ deliveries_paused: boolean; min_order_usd_cents: bigint; max_order_usd_cents: bigint; fee_bps: bigint; fee_fixed_usd_cents: bigint }>;
+  get_xdr_rate_status: () => Promise<{ xdr_usd_x10000: bigint; stale: boolean }>;
+  create_order: (a: { destination: { Canister: Principal } | { Ledger: null }; beneficiary: [] | [Principal]; project_id: []; amount_usd_cents: bigint; confirm_system_canister: [] }) => Promise<{ Ok: { order_id: string; net_usd_cents: bigint; payment_url: string } } | { Err: { code: string; message: string } }>;
+  order_status: (id: string) => Promise<[] | [{ status: Record<string, null>; cycles_delivered: [] | [bigint]; detail: [] | [string] }]>;
+};
+const gateway = () => Actor.createActor<Gateway>(gatewayIdl, { agent: HttpAgent.createSync({ identity: S.identity, rootKey: env.IC_ROOT_KEY }), canisterId: CYCLES_GATEWAY });
+let orderTimer = 0;
+/** Order cycles for the space by card: the gateway tops the canister up itself once the page is paid.
+ *  The order's page link and a QR code of it go in the panel; the status is polled while it is open. */
+const CYCLES_LEDGER = "um5iw-rqaaa-aaaaq-qaaba-cai", CYCLES_LEDGER_FEE = 100_000_000n;
+const cyclesLedgerIdl: IDL.InterfaceFactory = ({ IDL: I }) => I.Service({
+  icrc1_balance_of: I.Func([AccountIdl], [I.Nat], ["query"]),
+  withdraw: I.Func([I.Record({ amount: I.Nat, from_subaccount: I.Opt(I.Vec(I.Nat8)), to: I.Principal, created_at_time: I.Opt(I.Nat64) })], [I.Variant({ Ok: I.Nat, Err: I.Reserved })], []),
+});
+type CyclesLedger = { icrc1_balance_of: (a: { owner: Principal; subaccount: [] }) => Promise<bigint>; withdraw: (a: { amount: bigint; from_subaccount: []; to: Principal; created_at_time: [] }) => Promise<{ Ok: bigint } | { Err: unknown }> };
+const cyclesLedger = () => Actor.createActor<CyclesLedger>(cyclesLedgerIdl, { agent: HttpAgent.createSync({ identity: S.identity, rootKey: env.IC_ROOT_KEY }), canisterId: CYCLES_LEDGER });
+/** The order paid: make the space (the registry fronts its first cycles) and move the bought cycles into it. */
+async function finishCardSpawn() {
+  S.as.pay = "creating";
+  render();
+  const id = await spawnNotebook("Agent M&M", "Money (wallet) & memory", true, async (made) => {
+    if (isLocal) return;
+    try {
+      const me = S.identity!.getPrincipal(), bal = await cyclesLedger().icrc1_balance_of({ owner: me, subaccount: [] });
+      const amount = bal - CYCLES_LEDGER_FEE;
+      if (amount <= 0n) return;
+      const r = await cyclesLedger().withdraw({ amount, from_subaccount: [], to: Principal.fromText(made), created_at_time: [] });
+      if ("Err" in r) throw new Error(JSON.stringify(r.Err, (_, x) => (typeof x === "bigint" ? x.toString() : x)));
+      toast(`${tc(amount)} of cycles moved into your space.`, "ok");
+    } catch (e) { toast(`The cycles stayed on your cycles-ledger account (${errMsg(e)}); Manage → Fuel can move them later.`, "error"); }
+  });
+  S.as.pay = "";
+  S.as.wallet.order = undefined;
+  if (!id) render();
+}
+async function asCard(cents: number) {
+  const a = S.as, w = a.wallet, id = S.notebooks?.[0]?.canister.toText();
+  if (w.order || a.pay) return;
+  if (!id && isLocal) return finishCardSpawn(); // no gateway on the local network: the registry fronts the cycles
+  try {
+    const gw = gateway();
+    const [terms, rate] = await Promise.all([gw.get_card_terms(), gw.get_xdr_rate_status()]);
+    if (terms.deliveries_paused) throw new Error("card payments are paused at the gateway right now");
+    const amount = BigInt(Math.min(Number(terms.max_order_usd_cents), Math.max(Number(terms.min_order_usd_cents), cents)));
+    const r = await gw.create_order({ destination: id ? { Canister: Principal.fromText(id) } : { Ledger: null }, beneficiary: id ? [] : [S.identity!.getPrincipal()], project_id: [], amount_usd_cents: amount, confirm_system_canister: [] });
+    if ("Err" in r) throw new Error(`${r.Err.message} (${r.Err.code})`);
+    const tcs = Number(r.Ok.net_usd_cents) / 100 / (Number(rate.xdr_usd_x10000) / 10_000);
+    w.order = { id: r.Ok.order_id, url: r.Ok.payment_url, status: "AwaitingPayment", cents: Number(amount), tc: tcs.toFixed(2) };
+    if (!id) a.pay = "choose";
+    render();
+    clearInterval(orderTimer);
+    orderTimer = window.setInterval(() => void pollOrder(), 5000);
+  } catch (e) {
+    toast(errMsg(e), "error");
+  }
+}
+async function pollOrder() {
+  const o = S.as.wallet.order;
+  if (!o || document.hidden) return;
+  const r = await gateway().order_status(o.id).catch(() => [] as const);
+  if (!r.length) return;
+  const status = Object.keys(r[0].status)[0];
+  const delivered = r[0].cycles_delivered[0];
+  if (status === o.status && !delivered) return;
+  o.status = status;
+  if (delivered) o.delivered = tc(delivered);
+  if (["Delivered", "Refunded", "RefundOwed", "NeedsReview"].includes(status)) {
+    clearInterval(orderTimer);
+    if (status === "Delivered") { if (S.notebooks?.[0]) toast(`${o.delivered} of cycles landed in the space.`, "ok"); else return finishCardSpawn(); }
+  }
+  render();
+}
+
 async function signIn() {
   S.signin = { busy: true, error: "" };
   render();
@@ -5672,6 +5723,8 @@ async function signIn() {
     if (!S.identity) throw new Error("No identity was returned");
     S.principal = S.identity.getPrincipal().toText();
     S.signin = { busy: false, error: "" };
+    // not yet verified: straight into the first test; verified people land in their space, or on Fuel
+    if (!asVerified()) { S.as.step = "tap"; S.as.tap = { count: 0, start: 0, done: undefined }; }
     if (S.shared) return openShared(S.shared.canister, S.shared.path);
     render();
     await loadNotebooks();
@@ -5690,6 +5743,7 @@ async function signOut() {
   } else await auth.signOut().catch(() => {});
   Object.assign(S, { identity: undefined, principal: "", notebooks: undefined, notebook: undefined, notes: undefined, error: "", isAdmin: false, admin: undefined });
   S.drafts.clear();
+  S.as = { ...S.as, step: "landing", tap: { count: 0, start: 0, done: undefined }, pay: "", wallet: { loading: "", addrs: undefined, order: undefined } };
   location.hash = "#/";
   render();
 }
@@ -5708,7 +5762,10 @@ async function loadNotebooks() {
     S.notebooks = await registry().my_notebooks();
     void cacheSet("nb:list", S.notebooks);
     S.error = "";
+    // home is the space itself once there is one; without one, the gate ends on the Fuel step
+    if (location.hash === "#/" && S.notebooks[0] && asVerified()) { location.hash = `#/notebook/${S.notebooks[0].canister.toText()}`; return; }
     render();
+    if (S.notebooks[0]) void loadWallet(S.notebooks[0].canister.toText());
     await Promise.all(S.notebooks.map(async (v) => {
       try {
         S.notebookInfo.set(v.canister.toText(), await notebookOf(v.canister.toText()).info());
@@ -5727,7 +5784,7 @@ async function loadNotebooks() {
 const DEPOSIT_CHOICES = [1, 3, 5, 10];
 const DEPOSIT_DEFAULT = 3;
 /** How much ICP to turn into the new notebook's cycles: quick amounts (3 by default) or any other
- *  amount, never under `min` (what starting a notebook costs Lab, see pricing.ts). Resolves the
+ *  amount, never under `min` (what starting a notebook costs Agent Space, see pricing.ts). Resolves the
  *  e8s, or null when cancelled. */
 function depositDialog(name: string, minE8s: bigint): Promise<bigint | null> {
   const min = Number(minE8s) / 1e8;
@@ -5738,10 +5795,10 @@ function depositDialog(name: string, minE8s: bigint): Promise<bigint | null> {
     scrim.className = "scrim";
     scrim.innerHTML = `<form class="modal" role="dialog" aria-modal="true" aria-labelledby="dep-t">
       <h2 id="dep-t">Keep “${esc(name)}” running</h2>
-      <p class="muted">A notebook is its own canister and runs on cycles. The ICP you deposit becomes this notebook's cycles; top up again any time from Manage.${S.price > 0n ? ` Spawning also costs ${icp(S.price)} ICP.` : ""}</p>
+      <p class="muted">A space is its own canister and runs on cycles. The ICP you deposit becomes this space's cycles; top up again any time from Manage.${S.price > 0n ? ` Spawning also costs ${icp(S.price)} ICP.` : ""}</p>
       <div class="dep-choices" role="radiogroup" aria-label="Deposit">${choices.map((n) => `<label class="dep-choice"><input type="radio" name="amt" value="${n}" ${n === dflt ? "checked" : ""}><span>${n} ICP</span></label>`).join("")}<label class="dep-choice"><input type="radio" name="amt" value="other"><span>Other</span></label></div>
       <label class="field dep-other" hidden><span class="label">Amount (ICP, at least ${min})</span><input class="input" name="other" inputmode="decimal" placeholder="${min + 1}"></label>
-      <p class="small muted">The minimum, ${min} ICP, is about what starting a notebook costs Lab (creating its canister and its first cycles) at today's ICP price.</p>
+      <p class="small muted">The minimum, ${min} ICP, is about what starting a space costs Agent Space (creating its canister and its first cycles) at today's ICP price.</p>
       <div class="actions"><button type="button" class="btn" data-x="cancel">Cancel</button><button type="submit" class="btn btn-primary" data-x="ok">${useOisy ? `Pay ${dflt} ICP in OISY` : `Deposit ${dflt} ICP`}</button></div>
     </form>`;
     const f = scrim.querySelector("form")!;
@@ -5775,8 +5832,8 @@ function depositDialog(name: string, minE8s: bigint): Promise<bigint | null> {
  *  into its cycles. A failed deposit leaves the notebook created; Manage can top it up later. */
 /** Pay (the deposit dialog, then OISY or the in-app wallet), spawn the canister and add its cycles.
  *  Resolves to the new notebook's id, or undefined when cancelled or refused. */
-async function spawnNotebook(name: string, desc: string): Promise<string | undefined> {
-  const deposit = await depositDialog(name, minDepositE8s(await icpXdrRate()));
+async function spawnNotebook(name: string, desc: string, card = false, after?: (id: string) => Promise<void>): Promise<string | undefined> {
+  const deposit = card ? 0n : await depositDialog(name, minDepositE8s(await icpXdrRate()));
   if (deposit === null) return;
   S.busy = "create";
   S.error = "";
@@ -5798,7 +5855,8 @@ async function spawnNotebook(name: string, desc: string): Promise<string | undef
         funded = ` ${icp(deposit)} ICP became ${tc(t.Ok)} of cycles.`;
       } catch (e) { funded = ` The deposit did not go through (${errMsg(e)}); top it up from Manage.`; }
     }
-    toast(`Notebook “${r.Ok.name}” is live.${funded}`, funded.includes("did not") ? "error" : "ok");
+    toast(`Your space is live.${funded}`, funded.includes("did not") ? "error" : "ok");
+    if (after) await after(r.Ok.canister.toText());
     await loadNotebooks();
     return r.Ok.canister.toText();
   } catch (e) {
@@ -5826,7 +5884,7 @@ async function importNewNotebook(picked: Incoming[], suggested: string) {
   const notes = files.filter((f) => TEXT_EXT.test(f.path)).length;
   const other = files.filter((f) => !TEXT_EXT.test(f.path) && !!MIME[f.path.split(".").pop()!.toLowerCase()]).length;
   if (!notes && !other) return toast("Nothing importable in there: no markdown, text or supported attachments.", "error");
-  const name = (await ask({ title: "New notebook from Obsidian", body: `${notes} note${notes === 1 ? "" : "s"}${other ? ` and ${other} attachment${other === 1 ? "" : "s"}` : ""} ready to import. Name the notebook, then choose its deposit: it is created once the payment goes through, and your notes are copied in right after.`, label: "Notebook name", value: suggested, ok: "Next" }))?.trim();
+  const name = (await ask({ title: "New space from Obsidian", body: `${notes} note${notes === 1 ? "" : "s"}${other ? ` and ${other} attachment${other === 1 ? "" : "s"}` : ""} ready to import. Name the space, then choose its deposit: it is created once the payment goes through, and your notes are copied in right after.`, label: "Space name", value: suggested, ok: "Next" }))?.trim();
   if (!name) return;
   const id = await spawnNotebook(name, "");
   if (!id) return;
@@ -5944,7 +6002,7 @@ async function openNotebook(id: string, path?: string) {
   render();
   if (path && note(path)) await open(path);
   else if (cur()) syncHash();
-  if (lowCycles(S.info)) toast("This notebook is low on cycles. Top it up in Manage before it freezes.", "error");
+  if (lowCycles(S.info)) toast("This space is low on cycles. Top it up in Manage before it freezes.", "error");
 }
 
 async function loadSellInfo() {
@@ -6194,7 +6252,7 @@ async function keepOffline() {
   }
   await cacheSet("nb:list", list);
   store("nb-offline-at", String(Date.now()));
-  toast(`${n} notebook${n === 1 ? " is" : "s are"} on this device for offline use.`, "ok");
+  toast(`${n} space${n === 1 ? " is" : "s are"} on this device for offline use.`, "ok");
   render();
 }
 /** Replay writes made offline, then reload the notebook. */
@@ -6462,7 +6520,7 @@ async function deletePath(path: string) {
 }
 
 async function moveTo(path: string) {
-  const choices = [{ value: "", label: "/ (notebook root)" }, ...S.folders.map((f) => ({ value: f, label: `/${f}` }))];
+  const choices = [{ value: "", label: "/ (space root)" }, ...S.folders.map((f) => ({ value: f, label: `/${f}` }))];
   const f = await ask({ title: `Move “${stem(path)}”`, label: "Folder", choices, value: dir(path) });
   if (f === null) return;
   const name = path.split("/").pop()!;
@@ -6470,7 +6528,7 @@ async function moveTo(path: string) {
 }
 
 async function newFolder(parent = "") {
-  const name = await ask({ title: "New folder", label: parent ? `Inside /${parent}` : "In the notebook root", placeholder: "Folder name", ok: "Create" });
+  const name = await ask({ title: "New folder", label: parent ? `Inside /${parent}` : "In the space root", placeholder: "Folder name", ok: "Create" });
   if (!name?.trim()) return;
   try {
     const p = unwrap(await nb().mkdir(parent ? `${parent}/${name.trim()}` : name.trim()));
@@ -6520,23 +6578,18 @@ async function deleteFolder(path: string) {
 /** Everything in the notebook as a zip, built in the browser from what is already loaded. */
 function deleteCard(): string {
   const i = S.info;
-  return `<div class="card band danger-zone"><h2>${icon("trash")} Delete this notebook</h2><p class="muted small">Deletes the canister for good: every note, attachment, comment and its history. This cannot be undone, so download a zip first. ${i ? `Its ${tc(i.cycles)} left go to another notebook of yours, or to Lab if it is your only one.` : ""}</p>
-    <div class="row tight"><button type="button" class="btn" data-action="download">${icon("download")}Download a zip first</button><button type="button" class="btn btn-danger" data-action="nb-delete">${icon("trash")}Delete notebook…</button></div></div>`;
+  return `<div class="card band danger-zone"><h2>${icon("trash")} Delete this space</h2><p class="muted small">Deletes the canister for good: every note, attachment, comment and its history. This cannot be undone, so download a zip first. ${i ? `Its ${tc(i.cycles)} left go back to Agent Space. The wallet must hold under $5 first: move anything more out, or the deletion is refused.` : ""}</p>
+    <div class="row tight"><button type="button" class="btn" data-action="download">${icon("download")}Download a zip first</button><button type="button" class="btn btn-danger" data-action="nb-delete">${icon("trash")}Delete space…</button></div></div>`;
 }
 async function deleteNotebook() {
   const nb = S.notebook;
   if (!nb) return;
   const others = (S.notebooks ?? []).filter((n) => n.canister.toText() !== nb.canister.toText());
-  let to: string | null = "";
-  if (others.length) {
-    to = await ask({ title: `Where should the cycles go?`, body: `${S.info ? tc(S.info.cycles) : "The cycles"} left in "${nb.name}" move before it is deleted.`, label: "Send them to", choices: [...others.map((n) => ({ value: n.canister.toText(), label: n.name })), { value: "", label: "Lab (the registry)" }], value: others[0].canister.toText(), ok: "Next" });
-    if (to === null) return;
-  }
-  const typed = await ask({ title: `Delete "${nb.name}" forever?`, body: "Every note, attachment and its history will be gone. Nobody, not even Lab, can bring it back.", label: `Type ${nb.name} to confirm`, placeholder: nb.name, ok: "Delete forever", danger: true });
+  const typed = await ask({ title: `Delete "${nb.name}" forever?`, body: "Every note, attachment and its history will be gone. Nobody, not even Agent Space, can bring it back.", label: `Type ${nb.name} to confirm`, placeholder: nb.name, ok: "Delete forever", danger: true });
   if (typed === null) return;
   if (typed.trim() !== nb.name) return void toast("The name did not match, so nothing was deleted.", "info");
   await saveAll().catch(() => {});
-  const r = await registry().delete_notebook(nb.canister, to ? Principal.fromText(to) : null).catch((e) => ({ __kind__: "Err", Err: errMsg(e) }) as const);
+  const r = await registry().delete_notebook(nb.canister, null).catch((e) => ({ __kind__: "Err", Err: errMsg(e) }) as const);
   if (r.__kind__ !== "Ok") return void toast(`Not deleted: ${r.Err}`, "error");
   const id = nb.canister.toText();
   S.notebooks = others;
@@ -6548,7 +6601,7 @@ async function deleteNotebook() {
   S.notes = undefined;
   location.hash = "#/";
   render();
-  toast(`Deleted "${nb.name}"${r.Ok > 0n ? `; ${tc(r.Ok)} moved to ${to ? others.find((n) => n.canister.toText() === to)?.name ?? "your notebook" : "Lab"}` : ""}.`, "ok");
+  toast(`Deleted your space${r.Ok > 0n ? `; ${tc(r.Ok)} went back to Agent Space` : ""}.`, "ok");
 }
 async function downloadNotebook() {
   if (!S.notes || !S.notebook) return;
@@ -6643,7 +6696,7 @@ async function pdfBytesFor(el: HTMLElement, load: boolean): Promise<Uint8Array |
 }
 function pdfActions(el: HTMLElement, total: number, shown: number, size?: number): string {
   const url = el.dataset.pdfUrl;
-  return `${shown < total ? `<button type="button" class="btn btn-ghost" data-action="pdf-all">Show all ${total} pages</button>` : ""}${url && size !== undefined ? (size <= MAX_ATTACHMENT ? `<button type="button" class="btn btn-ghost" data-action="pdf-save" title="Keep the PDF in this notebook, with its text as searchable notes">${icon("download")}Save a copy</button>` : `<span class="small faint" title="Notebook files hold up to ${Math.round(MAX_ATTACHMENT / 1000)} KB">too big to save here</span>`) : ""}${url ? `<a class="btn btn-ghost" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${icon("link")}Original</a>` : ""}`;
+  return `${shown < total ? `<button type="button" class="btn btn-ghost" data-action="pdf-all">Show all ${total} pages</button>` : ""}${url && size !== undefined ? (size <= MAX_ATTACHMENT ? `<button type="button" class="btn btn-ghost" data-action="pdf-save" title="Keep the PDF in this space, with its text as searchable notes">${icon("download")}Save a copy</button>` : `<span class="small faint" title="Space files hold up to ${Math.round(MAX_ATTACHMENT / 1000)} KB">too big to save here</span>`) : ""}${url ? `<a class="btn btn-ghost" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${icon("link")}Original</a>` : ""}`;
 }
 async function drawPdf(el: HTMLElement, all = false) {
   const src = el.dataset.pdfUrl ?? el.dataset.pdfAttach!;
@@ -6661,7 +6714,7 @@ async function drawPdf(el: HTMLElement, all = false) {
   try { bytes = await pdfBytesFor(el, false); } catch { bytes = undefined; }
   if (!bytes) {
     if (el.dataset.pdfAttach) return; // still loading; the preview re-renders when it arrives
-    body.innerHTML = `<button type="button" class="btn" data-action="pdf-load">${icon("file")}Show this PDF</button><span class="small muted">Your notebook fetches it once (about 0.02 TC of its cycles), then it is kept on this device.</span>`;
+    body.innerHTML = `<button type="button" class="btn" data-action="pdf-load">${icon("file")}Show this PDF</button><span class="small muted">Your space fetches it once (about 0.02 TC of its cycles), then it is kept on this device.</span>`;
     return;
   }
   body.innerHTML = `<span class="small muted">Drawing pages…</span>`;
@@ -6880,8 +6933,8 @@ function importDialog(forNew = false) {
   const scrim = document.createElement("div");
   scrim.className = "scrim";
   scrim.innerHTML = `<form class="modal" role="dialog" aria-modal="true" aria-labelledby="imp-t">
-    <h2 id="imp-t">${icon("upload")} ${forNew ? "New notebook from Obsidian" : "Import from Obsidian"}</h2>
-    <p class="muted small">${forNew ? "A new notebook (its own canister) is made from them: you name it and pay its deposit before anything is created. " : ""}Pick your Obsidian folder, or a zip of it. Markdown and text files are imported as notes, a PDF becomes one note per page plus the file; images, audio and PDFs under ${Math.round(MAX_ATTACHMENT / 1000)} KB come along as attachments. The .obsidian settings folder is skipped. You can also drop a folder onto the file list any time.</p>
+    <h2 id="imp-t">${icon("upload")} ${forNew ? "New space from Obsidian" : "Import from Obsidian"}</h2>
+    <p class="muted small">${forNew ? "A new space (its own canister) is made from them: you name it and pay its deposit before anything is created. " : ""}Pick your Obsidian folder, or a zip of it. Markdown and text files are imported as notes, a PDF becomes one note per page plus the file; images, audio and PDFs under ${Math.round(MAX_ATTACHMENT / 1000)} KB come along as attachments. The .obsidian settings folder is skipped. You can also drop a folder onto the file list any time.</p>
     <div class="row tight nudge">
       <label class="btn btn-primary">${icon("folder")}Choose folder<input type="file" name="dir" webkitdirectory multiple hidden></label>
       <label class="btn">${icon("file")}Choose zip or files<input type="file" name="zip" multiple accept=".zip,.md,.txt,.canvas,image/*,audio/*,video/*,application/pdf" hidden></label>
@@ -7010,7 +7063,7 @@ function menuFor(kind: "file" | "folder" | "root", path: string, x: number, y: n
       { label: "New note from template…", icon: "template", action: () => void newFromTemplate(path) },
       { label: "New drawing here", icon: "edit", action: () => void newDrawing(path) },
       { label: "New kanban board here", icon: "board", action: () => void newBoard(path) },
-      { label: "New Python notebook here", icon: "command", action: () => void newPyNotebook(path) },
+      { label: "New Python space here", icon: "command", action: () => void newPyNotebook(path) },
       { label: "New spreadsheet here", icon: "columns", action: () => void newSheetNote(path) },
       { label: "New dashboard here", icon: "graph", action: () => void newDashNote(path) },
       { label: "New flashcard deck here", icon: "check", action: () => void newQuiz("cards", path) },
@@ -7024,7 +7077,7 @@ function menuFor(kind: "file" | "folder" | "root", path: string, x: number, y: n
       { label: "Delete folder", icon: "trash", danger: true, action: () => void deleteFolder(path) },
     ]);
   } else {
-    contextMenu(x, y, S.notebook?.name ?? "Notebook", [
+    contextMenu(x, y, "Space", [
       { label: "New note", icon: "plus", action: () => void newNote(undefined, "") },
       { label: "New note from template…", icon: "template", action: () => void newFromTemplate("") },
       { label: "Today's note", icon: "calendar", action: () => void openDaily() },
@@ -7033,7 +7086,7 @@ function menuFor(kind: "file" | "folder" | "root", path: string, x: number, y: n
       { label: "Agents and keys", icon: "bot", action: () => { S.tab = "manage"; render(); } },
       "-",
       { label: "Import from Obsidian…", icon: "upload", action: () => importDialog() },
-      { label: "Download notebook (.zip)", icon: "download", action: () => void downloadNotebook() },
+      { label: "Download space (.zip)", icon: "download", action: () => void downloadNotebook() },
       { label: S.collapsed.size ? "Expand all folders" : "Collapse all folders", icon: "chevron", action: () => { if (S.collapsed.size) S.collapsed.clear(); else for (const f of S.folders) S.collapsed.add(f); store("nb-collapsed", JSON.stringify([...S.collapsed])); renderSide(); } },
     ]);
   }
@@ -7049,7 +7102,7 @@ async function shareDialog(path: string, kind: "note" | "folder" | "notebook" = 
   const scrim = document.createElement("div");
   scrim.className = "scrim";
   const mode = current ? (current.public ? "public" : "people") : "none";
-  const what = kind === "notebook" ? "the whole notebook" : kind === "folder" ? `the folder “${path}”` : `“${stem(path)}”`;
+  const what = kind === "notebook" ? "the whole space" : kind === "folder" ? `the folder “${path}”` : `“${stem(path)}”`;
   const link = kind === "note" ? shareLink(path) : `${location.origin}${location.pathname}#/shared/${S.notebook!.canister.toText()}/${encodeURIComponent(key || "/")}`;
   scrim.innerHTML = `<form class="modal" role="dialog" aria-modal="true" aria-labelledby="sh-t">
     <h2 id="sh-t">${icon("share")} Share ${esc(what)}</h2>
@@ -7194,15 +7247,15 @@ function sharedPage(): string {
       ? `${progressBar}<p class="small muted">${icon("edit")} You can edit this note. ${sh.dirty ? "Unsaved changes." : "Changes save a second after you stop typing."}</p><div class="editor-panes view-edit shared-edit"><div class="cm-host" data-cm="${esc(sh.path)}"></div></div>${comments}`
       : `${progressBar}<article class="md shared-note">${renderMarkdown(sh.note!.content, { self: sh.path, resolve: () => undefined, note: () => undefined, attachment: () => undefined })}</article>${comments}`;
   }
-  const team = S.identity && !sh.loading && !sh.error && sh.teamRole ? `<div class="row tight team-row">${sh.teamRole === "Edit" && sh.files ? `<button type="button" class="btn" data-action="shared-new">${icon("plus")}New note</button>` : ""}${sh.teamRole === "Edit" && sh.note && isMeeting(sh.note.content) ? `<button type="button" class="btn" data-action="shared-summarise" title="The free model, paid for in this notebook's cycles">${icon("bot")}Summarise the meeting with AI</button>` : ""}${sh.cycles !== undefined ? `<button type="button" class="btn btn-ghost" data-action="shared-chip-in" title="Top this notebook up from your wallet; the ICP becomes its cycles">${icon("bolt")}Chip in cycles<span class="small muted"> · ${tc(sh.cycles)} left</span></button>` : ""}</div>` : "";
-  const viralBar = !sh.loading && !sh.error && sh.note ? `<div class="shared-viral-bar"><div class="row tight">${icon("notebook")}<span><b>On-chain note in Lab</b> <span class="muted">· fork a copy into your own notebook or try it free in the browser sandbox.</span></span></div><div class="row tight"><button type="button" class="btn btn-primary" data-action="shared-clone">${icon("copy")}Clone to my Lab</button>${!S.identity ? `<button type="button" class="btn" data-action="try-sandbox">${icon("bolt")}Try Lab in browser</button>` : ""}</div></div>` : "";
+  const team = S.identity && !sh.loading && !sh.error && sh.teamRole ? `<div class="row tight team-row">${sh.teamRole === "Edit" && sh.files ? `<button type="button" class="btn" data-action="shared-new">${icon("plus")}New note</button>` : ""}${sh.teamRole === "Edit" && sh.note && isMeeting(sh.note.content) ? `<button type="button" class="btn" data-action="shared-summarise" title="The free model, paid for in this space's cycles">${icon("bot")}Summarise the meeting with AI</button>` : ""}${sh.cycles !== undefined ? `<button type="button" class="btn btn-ghost" data-action="shared-chip-in" title="Top this space up from your wallet; the ICP becomes its cycles">${icon("bolt")}Chip in cycles<span class="small muted"> · ${tc(sh.cycles)} left</span></button>` : ""}</div>` : "";
+  const viralBar = !sh.loading && !sh.error && sh.note ? `<div class="shared-viral-bar"><div class="row tight">${icon("notebook")}<span><b>On-chain note in Agent Space</b> <span class="muted">· fork a copy into your own space or try it free in the browser sandbox.</span></span></div><div class="row tight"><button type="button" class="btn btn-primary" data-action="shared-clone">${icon("copy")}Clone to my Agent Space</button>${!S.identity ? `<button type="button" class="btn" data-action="try-sandbox">${icon("bolt")}Try Agent Space in browser</button>` : ""}</div></div>` : "";
   return pageShell(`<b>${esc(sh.name || "Shared")}</b><span class="faint">/</span><span>${esc(sh.files ? (sh.path || "Everything shared") : title(sh.path))}</span>`, `
     <section class="card">${team}${viralBar}
       ${crumb}
       <h1 class="shared-title">${esc(sh.files ? (sh.path || sh.name || "Shared notes") : title(sh.path))}</h1>
       ${sh.note ? `<p class="small muted">${esc(sh.path)} · updated ${when(sh.note.modified)}${sh.note.agent ? ` · written by agent ${esc(sh.note.agent)}` : ""}</p>` : ""}
       ${body}
-      <p class="small muted nudge">${S.identity ? `<a href="#/" data-action="nav">Your notebooks</a>` : "Notebooks: markdown notes in a canister you own. Sign in or try the browser sandbox to make your own."}</p>
+      <p class="small muted nudge">${S.identity ? `<a href="#/" data-action="nav">Agent Space</a>` : "Spaces: markdown notes in a canister you own. Sign in or try the browser sandbox to make your own."}</p>
     </section>`);
 }
 let sharedSaveTimer = 0;
@@ -7229,6 +7282,8 @@ async function issueAgentKey() {
   try {
     const key = unwrap(await nb().create_agent_key(name));
     S.issued = { name, key };
+    void agentSkill().then((t) => { S.skillShown = t; render(); });
+    if (document.querySelector(".onboard")) onboarding(1);
     S.newAgent = "";
     const r = await nb().agent_keys();
     S.agentKeys = r.__kind__ === "Ok" ? r.Ok : S.agentKeys;
@@ -7239,29 +7294,72 @@ async function issueAgentKey() {
   render();
 }
 let skillText = "";
-async function agentSkill(k: { name: string; key: string }): Promise<string> {
+/** The skill with this space filled in: the key just issued, or placeholders for one issued earlier. */
+async function agentSkill(k: { name: string; key: string } = S.issued ?? { name: "<agent name>", key: "<your agent key>" }): Promise<string> {
   if (!skillText) skillText = await (await fetch("/skill.md")).text();
-  return skillText.replaceAll("__URL__", apiUrl(S.notebook!.canister.toText())).replaceAll("__NOTEBOOK__", S.notebook!.name).replaceAll("__AGENT__", k.name).replaceAll("__KEY__", k.key);
+  const id = S.notebook!.canister.toText();
+  return skillText.replaceAll("__URL__", apiUrl(id)).replaceAll("__NOTEBOOK__", id).replaceAll("__AGENT__", k.name).replaceAll("__KEY__", k.key);
 }
 function clipperCard(): string {
   const key = S.clipperKey;
   const url = `${location.protocol}//${S.notebook!.canister.toText()}.${isLocal ? `localhost:${location.port}` : "icp0.io"}`;
-  const bm = key ? `javascript:(async()=>{const s=String(getSelection()||'');const t=document.title.replace(/[#^[\\]|\\\\/:]/g,' ');const b='---\\nsource: '+location.href+'\\nclipped: '+new Date().toISOString().slice(0,10)+'\\n---\\n# '+t+'\\n\\n'+(s?'> '+s.replace(/\\n/g,'\\n> ')+'\\n\\n':'')+'['+t+']('+location.href+')\\n';const r=await fetch('${url}/v1/write',{method:'POST',headers:{authorization:'Bearer ${key}','content-type':'application/json'},body:JSON.stringify({path:'Inbox/'+t.slice(0,80)+'.md',content:b})});alert(r.ok?'Clipped to Lab':'Clip failed: '+await r.text())})()` : "";
+  const bm = key ? `javascript:(async()=>{const s=String(getSelection()||'');const t=document.title.replace(/[#^[\\]|\\\\/:]/g,' ');const b='---\\nsource: '+location.href+'\\nclipped: '+new Date().toISOString().slice(0,10)+'\\n---\\n# '+t+'\\n\\n'+(s?'> '+s.replace(/\\n/g,'\\n> ')+'\\n\\n':'')+'['+t+']('+location.href+')\\n';const r=await fetch('${url}/v1/write',{method:'POST',headers:{authorization:'Bearer ${key}','content-type':'application/json'},body:JSON.stringify({path:'Inbox/'+t.slice(0,80)+'.md',content:b})});alert(r.ok?'Clipped to Agent Space':'Clip failed: '+await r.text())})()` : "";
   return `<div class="card band">
     <h2>${icon("link")} Web clipper and mail</h2>
     <p class="muted small">A key scoped to <code>Inbox/</code> lets a bookmarklet save the page you are on (title, link, selection) as a note, and lets a mail relay file messages under <code>Inbox/Mail</code>. Scoped keys can still write under Agents/ and nothing else.</p>
-    ${key ? `<p class="small">Drag this to your bookmarks bar, then click it on any page:</p><p><a class="btn btn-primary" href="${esc(bm)}" onclick="return false" title="Drag me to the bookmarks bar">${icon("link")}Clip to Notebooks</a> <button type="button" class="btn btn-ghost" data-action="copy-cmd" data-value="${esc(bm)}">${icon("copy")}Copy the bookmarklet</button></p><p class="small muted">Mail in: <code>python3 scripts/mail_in.py ${esc(url)} &lt;key&gt; &lt; message.eml</code>, or from a forwarding rule on a machine of yours. The key is shown once; make another if you lose it.</p>` : `<button type="button" class="btn" data-action="clipper-key" ${S.busy ? "disabled" : ""}>${icon("plus")}Make an Inbox key</button>`}
+    ${key ? `<p class="small">Drag this to your bookmarks bar, then click it on any page:</p><p><a class="btn btn-primary" href="${esc(bm)}" onclick="return false" title="Drag me to the bookmarks bar">${icon("link")}Clip to Spaces</a> <button type="button" class="btn btn-ghost" data-action="copy-cmd" data-value="${esc(bm)}">${icon("copy")}Copy the bookmarklet</button></p><p class="small muted">Mail in: <code>python3 scripts/mail_in.py ${esc(url)} &lt;key&gt; &lt; message.eml</code>, or from a forwarding rule on a machine of yours. The key is shown once; make another if you lose it.</p>` : `<button type="button" class="btn" data-action="clipper-key" ${S.busy ? "disabled" : ""}>${icon("plus")}Make an Inbox key</button>`}
+  </div>`;
+}
+/** The Wallet tab: the space's addresses and what sits on each ledger. */
+function walletCard(): string {
+  const id = S.notebook!.canister.toText(), a = S.as.wallet.addrs?.id === id ? S.as.wallet.addrs : undefined;
+  const line = (label: string, v: string | undefined) => `<div class="cmd"><span class="small muted" style="min-width:64px">${label}</span><code>${v ? esc(v) : "…"}</code>${v ? `<button type="button" class="btn btn-ghost" data-action="copy-cmd" data-value="${esc(v)}" title="Copy">${icon("copy")}</button>` : ""}</div>`;
+  const amount = (b: bigint | undefined, d: number) => (b === undefined ? "unavailable" : (Number(b) / 10 ** d).toLocaleString("en-US", { maximumFractionDigits: Math.min(d, 8) }));
+  return `<div class="card band">
+    <h2>${icon("wallet")} Addresses</h2>
+    <p class="muted small">This space is its agent's wallet. What arrives here stays here for the agent to spend (a key with Spend on moves it over the API), except that the space fuels itself from it when it runs under 3 TC.</p>
+    ${line("BTC", a?.btc)}${line("ETH", a?.eth)}${line("ICP", a?.icp)}${line("Principal", id)}
+  </div>
+  <div class="card band">
+    <h2>${icon("coin")} Balances<button type="button" class="btn btn-ghost icon-btn" data-action="refresh-balances" title="Refresh" aria-label="Refresh">${icon("refresh")}</button></h2>
+    ${S.walletBalances ? `<div class="runs">${S.walletBalances.map((b) => `<div class="run"><span><b>${esc(b.symbol)}</b></span><span>${amount(b.balance, b.decimals)}</span></div>`).join("")}</div>` : `<p class="small muted">Reading the ledgers…</p>`}
+    <p class="small muted nudge">Send ICP or a ck token to the principal above and it shows here. Native bitcoin goes to the BTC address (it arrives as ckBTC); ether to the ETH address.</p>
+  </div>`;
+}
+/** The Fuel tab: cycles by card through CyclePay's gateway, or by converting ICP the wallet holds. */
+function fuelCard(): string {
+  const o = S.as.wallet.order;
+  const card = isLocal ? `<p class="small muted">Card payments reach CyclePay's gateway on mainnet only.</p>` : o
+    ? `<p class="small">Order <code>${esc(o.id)}</code>: $${(o.cents / 100).toFixed(2)}, about ${o.tc} TC after the card fee · <b>${esc(o.status.replace(/([A-Z])/g, " $1").trim().toLowerCase())}</b>${o.delivered ? ` · ${o.delivered} delivered` : ""}</p><div class="row tight">${qrSvg(o.url, 140)}<a class="btn btn-primary" href="${esc(o.url)}" target="_blank" rel="noopener">${icon("link")}Open the payment page</a></div>`
+    : `<div class="row tight">${[5, 10, 20].map((d) => `<button type="button" class="btn" data-action="as-card" data-cents="${d * 100}">$${d}</button>`).join("")}</div>`;
+  const icpBal = S.walletBalances?.find((b) => b.symbol === "ICP")?.balance;
+  return `<div class="card band">
+    <h2>${icon("bolt")} By card</h2>
+    <p class="muted small">Pay in USD with a card and the gateway tops this space up itself; the payment page opens here or on a phone through the QR code.</p>
+    ${card}
+  </div>
+  <div class="card band">
+    <h2>${icon("coin")} From the wallet</h2>
+    <p class="muted small">Convert some of the ICP this space holds into its cycles.${icpBal !== undefined ? ` It holds ${icp(icpBal)} ICP.` : ""}</p>
+    <form class="row tight" data-form="fuel"><input class="input" name="fuelAmount" inputmode="decimal" placeholder="0.5" required aria-label="ICP to convert" style="max-width:140px"><button type="submit" class="btn btn-primary" ${S.busy ? "disabled" : ""}>${icon("bolt")}Convert to cycles</button></form>
   </div>`;
 }
 function agentsCard(): string {
   const live = S.agentKeys.filter((k) => !k.revoked);
   return `<div class="card band">
-    <h2>${icon("bot")} Agents</h2>
-    <p class="muted small">Give an AI agent a key and it can read every note and write new ones under the locked <code>${AGENT_ROOT}/</code> folder, where you can read, link and delete but not edit. Agent notes are stamped with the agent's name and drawn as green diamonds in the graph. Issue a key, copy the skill, paste it into Claude Code, Codex or any agent, and ask it to explore what you have been writing.</p>
-    <form class="row tight" data-form="agent"><input class="input" name="newAgent" value="${esc(S.newAgent)}" placeholder="agent name, e.g. claude" required aria-label="Agent name" style="max-width:260px"><button type="submit" class="btn btn-primary" ${S.busy ? "disabled" : ""}>${icon("plus")}Issue key</button></form>
+    <h2>${icon("bot")} Skill</h2>
+    <p class="muted small">Give an AI agent a key and it runs this space: it reads and writes every note, and with <b>Spend</b> switched on it can also move the ICP and ck tokens the space holds (<code>/v1/balances</code>, <code>/v1/transfer</code>; every transfer is logged here). Agent notes are stamped with the agent's name and drawn as green diamonds in the graph. Issue a key, copy the skill, paste it into your agent, and ask it to explore what you have been writing.</p>
+    <form class="row tight" data-form="agent"><input class="input" name="newAgent" value="${esc(S.newAgent)}" placeholder="agent name" required aria-label="Agent name" style="max-width:260px"><button type="submit" class="btn btn-primary" ${S.busy ? "disabled" : ""}>${icon("plus")}Issue key</button></form>
     ${S.issued ? `<div class="issued nudge"><div class="band-title">Key for ${esc(S.issued.name)}, shown once</div><div class="cmd"><code>${esc(S.issued.key)}</code><button type="button" class="btn btn-ghost" data-action="copy-key">${icon("copy")}Key</button></div><div class="row tight nudge"><button type="button" class="btn btn-primary" data-action="copy-skill">${icon("copy")}Copy agent skill</button><a class="btn" href="/skill.md" target="_blank" rel="noopener">${icon("file")}View skill.md</a><span class="small muted">The skill carries the URL and key; paste it where your agent reads skills or prompts.</span></div></div>` : ""}
-    ${live.length ? `<div class="runs nudge">${live.map((k) => `<div class="run"><span><b>${esc(k.name)}</b> <span class="small muted">· ${String(k.writes)} note${k.writes === 1n ? "" : "s"} written${k.last_used > 0n ? ` · last seen ${ago(k.last_used)}` : " · never used"}</span></span><span class="small muted">${when(k.created_at)}</span><button type="button" class="btn btn-ghost btn-danger" data-action="revoke-key" data-name="${esc(k.name)}">Revoke</button></div>`).join("")}</div>` : `<p class="small muted nudge">No agent keys yet.</p>`}
+    ${live.length ? `<div class="runs nudge">${live.map((k) => `<div class="run"><span><b>${esc(k.name)}</b> <span class="small muted">· ${String(k.writes)} note${k.writes === 1n ? "" : "s"} written${k.last_used > 0n ? ` · last seen ${ago(k.last_used)}` : " · never used"}</span></span><span class="small muted">${when(k.created_at)}</span><button type="button" class="btn btn-ghost ${k.spend ? "on" : ""}" data-action="key-spend" data-name="${esc(k.name)}" data-on="${k.spend ? "0" : "1"}" title="${k.spend ? "This key can move the space's funds; click to stop it" : "Let this key move the space's funds"}">${icon("wallet")}${k.spend ? "Spends" : "Spend"}</button><button type="button" class="btn btn-ghost btn-danger" data-action="revoke-key" data-name="${esc(k.name)}">Revoke</button></div>`).join("")}</div>` : `<p class="small muted nudge">No agent keys yet.</p>`}
+    <label class="switch nudge"><input type="checkbox" data-action="agent-chat" ${S.agentChat ? "checked" : ""}><span>Let agents chat for this space in the community (<code>POST /v1/chat</code>; each message costs the space a few million cycles)</span></label>
     <div class="cmd nudge"><span class="small muted">API</span><code>${esc(apiUrl(S.notebook!.canister.toText()))}</code><button type="button" class="btn btn-ghost" data-action="copy-cmd" data-value="${esc(apiUrl(S.notebook!.canister.toText()))}">${icon("copy")}</button></div>
+  </div>
+  <div class="card band">
+    <h2>${icon("book")} The skill</h2>
+    <p class="muted small">Paste this into your agent: any agent that reads a skill file. It covers the JSON API, icp-cli as the owner, the rules of the space and what every action costs.${S.issued ? "" : " It carries placeholders for the key: issue one above and copy again to get it filled in."}</p>
+    <div class="row tight"><button type="button" class="btn btn-primary" data-action="copy-skill">${icon("copy")}Copy the skill</button><a class="btn btn-ghost" href="/skill.md" target="_blank" rel="noopener">${icon("link")}Open the raw file</a></div>
+    <pre class="skill-text nudge">${S.skillShown ? esc(S.skillShown) : "Loading…"}</pre>
   </div>`;
 }
 function publishCard(): string {
@@ -7270,8 +7368,8 @@ function publishCard(): string {
   const site = `${apiUrl(v.canister.toText())}/p/`;
   return `<div class="card band">
     <h2>${icon("globe")} Publish</h2>
-    <p class="muted small">Publish a folder, or the whole notebook, as a public website served by this canister: a crawlable page per note with navigation, backlinks and a graph on the index. Agent notes and attachments stay private.</p>
-    <form class="row tight" data-form="publish"><select class="input" name="pubfolder" aria-label="Folder to publish" style="max-width:280px">${folders.map((f) => `<option value="${esc(f)}" ${S.published === f ? "selected" : ""}>${f ? `/${esc(f)}` : "Whole notebook"}</option>`).join("")}</select><button type="submit" class="btn btn-primary">${icon("globe")}${S.published === null ? "Publish" : "Update"}</button>${S.published !== null ? `<button type="button" class="btn btn-danger" data-action="unpublish">Unpublish</button>` : ""}</form>
+    <p class="muted small">Publish a folder, or the whole space, as a public website served by this canister: a crawlable page per note with navigation, backlinks and a graph on the index. Agent notes and attachments stay private.</p>
+    <form class="row tight" data-form="publish"><select class="input" name="pubfolder" aria-label="Folder to publish" style="max-width:280px">${folders.map((f) => `<option value="${esc(f)}" ${S.published === f ? "selected" : ""}>${f ? `/${esc(f)}` : "Whole space"}</option>`).join("")}</select><button type="submit" class="btn btn-primary">${icon("globe")}${S.published === null ? "Publish" : "Update"}</button>${S.published !== null ? `<button type="button" class="btn btn-danger" data-action="unpublish">Unpublish</button>` : ""}</form>
     ${S.published !== null ? `<div class="cmd nudge"><span class="small muted">Live at</span><code><a href="${esc(site)}" target="_blank" rel="noopener">${esc(site)}</a></code><button type="button" class="btn btn-ghost" data-action="copy-cmd" data-value="${esc(site)}">${icon("copy")}</button></div>` : ""}
   </div>`;
 }
@@ -7369,7 +7467,7 @@ async function loadHealth(id: string): Promise<Health | undefined> {
 const daysUntilFreeze = (h: Health) => (h.idle_cycles_burned_per_day ? Number((h.cycles - h.freeze_at) / h.idle_cycles_burned_per_day) : Infinity);
 /** The urgent pop-up: the notebook is frozen (or about to be) and needs ICP now. Top-ups go through the registry, which still works when the notebook cannot take calls. */
 function freezeModal(id: string, h: Health) {
-  const name = S.notebooks?.find((v) => v.canister.toText() === id)?.name ?? "This notebook";
+  const name = S.notebooks?.find((v) => v.canister.toText() === id)?.name ?? "This space";
   const scrim = document.createElement("div");
   scrim.className = "scrim";
   const days = h.frozen ? Number(h.days_left) : daysUntilFreeze(h);
@@ -7381,7 +7479,7 @@ function freezeModal(id: string, h: Health) {
     ${body}
     <div class="stats tight"><div class="stat"><div class="label">Cycles left</div><div class="num danger">${tc(h.cycles)}</div></div><div class="stat"><div class="label">Freezes below</div><div class="num">${tc(h.freeze_at)}</div></div><div class="stat"><div class="label">Burn per day</div><div class="num">${tc(h.idle_cycles_burned_per_day)}</div></div></div>
     <label class="field"><span class="label">Amount to convert (paid from ${payLabel()})</span><span class="row tight"><input class="input" name="v" inputmode="decimal" value="${esc(S.topupAmount)}" required style="flex:1">${tokenSelect("fztoken", S.payToken)}</span></label>
-    <p class="small muted" data-fz-status>${useOisy ? "Your OISY wallet opens to approve the amount plus one fee for the registry; the registry converts it into this notebook's cycles." : "Your local account approves the amount for the registry, which converts it into this notebook's cycles."}</p>
+    <p class="small muted" data-fz-status>${useOisy ? "Your OISY wallet opens to approve the amount plus one fee for the registry; the registry converts it into this space's cycles." : "Your local account approves the amount for the registry, which converts it into this space's cycles."}</p>
     <div class="actions"><button type="button" class="btn" data-x="cancel">${h.frozen ? "Not now" : "Later"}</button><button type="submit" class="btn btn-primary">${icon("bolt")}Top up now</button></div>
   </form>`;
   const close = () => scrim.remove();
@@ -7416,7 +7514,7 @@ const unhex = (h: string) => Uint8Array.from(h.match(/../g)!.map((x) => parseInt
 
 const stars = (avg: number) => "★★★★★☆☆☆☆☆".slice(5 - Math.round(avg), 10 - Math.round(avg));
 function attestHtml(a?: Attestation): string {
-  if (!a) return `<p class="small muted">Not judged yet. The judge scores coverage, depth, linking, organisation and freshness; listing a notebook runs it automatically.</p>`;
+  if (!a) return `<p class="small muted">Not judged yet. The judge scores coverage, depth, linking, organisation and freshness; listing a space runs it automatically.</p>`;
   return `<div class="attest"><span class="grade g-${esc(a.grade)}">${esc(a.grade)}</span><div><b>${a.score}/100</b> <span class="small muted">· judge ${esc(a.judge)} · ${ago(a.at)}</span><div class="small">${esc(a.summary)}</div></div></div>`;
 }
 /** Manage: the notebook as an ICRC-7 token, its attestation, and the listing form. */
@@ -7427,7 +7525,7 @@ function sellCard(): string {
   const id = S.tokenId;
   return `<div class="card band">
     <h2>${icon("tag")} Sell or give away</h2>
-    <p class="muted small">This notebook is token <b>#${id === undefined ? "…" : String(id)}</b> of the <code>Notebooks</code> ICRC-7 collection at the registry. Whoever holds the token owns the canister: a sale or a transfer moves the controllers and the owner with it, and the new owner's agents and payer start from scratch.</p>
+    <p class="muted small">This space is token <b>#${id === undefined ? "…" : String(id)}</b> of the <code>Spaces</code> ICRC-7 collection at the registry. Whoever holds the token owns the canister: a sale or a transfer moves the controllers and the owner with it, and the new owner's agents and payer start from scratch.</p>
     <div class="band-title">Quality attestation<button type="button" class="btn btn-ghost" data-action="attest" ${S.busy ? "disabled" : ""}>${icon("refresh")}${S.attest ? "Judge again" : "Run the judge"}</button></div>
     ${attestHtml(S.attest)}
     ${l ? `<div class="band-title">For sale</div><p class="small">Listed ${ago(l.listing.listed_at)} for <b>${fmtAmt(l.listing.price, tokenOf(l.listing.token))}</b>${l.rating_count ? ` · ${stars(l.rating_avg)} ${l.rating_avg.toFixed(1)} (${String(l.rating_count)})` : ""}${l.listing.blurb ? `<br><span class="muted">${esc(l.listing.blurb)}</span>` : ""}</p><div class="row tight"><a class="btn" href="#/market" data-action="nav">${icon("tag")}See it on the market</a><button type="button" class="btn btn-danger" data-action="delist" ${S.busy ? "disabled" : ""}>Remove the listing</button></div>`
@@ -7471,10 +7569,10 @@ function marketPage(): string {
     </div>`;
   }).join("");
   return pageShell(`<b>Market</b>`, `
-    <section class="card"><h2>${icon("tag")} Notebook market</h2><p class="muted small">Whole notebooks for sale as ICRC-7 tokens. Buying moves the canister to you: its notes, history, attachments and cycles. Each listing carries the judge's verdict and ratings from people who bought it. Pay through OISY in ICP, ckBTC, ckETH, ckUSDC or ckUSDT.</p>
-    <div class="row tight"><button type="button" class="tag-chip ${m.decksOnly ? "" : "active"}" data-action="market-filter" data-decks="0">All notebooks</button><button type="button" class="tag-chip ${m.decksOnly ? "active" : ""}" data-action="market-filter" data-decks="1">${icon("check")}Decks and quizzes</button></div>
-    ${m.loading && !m.listings.length ? `<p class="muted">Loading…</p>` : shown.length ? `<div class="nb-grid">${cards}</div>` : `<p class="muted">${m.decksOnly ? "No notebooks with decks or quizzes for sale right now." : "Nothing for sale right now. List one of yours from Manage → Sell."}</p>`}
-    ${[...m.bought].length ? `<div class="band"><div class="band-title">Notebooks you bought</div><p class="small muted">Rate them 1 to 5 stars; your rating shows on the listing if it is sold on.</p>${[...m.bought].map((c) => `<div class="row tight"><code>${c}</code><button type="button" class="btn" data-action="rate" data-id="${c}">${icon("star")}Rate</button></div>`).join("")}</div>` : ""}
+    <section class="card"><h2>${icon("tag")} Space market</h2><p class="muted small">Whole spaces for sale as ICRC-7 tokens. Buying moves the canister to you: its notes, history, attachments and cycles. Each listing carries the judge's verdict and ratings from people who bought it. Pay through OISY in ICP, ckBTC, ckETH, ckUSDC or ckUSDT.</p>
+    <div class="row tight"><button type="button" class="tag-chip ${m.decksOnly ? "" : "active"}" data-action="market-filter" data-decks="0">All spaces</button><button type="button" class="tag-chip ${m.decksOnly ? "active" : ""}" data-action="market-filter" data-decks="1">${icon("check")}Decks and quizzes</button></div>
+    ${m.loading && !m.listings.length ? `<p class="muted">Loading…</p>` : shown.length ? `<div class="nb-grid">${cards}</div>` : `<p class="muted">${m.decksOnly ? "No spaces with decks or quizzes for sale right now." : "Nothing for sale right now. List one of yours from Manage → Sell."}</p>`}
+    ${[...m.bought].length ? `<div class="band"><div class="band-title">Spaces you bought</div><p class="small muted">Rate them 1 to 5 stars; your rating shows on the listing if it is sold on.</p>${[...m.bought].map((c) => `<div class="row tight"><code>${c}</code><button type="button" class="btn" data-action="rate" data-id="${c}">${icon("star")}Rate</button></div>`).join("")}</div>` : ""}
     </section>`);
 }
 async function buyListing(id: string) {
@@ -7489,11 +7587,11 @@ async function buyListing(id: string) {
     S.notebooks = undefined;
     void loadNotebooks();
     void loadMarket();
-    return `“${r.Ok.name}” is yours. It is in your notebooks now.`;
+    return `“${r.Ok.name}” is yours. It is in your spaces now.`;
   });
 }
 async function rateDialog(id: string) {
-  const starsV = await ask({ title: "Rate this notebook", label: "Stars", value: "5", choices: [5, 4, 3, 2, 1].map((n) => ({ value: String(n), label: `${"★".repeat(n)}${"☆".repeat(5 - n)}` })), ok: "Next" });
+  const starsV = await ask({ title: "Rate this space", label: "Stars", value: "5", choices: [5, 4, 3, 2, 1].map((n) => ({ value: String(n), label: `${"★".repeat(n)}${"☆".repeat(5 - n)}` })), ok: "Next" });
   if (starsV === null) return;
   const comment = await ask({ title: "A few words for other buyers", label: "Comment (optional)", value: "", placeholder: "What was it worth to you?", ok: "Submit rating" });
   if (comment === null) return;
@@ -7513,9 +7611,9 @@ async function showRatings(id: string) {
 function sharesCard(): string {
   return `<div class="card band">
     <h2>${icon("share")} Shared notes</h2>
-    <p class="muted small">Share a note from its menu, a folder from the folder's menu, or the whole notebook here: public (anyone with the link, no sign-in) or with specific principals as viewers, commenters or editors; a link can allow viewing, commenting or editing. Links follow renames.</p>
-    <div class="row tight"><button type="button" class="btn" data-action="share-notebook">${icon("share")}Share whole notebook…</button></div>
-    ${S.shares.length ? `<div class="runs nudge">${S.shares.map((x) => { const kind = x.path === "" ? "notebook" : note(x.path) ? "note" : "folder"; const link = kind === "note" ? shareLink(x.path) : `${location.origin}${location.pathname}#/shared/${S.notebook!.canister.toText()}/${encodeURIComponent(x.path || "/")}`; return `<div class="run"><span><b>${esc(x.path === "" ? "Whole notebook" : kind === "folder" ? `/${x.path}` : stem(x.path))}</b> <span class="small muted">· ${kind} · ${x.public ? "public" : `${x.principals.length} reader${x.principals.length === 1 ? "" : "s"}, ${(x.editors ?? []).length} editor${(x.editors ?? []).length === 1 ? "" : "s"}`}</span></span><span class="row-actions"><button type="button" class="btn btn-ghost" data-action="copy-cmd" data-value="${esc(link)}">${icon("copy")}Link</button><button type="button" class="btn btn-ghost" data-action="share" data-path="${esc(x.path)}" data-kind="${kind}">${icon("edit")}</button></span></div>`; }).join("")}</div>` : `<p class="small muted">Nothing shared.</p>`}
+    <p class="muted small">Share a note from its menu, a folder from the folder's menu, or the whole space here: public (anyone with the link, no sign-in) or with specific principals as viewers, commenters or editors; a link can allow viewing, commenting or editing. Links follow renames.</p>
+    <div class="row tight"><button type="button" class="btn" data-action="share-notebook">${icon("share")}Share whole space…</button></div>
+    ${S.shares.length ? `<div class="runs nudge">${S.shares.map((x) => { const kind = x.path === "" ? "notebook" : note(x.path) ? "note" : "folder"; const link = kind === "note" ? shareLink(x.path) : `${location.origin}${location.pathname}#/shared/${S.notebook!.canister.toText()}/${encodeURIComponent(x.path || "/")}`; return `<div class="run"><span><b>${esc(x.path === "" ? "Whole space" : kind === "folder" ? `/${x.path}` : stem(x.path))}</b> <span class="small muted">· ${kind} · ${x.public ? "public" : `${x.principals.length} reader${x.principals.length === 1 ? "" : "s"}, ${(x.editors ?? []).length} editor${(x.editors ?? []).length === 1 ? "" : "s"}`}</span></span><span class="row-actions"><button type="button" class="btn btn-ghost" data-action="copy-cmd" data-value="${esc(link)}">${icon("copy")}Link</button><button type="button" class="btn btn-ghost" data-action="share" data-path="${esc(x.path)}" data-kind="${kind}">${icon("edit")}</button></span></div>`; }).join("")}</div>` : `<p class="small muted">Nothing shared.</p>`}
   </div>`;
 }
 
@@ -7534,7 +7632,7 @@ async function helpDialog() {
   const mine = await registry().my_bugs().catch(() => [] as Bug[]);
   const scrim = document.createElement("div");
   scrim.className = "scrim";
-  const context = `page=${S.tab}${S.notebook ? ` notebook=${S.notebook.canister.toText()}` : ""}${cur() ? ` note=${cur()}` : ""} ua=${navigator.userAgent.slice(0, 120)} ${innerWidth}x${innerHeight}`;
+  const context = `page=${S.tab}${S.notebook ? ` space=${S.notebook.canister.toText()}` : ""}${cur() ? ` note=${cur()}` : ""} ua=${navigator.userAgent.slice(0, 120)} ${innerWidth}x${innerHeight}`;
   scrim.innerHTML = `<form class="modal wide" role="dialog" aria-modal="true" aria-labelledby="hlp-t">
     <h2 id="hlp-t">${icon("help")} Help and support</h2>
     <div class="segmented sub" role="radiogroup" aria-label="What are you sending"><label class="tab on"><input type="radio" name="kind" value="bug" checked hidden>${icon("bug")}<span class="lbl">Report a problem</span></label><label class="tab"><input type="radio" name="kind" value="idea" hidden>${icon("star")}<span class="lbl">Suggest an idea</span></label></div>
@@ -7672,9 +7770,24 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
   const kit = /^(money|creator|fitness|home)-/.exec(action)?.[1];
   if (kit) return kit === "money" ? moneyAction(action, el) : kit === "creator" ? creatorAction(action, el) : kit === "fitness" ? fitnessAction(action, el) : homeAction(action, el);
   switch (action) {
-    case "landing-persona":
-      S.landingPersona = el.dataset.persona ?? "obsidian";
-      return render();
+    case "as-begin": S.as.step = "tap"; S.as.tap = { count: 0, start: 0, done: undefined }; return render();
+    case "as-tap": return asTap();
+    case "as-word": { const a = S.as; if (a.huntDone) return; const i = Number(el.dataset.i); if (a.picked.has(i)) a.picked.delete(i); else a.picked.add(i); el.classList.toggle("on", a.picked.has(i)); return; }
+    case "as-submit": return asSubmit();
+    case "as-card": return asCard(Number(el.dataset.cents));
+    case "refresh-balances": S.walletBalances = undefined; render(); return loadBalances();
+    case "agent-chat": { const on = (el as HTMLInputElement).checked; try { unwrap(await nb().set_agent_chat(on)); S.agentChat = on; toast(on ? "Agents can post in #general for this space." : "Agents can no longer post for this space.", "ok"); } catch (e) { toast(errMsg(e), "error"); (el as HTMLInputElement).checked = !on; } return; }
+    case "key-spend": {
+      const on = el.dataset.on === "1";
+      if (on && !(await confirmDialog(`Let ${el.dataset.name} spend this space's funds?`, "The agent can then send ICP and ck tokens the space holds to any principal, over its key. Every transfer is logged under Agents.", "Allow"))) return;
+      try {
+        unwrap(await nb().set_key_spend(el.dataset.name!, on));
+        const r = await nb().agent_keys();
+        S.agentKeys = r.__kind__ === "Ok" ? r.Ok : S.agentKeys;
+        render();
+      } catch (e) { toast(errMsg(e), "error"); }
+      return;
+    }
     case "try-sandbox": {
       const targetNote = el.dataset.path;
       S.shared = undefined;
@@ -7685,7 +7798,7 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
         await signIn();
         if (!S.identity) return;
       }
-      const name = (await ask({ title: "Mint Browser Sandbox to an on-chain canister", body: "Your notes from the browser sandbox will be copied into a real canister notebook that you own on the Internet Computer.", label: "Notebook name", value: "My Lab", ok: "Next" }))?.trim();
+      const name = (await ask({ title: "Mint Browser Sandbox to an on-chain canister", body: "Your notes from the browser sandbox will be copied into a real canister space that you own on the Internet Computer.", label: "Space name", value: "My Agent Space", ok: "Next" }))?.trim();
       if (!name) return;
       const sbNotes = unwrap(await sandboxNotebookApi().read_page(null, 500)).notes;
       const id = await spawnNotebook(name, "Minted from browser sandbox");
@@ -7707,8 +7820,8 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
       const destPath = `Cloned/${noteName}`;
       if (S.identity && S.notebooks?.length) {
         const dest = await ask({
-          title: `Clone “${title(sh.path)}” to your Lab`,
-          label: "Destination notebook",
+          title: `Clone “${title(sh.path)}” to your Agent Space`,
+          label: "Destination space",
           choices: [...S.notebooks.map((n) => ({ value: n.canister.toText(), label: n.name })), { value: SANDBOX_ID, label: "Browser Sandbox (free)" }],
           value: S.notebooks[0].canister.toText(),
           ok: "Clone & open",
@@ -7725,12 +7838,12 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
       return openNotebook(SANDBOX_ID, destPath);
     }
     case "chat-sponsor-newcomer": {
-      const whoText = (await ask({ title: "Sponsor a newcomer's first notebook", body: "A starter notebook for someone waiting at the station: you pay what a spawn costs (and any cycles you add); they own and control the canister from the first second. Ask them for their principal in #help.", label: "Their principal", placeholder: "xxxxx-xxxxx-…", ok: "Next" }))?.trim();
+      const whoText = (await ask({ title: "Sponsor a newcomer's first space", body: "A starter space for someone waiting at the station: you pay what a spawn costs (and any cycles you add); they own and control the canister from the first second. Ask them for their principal in #help.", label: "Their principal", placeholder: "xxxxx-xxxxx-…", ok: "Next" }))?.trim();
       if (!whoText) return;
       let who: Principal;
       try { who = Principal.fromText(whoText); } catch { return toast("That does not look like a principal.", "error"); }
-      if (whoText === S.principal) return toast("That is you; make a notebook from the list instead.", "info");
-      const nbName = (await ask({ title: "Their notebook's name", label: "Name", value: "My notebook", ok: "Next" }))?.trim();
+      if (whoText === S.principal) return toast("That is you; make a space from the list instead.", "info");
+      const nbName = (await ask({ title: "Their space's name", label: "Name", value: "My space", ok: "Next" }))?.trim();
       if (!nbName) return;
       const deposit = await depositDialog(nbName, minDepositE8s(await icpXdrRate()));
       if (deposit === null) return;
@@ -7740,7 +7853,7 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
         if (need > 0n) payer = await approvePayment(Principal.fromText(REGISTRY), need);
         const r = await registry().sponsor_newcomer(who, nbName, payer && payer.toText() !== S.principal ? payer : null);
         if (r.__kind__ === "Err") throw new Error(r.Err);
-        if (deposit > 0n) { const t = await registry().top_up_notebook(r.Ok.canister, deposit, payer && payer.toText() !== S.principal ? payer : null); if (t.__kind__ === "Err") toast(`The notebook is theirs, but the cycles did not go through: ${t.Err}`, "error"); }
+        if (deposit > 0n) { const t = await registry().top_up_notebook(r.Ok.canister, deposit, payer && payer.toText() !== S.principal ? payer : null); if (t.__kind__ === "Err") toast(`The space is theirs, but the cycles did not go through: ${t.Err}`, "error"); }
         toast(`“${r.Ok.name}” is live and theirs. Thank you.`, "ok");
         if (S.community) void loadCommunity(S.community.channel);
       } catch (e) { toast(errMsg(e), "error"); }
@@ -7765,7 +7878,10 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
       if (S.tab === "work") checkReminders();
       if (S.tab === "manage") {
         void refreshInfo();
-        void loadSellInfo();
+        void loadWallet(S.notebook!.canister.toText());
+        void loadBalances();
+        void agentSkill().then((t) => { S.skillShown = t; if (S.tab === "manage") render(); });
+        void nb().agent_chat_allowed().then((r) => { if (r.__kind__ === "Ok" && r.Ok !== S.agentChat) { S.agentChat = r.Ok; render(); } }).catch(() => {});
         S.snapshots = undefined;
         registry().list_snapshots(S.notebook!.canister).then((l) => { S.snapshots = l.__kind__ === "Ok" ? l.Ok : []; if (S.tab === "manage") render(); }).catch(() => { S.snapshots = []; });
       }
@@ -7791,7 +7907,7 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
     case "shared-chip-in": {
       const sh = S.shared;
       if (!sh) return;
-      const v = await ask({ title: `Chip in cycles for “${sh.name ?? "this notebook"}”`, body: "The ICP leaves your wallet and is minted straight into this notebook's cycles; nobody holds it on the way.", label: "ICP", value: "0.1", ok: "Chip in" });
+      const v = await ask({ title: `Chip in cycles for “${sh.name ?? "this space"}”`, body: "The ICP leaves your wallet and is minted straight into this space's cycles; nobody holds it on the way.", label: "ICP", value: "0.1", ok: "Chip in" });
       if (v === null) return;
       const n = Number(v);
       if (!(n >= 0.01)) return toast("Minimum is 0.01 ICP.", "error");
@@ -8209,7 +8325,7 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
       return replaceMessage(r.Ok);
     }
     case "chat-primary": {
-      const n = await myNotebookChoice("Which notebook pays for your chat?");
+      const n = await myNotebookChoice("Which space pays for your chat?");
       if (!n || !S.community) return;
       const r = await registry().set_primary(n.canister).catch((e) => ({ __kind__: "Err", Err: errMsg(e) }) as const);
       if (r.__kind__ === "Err") return toast(r.Err, "error");
@@ -8234,7 +8350,7 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
         { label: `Share a note for opinions · ${cyc(S.community!.fee ?? 16_000_000n)}`, icon: "file", action: () => void shareGist() },
         ...(flag("fundraisers") ? [S.community!.channels.find((x) => x.name === S.community!.channel)?.gate === "github"
           ? { label: `Raise for an AI plan · ${cyc(S.community!.fee ?? 16_000_000n)}`, icon: "bolt", action: () => void startPlanFund() } as MenuItem
-          : { label: `Raise cycles for a notebook · ${cyc(S.community!.fee ?? 16_000_000n)}`, icon: "bolt", action: () => void startFund() } as MenuItem] : []),
+          : { label: `Raise cycles for a space · ${cyc(S.community!.fee ?? 16_000_000n)}`, icon: "bolt", action: () => void startFund() } as MenuItem] : []),
       ]);
     }
     case "gist-open": { S.community = undefined; clearInterval(chatTimer); location.hash = `#/notebook/${el.dataset.nb}/${el.dataset.path}`; return; }
@@ -8261,7 +8377,7 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
       const c = S.community!;
       const m = c.messages.find((x) => x.id === BigInt(el.dataset.mid!));
       if (!m?.fund) return;
-      const v = await ask({ title: m.fund.plan ? `Chip in for @${m.handle}'s ${m.fund.plan}` : `Chip in for “${m.fund.name}”`, body: m.fund.plan ? `The ICP goes to @${m.handle}'s in-app wallet, minus one ledger fee.` : `The ICP leaves your wallet and is minted into the notebook's cycles at once; the owner never holds it. ${useOisy ? "" : "Locally your dev account approves the registry first."}`, label: "Amount (ICP)", value: "0.1", ok: "Chip in" });
+      const v = await ask({ title: m.fund.plan ? `Chip in for @${m.handle}'s ${m.fund.plan}` : `Chip in for “${m.fund.name}”`, body: m.fund.plan ? `The ICP goes to @${m.handle}'s in-app wallet, minus one ledger fee.` : `The ICP leaves your wallet and is minted into the space's cycles at once; the owner never holds it. ${useOisy ? "" : "Locally your dev account approves the registry first."}`, label: "Amount (ICP)", value: "0.1", ok: "Chip in" });
       if (v === null) return;
       const amount = BigInt(Math.round(Number(v) * 1e8));
       if (amount < 1_000_000n) return toast("Minimum is 0.01 ICP.", "error");
@@ -8277,7 +8393,7 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
     }
     case "fund-close": {
       const c = S.community!;
-      if ((await ask({ title: "Close this fundraiser?", body: "What was raised is already in the notebook; no more donations are taken.", ok: "Close it" })) === null) return;
+      if ((await ask({ title: "Close this fundraiser?", body: "What was raised is already in the space; no more donations are taken.", ok: "Close it" })) === null) return;
       const r = await registry().close_fund(c.channel, BigInt(el.dataset.mid!));
       if (r.__kind__ === "Err") return toast(r.Err, "error");
       return replaceMessage(r.Ok);
@@ -8382,7 +8498,7 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
     case "freeze-modal": {
       const id = S.notebook!.canister.toText();
       const h = S.health.get(id) ?? (await loadHealth(id));
-      return h ? freezeModal(id, h) : toast("Could not read the notebook's health.", "error");
+      return h ? freezeModal(id, h) : toast("Could not read the space's health.", "error");
     }
     case "qz-flip": { const st = quizStates.get(el.dataset.path!); if (st) { st.flipped = !st.flipped; refreshQuiz(el.dataset.path!); } return; }
     case "qz-rate": {
@@ -8503,8 +8619,8 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
     case "nb-menu": {
       const r = el.getBoundingClientRect();
       const items: MenuItem[] = (S.notebooks ?? []).map((n) => ({ label: n.name, icon: "notebook", checked: n.canister.toText() === S.notebook?.canister.toText(), action: () => { if (n.canister.toText() !== S.notebook?.canister.toText()) void saveAll().then(() => openNotebook(n.canister.toText())); } }));
-      items.push("-", { label: "New notebook…", icon: "plus", action: () => void ask({ title: "New notebook", label: "Name", placeholder: "Research", ok: "Create" }).then((v) => { if (v?.trim()) { S.newNotebook = v.trim(); void saveAll().then(() => { location.hash = "#/"; void createNotebook(); }); } }) }, { label: "All notebooks", icon: "updown", action: () => { void saveAll(); location.hash = "#/"; } }, { label: "Manage this notebook", icon: "bolt", action: () => { S.tab = "manage"; render(); } });
-      return contextMenu(r.left, r.top - 8 - items.length * 34, "Notebooks", items);
+      items.push("-", { label: "New space…", icon: "plus", action: () => void ask({ title: "New space", label: "Name", placeholder: "Research", ok: "Create" }).then((v) => { if (v?.trim()) { S.newNotebook = v.trim(); void saveAll().then(() => { location.hash = "#/"; void createNotebook(); }); } }) }, { label: "All spaces", icon: "updown", action: () => { void saveAll(); location.hash = "#/"; } }, { label: "Manage this space", icon: "bolt", action: () => { S.tab = "manage"; render(); } });
+      return contextMenu(r.left, r.top - 8 - items.length * 34, "Spaces", items);
     }
     case "today":
       return openDaily();
@@ -8554,7 +8670,7 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
       await copy(S.issued!.key);
       return toast("Key copied.", "ok");
     case "copy-skill":
-      await copy(await agentSkill(S.issued!));
+      await copy(await agentSkill());
       return toast("Agent skill copied. Paste it into your agent.", "ok");
     case "revoke-key":
       if (!(await confirmDialog(`Revoke the key for ${el.dataset.name}?`, "The agent stops working at once. Its notes stay.", "Revoke"))) return;
@@ -8610,12 +8726,12 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
           if (r.__kind__ === "Err") throw new Error(r.Err);
           toast("Snapshot taken.", "ok");
         } else if (action === "snap-restore") {
-          if (!(await confirmDialog("Restore this snapshot?", "The notebook is stopped, rolled back to the snapshot, and started again. Everything written since is lost.", "Restore"))) return;
+          if (!(await confirmDialog("Restore this snapshot?", "The space is stopped, rolled back to the snapshot, and started again. Everything written since is lost.", "Restore"))) return;
           S.busy = "snap";
           render();
           const r = await registry().restore_snapshot(c, unhex(el.dataset.id!));
           if (r.__kind__ === "Err") throw new Error(r.Err);
-          toast("Restored. Reloading the notebook.", "ok");
+          toast("Restored. Reloading the space.", "ok");
           await loadNotebook();
         } else if (action === "snap-delete") {
           const r = await registry().delete_snapshot(c, unhex(el.dataset.id!));
@@ -9235,7 +9351,7 @@ document.addEventListener("submit", (ev) => {
           let r;
           if (!verifiedNow(c.member) && canNewcomerPost(c)) {
             if (!c.member && !c.newcomerHandle) {
-              const h = (await ask({ title: "Choose your newcomer handle", body: "Your Newcomer Pass lets you send 10 free messages in #help and #general before you spawn your first notebook.", label: "Handle", value: `visitor_${S.principal.slice(0, 5)}`, ok: "Send message" }))?.trim();
+              const h = (await ask({ title: "Choose your newcomer handle", body: "Your Newcomer Pass lets you send 10 free messages in #help and #general before you spawn your first space.", label: "Handle", value: `visitor_${S.principal.slice(0, 5)}`, ok: "Send message" }))?.trim();
               if (!h) return;
               c.newcomerHandle = h;
             }
@@ -9293,6 +9409,13 @@ document.addEventListener("submit", (ev) => {
     }
     case "agent":
       return void issueAgentKey();
+    case "fuel":
+      return void (async () => {
+        const n = Number(f.querySelector<HTMLInputElement>("[name=fuelAmount]")!.value);
+        if (!(n > 0)) return toast("How much ICP to convert?", "error");
+        await act("fuel", async () => { const r = await nb().fuel_from_wallet(BigInt(Math.round(n * 1e8))); if (r.__kind__ === "Err") throw new Error(r.Err); return `${icp(r.Ok.amount_e8s)} ICP became ${tc(r.Ok.cycles)} of cycles.`; });
+        void loadBalances();
+      })();
     case "publish":
       return void (async () => {
         try {
