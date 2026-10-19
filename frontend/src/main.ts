@@ -2228,10 +2228,11 @@ document.addEventListener("scroll", (e) => {
   if (!S.mobile) return;
   const t = e.target as HTMLElement | null;
   if (!t?.matches?.(".preview, .cm-scroller")) return;
-  const y = t.scrollTop, main = document.querySelector(".shell-main");
+  const y = t.scrollTop, main = document.querySelector(".shell-main"), pane = t.closest(".pane");
   if ((y > noteY) !== (noteY > noteAnchor)) noteAnchor = noteY;
-  if (y - noteAnchor > 24 && y > 40) main?.classList.add("bar-hidden");
-  else if (noteAnchor - y > 24 || y <= 0) main?.classList.remove("bar-hidden");
+  // the bottom bar and the note's header (title, actions, path) go together: away on the way down, back on the way up
+  if (y - noteAnchor > 24 && y > 40) { main?.classList.add("bar-hidden"); pane?.classList.add("head-hidden"); }
+  else if (noteAnchor - y > 24 || y <= 0) { main?.classList.remove("bar-hidden"); pane?.classList.remove("head-hidden"); }
   noteY = y;
 }, true);
 function renderChannels() { const p = document.getElementById("chanpane"); if (p) p.innerHTML = channelsHtml(); }
