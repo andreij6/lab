@@ -111,10 +111,14 @@ const isAgentPath = (p: string) => p === AGENT_ROOT || p.startsWith(`${AGENT_ROO
 const MOD = isMac ? "⌘" : "Ctrl";
 const mobileQuery = matchMedia("(max-width: 760px)");
 
+/** Internet Identity derives a different principal per origin, and the app answers on both <id>.icp.net and
+ * <id>.icp0.io. Every origin signs in as the icp.net one, which public/.well-known/ii-alternative-origins
+ * (served as JSON by public/_headers) lets II accept from the others. Nothing on the local network. */
+// ponytail: the canister id comes from the hostname; a custom domain needs this and the alternative-origins file updated
 const auth = new AuthClient(
   isLocal
     ? { identityProvider: { authorizeUrl: `http://id.ai.localhost:${port}/authorize`, canisterId: "rdmx6-jaaaa-aaaaa-aaadq-cai" }, agentOptions: { rootKey: env.IC_ROOT_KEY } }
-    : {},
+    : { derivationOrigin: `https://${location.hostname.split(".")[0]}.icp.net` },
 );
 
 function store(k: string, v?: string | null): string | null {

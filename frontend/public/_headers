@@ -1,0 +1,4 @@
+# Internet Identity reads this file to accept the icp0.io origin as the same app (see II_ORIGIN in main.ts)
+/.well-known/ii-alternative-origins
+  Content-Type: application/json
+  Access-Control-Allow-Origin: *
