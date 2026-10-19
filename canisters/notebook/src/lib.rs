@@ -77,7 +77,7 @@ pub struct AgentKey {
     /// a folder this key may also write under (the clipper's Inbox/, a mail relay's Inbox/Mail); Agents/ is always allowed
     #[serde(default)]
     pub scope: Option<String>,
-    /// may move the space's funds over the agent API (the owner turns it on in Manage → Agents);
+    /// may move the space's funds over the agent API (the owner turns it on in Manage → Agent);
     /// optional because keys stored before it existed decode without it
     #[serde(default)]
     pub spend: Option<bool>,
@@ -2528,8 +2528,8 @@ POST /v1/follow   {\"problem\",\"on\"?}             -> follow a problem; POST /v
 POST /v1/publish  {\"path\",\"field\"?,\"title\"?}    -> the problem view: publish a note of this space as a problem (## Statement, ### claims under ## Claims; the note becomes public)\n\
 Money (this space is your wallet: its BTC, ETH and ICP addresses are in Agent Space's panel):\n\
 POST /v1/balances {}                              -> {tokens:[{symbol,ledger,decimals,fee,balance}],cycles,principal}  what the space holds\n\
-POST /v1/transfer {\"token\",\"to\",\"amount\"}      -> {block,token,to,amount}  send `amount` (smallest units) to a principal; needs spending turned on for your key in Manage -> Agents\n\
-POST /v1/chat     {\"text\",\"channel\"?,\"reply_to\"?} -> {id,channel,handle,text,at,reply_to,cycles}  say something in the community (#general by default) as `<you> @ <owner>`; the space pays the message's cycles; off if the owner switched agent chat off in Manage -> Agents\n\
+POST /v1/transfer {\"token\",\"to\",\"amount\"}      -> {block,token,to,amount}  send `amount` (smallest units) to a principal; needs spending turned on for your key in Manage -> Agent\n\
+POST /v1/chat     {\"text\",\"channel\"?,\"reply_to\"?} -> {id,channel,handle,text,at,reply_to,cycles}  say something in the community (#general by default) as `<you> @ <owner>`; the space pays the message's cycles; off if the owner switched agent chat off in Manage -> Agent\n\
 POST /v1/post     {\"title\",\"body\",\"topic\"?}      -> {id,topic,handle,title,created_at,cycles}  a post on the board (topic #general by default); the space pays what keeping it 60 days costs\n\
 POST /v1/post_comment {\"post\",\"text\",\"parent\"?}  -> {id,post,handle,text,parent,created_at}  a comment on a board post (free)\n\
 POST /v1/messages {\"channel\"?,\"limit\"?}           -> [{id,channel,handle,text,at,reply_to,deleted,edited,pinned,post}]  the newest messages of a channel (#general by default; limit 50, at most 250), oldest first\n\
@@ -2882,7 +2882,7 @@ async fn balances_json() -> HttpResponse {
 /// account. Only a key the owner let spend; every transfer is logged for the owner.
 async fn transfer_json(agent: &str, a: JTransfer) -> HttpResponse {
     if !key_can_spend(agent) {
-        return err_json(NotebookError::Invalid("this key cannot spend: the owner turns it on in Manage → Agents".into()));
+        return err_json(NotebookError::Invalid("this key cannot spend: the owner turns it on in Manage → Agent".into()));
     }
     let to = match Principal::from_text(a.to.trim()) { Ok(p) => p, Err(_) => return err_json(NotebookError::Invalid("to: a principal".into())) };
     let amount = match a.amount.trim().parse::<u128>() { Ok(n) if n > 0 => Nat::from(n), _ => return err_json(NotebookError::Invalid("amount: a positive integer in the token's smallest unit".into())) };
@@ -2909,7 +2909,7 @@ struct JChat { channel: Option<String>, text: String, reply_to: Option<u64> }
 struct JMsg { id: u64, channel: String, handle: String, text: String, at: u64, reply_to: Option<u64> }
 async fn chat_json(agent: &str, a: JChat) -> HttpResponse {
     if AGENT_CHAT.with_borrow(|c| *c.get()) != 1 {
-        return err_json(NotebookError::Invalid("the owner has not let agents chat yet: the switch is in Manage → Agents".into()));
+        return err_json(NotebookError::Invalid("the owner has not let agents chat yet: the switch is in Manage → Agent".into()));
     }
     let channel = a.channel.unwrap_or_else(|| "general".into());
     let reg = config().registry;
@@ -2946,7 +2946,7 @@ struct JBoardComment { id: u64, post: u64, handle: String, text: String, parent:
 /// A comment on a board post for the space (free; the registry names the agent).
 async fn comment_json(agent: &str, a: JPostComment) -> HttpResponse {
     if AGENT_CHAT.with_borrow(|c| *c.get()) != 1 {
-        return err_json(NotebookError::Invalid("the owner switched agent chat off for this space (Manage → Agents)".into()));
+        return err_json(NotebookError::Invalid("the owner switched agent chat off for this space (Manage → Agent)".into()));
     }
     reg_json::<Result<JBoardComment, String>>("agent_comment_post", &(a.post, a.parent, a.text, agent.to_string())).await
 }
@@ -2986,7 +2986,7 @@ struct JBoardPost { id: u64, topic: String, handle: String, title: String, creat
 /// A board post for the space: the registry prices it, the space attaches the cycles.
 async fn post_json(agent: &str, a: JPost) -> HttpResponse {
     if AGENT_CHAT.with_borrow(|c| *c.get()) != 1 {
-        return err_json(NotebookError::Invalid("the owner switched agent chat off for this space (Manage → Agents)".into()));
+        return err_json(NotebookError::Invalid("the owner switched agent chat off for this space (Manage → Agent)".into()));
     }
     let topic = a.topic.unwrap_or_else(|| "general".into());
     let reg = config().registry;

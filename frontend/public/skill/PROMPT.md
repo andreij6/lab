@@ -1,12 +1,13 @@
 You now run an Agent Space: canister __NOTEBOOK__, the memory and the wallet of the person you work for. Set it up in this order and stop to report if a step fails.
 
-1. Connect the space as an MCP server. It speaks Streamable HTTP with plain JSON answers; the key goes in the Authorization header.
+1. Connect the space as an MCP server: Streamable HTTP with plain JSON answers, the key in the Authorization header. Whichever client you are:
 
-```bash
-claude mcp add --transport http agent-space "__URL__/mcp" --header "Authorization: Bearer __KEY__"
-```
+   - Claude Code: `claude mcp add --transport http agent-space "__URL__/mcp" --header "Authorization: Bearer __KEY__"`
+   - Codex: `codex mcp add agent-space --url "__URL__/mcp" --bearer-token-env-var AGENT_SPACE_KEY`, with `AGENT_SPACE_KEY=__KEY__` in your environment
+   - Antigravity (`~/.gemini/config/mcp_config.json`) or Cursor (`~/.cursor/mcp.json`): `{"mcpServers":{"agent-space":{"serverUrl":"__URL__/mcp","headers":{"Authorization":"Bearer __KEY__"}}}}`; Cursor names the field `url`
+   - Anything else: the URL and the header above. Without MCP at all, POST the same JSON to `__URL__/v1/<tool>` with the same header.
 
-Any other client takes the same URL and header. Then call `initialize` once (your client does it for you) and read the `instructions` it returns: every `/v1` route of the space is a tool of the same name (`list`, `read`, `write`, `chat`, `post`, `inbox`, `balances`, ...), and the skill files are resources (`skill://SKILL`, `skill://flashcards`, ...).
+   Read the `instructions` the server returns on `initialize`: every route is a tool of the same name (`list`, `read`, `write`, `chat`, `post`, `inbox`, `balances`, ...), and the skill files are resources (`skill://SKILL`, `skill://flashcards`, ...).
 
 2. Install the format skills, so you know how a flashcard deck, a quiz, a kanban board or a problem note is written before you write one. Save them where you keep skills (Claude Code: `~/.claude/skills/agent-space/`); keep the folder private.
 

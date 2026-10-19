@@ -331,8 +331,8 @@ const nb = (): NotebookApi => notebookOf(isSandbox() ? SANDBOX_ID : S.notebook!.
 type Tab = "notes" | "chat" | "graph" | "manage" | "study" | "work" | "organize" | "trips" | "research" | "writing" | "care" | "software" | "career" | "crypto" | "money" | "creator" | "fitness" | "home";
 type Settings = { bookmarks: string[]; srs: Record<string, Record<string, Sched>>; deckStats: Record<string, { reviews: number; good: number }>; study: Record<string, number>; goals: { notesPerWeek?: number; cardsPerDay?: number }; searches: { name: string; q: string }[]; rules: Rule[]; resurface: Resurface; decayDays: number; hideFaded: boolean; kanbanArchiveDays: number; features: Partial<Record<Tab, boolean>>; onboarded?: boolean; writingGoal: number; citeStyle: Style; gardenHidden: string[] };
 const parseSettings = (j: Partial<Settings> | undefined): Settings => ({ bookmarks: Array.isArray(j?.bookmarks) ? j!.bookmarks : [], srs: j?.srs ?? {}, deckStats: j?.deckStats ?? {}, study: j?.study ?? {}, goals: j?.goals ?? {}, searches: Array.isArray(j?.searches) ? j!.searches : [], rules: Array.isArray(j?.rules) ? j!.rules : [], resurface: j?.resurface ?? {}, decayDays: typeof j?.decayDays === "number" ? j.decayDays : 180, hideFaded: !!j?.hideFaded, kanbanArchiveDays: typeof j?.kanbanArchiveDays === "number" ? j.kanbanArchiveDays : 14, features: j?.features ?? {}, onboarded: j?.onboarded, writingGoal: typeof j?.writingGoal === "number" ? j.writingGoal : 500, citeStyle: j?.citeStyle === "chicago" ? "chicago" : "apa", gardenHidden: Array.isArray(j?.gardenHidden) ? j!.gardenHidden : [] });
-type ManageTab = "wallet" | "fuel" | "agents" | "skills" | "prompts" | "data";
-const MANAGE_TABS: [ManageTab, string, string][] = [["wallet", "Wallet", "wallet"], ["fuel", "Fuel", "bolt"], ["agents", "Agents", "bot"], ["skills", "Skills", "book"], ["prompts", "Prompts", "chat"], ["data", "Data", "download"]];
+type ManageTab = "wallet" | "fuel" | "agent" | "prompts" | "data";
+const MANAGE_TABS: [ManageTab, string, string][] = [["wallet", "Wallet", "wallet"], ["fuel", "Fuel", "bolt"], ["agent", "Agent", "bot"], ["prompts", "Prompts", "chat"], ["data", "Data", "download"]];
 type View = "edit" | "split" | "preview";
 type MobilePane = "files" | "note" | "links";
 /** A pane holds tabs (note paths); several panes sit side by side. */
@@ -382,7 +382,7 @@ const S = {
   attest: undefined as Attestation | undefined,
   tokenId: undefined as bigint | undefined,
   deposits: undefined as DepositState | undefined,
-  manageTab: (["wallet", "fuel", "agents", "skills", "prompts", "data"].includes(store("nb-manage-tab") ?? "") ? store("nb-manage-tab") : "wallet") as ManageTab,
+  manageTab: (["wallet", "fuel", "agent", "prompts", "data"].includes(store("nb-manage-tab") ?? "") ? store("nb-manage-tab") : "wallet") as ManageTab,
   /** the owner let agent keys post in the community for this space */
   agentChat: false,
   /** until the identity is restored and the spaces are listed, nothing but a loading screen is shown */
@@ -451,6 +451,7 @@ const S = {
   clipperKey: undefined as string | undefined,
   community: undefined as { channel: string; channels: Channel[]; messages: Message[]; online: Online[]; member?: Member; newcomerLeft?: number; newcomerHandle?: string; balance?: bigint; loading: boolean; draft: string; replyTo?: Message; unread: Record<string, number>; showOnline: boolean; showChannels: boolean; picker?: { mid?: bigint }; editing?: bigint; pins?: Message[]; showPins?: boolean; fee?: bigint; primary?: NotebookRec; error?: string; github?: string; repo?: string; firstUnseen?: bigint; atBottom?: boolean; newCount?: number; gistSlide?: Map<bigint, number> } | undefined,
   show: undefined as { slides: string[]; i: number; self?: string; dead?: boolean } | undefined,
+  mcpClient: (store("nb-mcp-client") ?? "claude") as string, // which client's MCP setup the Agent tab shows
   mentions: 0, // @mentions of me in the community since I last looked
   inbox: undefined as { items: InboxItem[]; loading: boolean } | undefined,
   inboxNew: 0, // inbox items above the id I last marked read
@@ -2048,7 +2049,7 @@ function promptsCard(): string {
   const fill = (t: string) => t.replaceAll("__NOTEBOOK__", S.notebook!.canister.toText()).replaceAll("__APP__", location.origin);
   return `<div class="card band">
     <h2>${icon("chat")} Prompts</h2>
-    <p class="muted small">Paste one into your agent once it is connected (Skills tab). Replace the <code>&lt;placeholders&gt;</code> with a note or folder of yours; the agent knows this space from its tools.</p>
+    <p class="muted small">Paste one into your agent once it is connected (Agent tab). Replace the <code>&lt;placeholders&gt;</code> with a note or folder of yours; the agent knows this space from its tools.</p>
     <div class="runs">${PROMPTS.map((p) => `<div class="run prompt-row"><span><b>${esc(p.title)}</b> <span class="small muted">· ${esc(p.desc)}</span><div class="small prompt-text">${esc(fill(p.text))}</div></span><button type="button" class="btn btn-ghost" data-action="copy-cmd" data-value="${esc(fill(p.text))}" title="Copy the prompt">${icon("copy")}Copy</button></div>`).join("")}</div>
   </div>`;
 }
@@ -2460,8 +2461,8 @@ function onboarding(step = 0) {
   const issued = S.issued;
   if (step === 0 && issued) step = 1;
   const steps: { title: string; body: string; next: string }[] = [
-    { title: "Give your agent a key", next: "", body: `<p>Your space is run by an agent. The key is what it sends on every call; name the agent and issue it one (you can revoke it in Manage → Agents).</p><form class="row tight nudge" data-form="agent"><input class="input" name="newAgent" value="${esc(S.newAgent)}" placeholder="agent name" required aria-label="Agent name" style="max-width:260px"><button type="submit" class="btn btn-primary" ${S.busy ? "disabled" : ""}>${icon("plus")}Issue key</button></form>` },
-    { title: "Copy the setup prompt", next: "Done", body: `<p>The prompt carries the key for <b>${esc(issued?.name ?? "your agent")}</b> and tells it what to do: connect this space as an MCP server (its tools and resources), install the format skills, say hello in the community, write a first note and post on the board.</p><div class="row tight nudge"><button type="button" class="btn btn-primary" data-action="copy-skill">${icon("copy")}Copy the prompt with the key</button></div><p class="small muted nudge">Paste it into your agent. The key is shown nowhere else; the prompt is in Manage → Skills any time, with placeholders unless a key was just issued.</p>` },
+    { title: "Give your agent a key", next: "", body: `<p>Your space is run by an agent. The key is what it sends on every call; name the agent and issue it one (you can revoke it in Manage → Agent).</p><form class="row tight nudge" data-form="agent"><input class="input" name="newAgent" value="${esc(S.newAgent)}" placeholder="agent name" required aria-label="Agent name" style="max-width:260px"><button type="submit" class="btn btn-primary" ${S.busy ? "disabled" : ""}>${icon("plus")}Issue key</button></form>` },
+    { title: "Copy the setup prompt", next: "Done", body: `<p>The prompt carries the key for <b>${esc(issued?.name ?? "your agent")}</b> and tells it what to do: connect this space as an MCP server (its tools and resources), install the format skills, say hello in the community, write a first note and post on the board.</p><div class="row tight nudge"><button type="button" class="btn btn-primary" data-action="copy-skill">${icon("copy")}Copy the prompt with the key</button></div><p class="small muted nudge">Paste it into your agent. The key is shown nowhere else; the prompt is in Manage → Agent any time, with placeholders unless a key was just issued.</p>` },
   ];
   const st = steps[step];
   const el = document.createElement("div");
@@ -5443,7 +5444,7 @@ function manageTab(): string {
     <p class="small muted nudge">Canister <code>${v.canister.toText()}</code> · created ${when(v.created_at)} · controllers: you and the registry.</p>
     <nav class="segmented sub" role="tablist" aria-label="Manage sections">${MANAGE_TABS.map(([k, label, ic]) => `<button type="button" role="tab" class="tab" aria-selected="${S.manageTab === k}" data-action="manage-tab" data-tab="${k}">${icon(ic)}<span class="lbl">${label}</span></button>`).join("")}</nav>
     ${S.manageTab === "wallet" ? walletCard() : S.manageTab === "fuel" ? `${fuelCard()}
-    <div class="band"><div class="band-title">Fuel history<button type="button" class="btn btn-ghost icon-btn" data-action="refresh-info" title="Refresh" aria-label="Refresh">${icon("refresh")}</button></div>${rows}</div>` : S.manageTab === "agents" ? agentsCard() : S.manageTab === "skills" ? skillsCard() : S.manageTab === "prompts" ? promptsCard() : `
+    <div class="band"><div class="band-title">Fuel history<button type="button" class="btn btn-ghost icon-btn" data-action="refresh-info" title="Refresh" aria-label="Refresh">${icon("refresh")}</button></div>${rows}</div>` : S.manageTab === "agent" ? `${agentsCard()}${skillsCard()}` : S.manageTab === "prompts" ? promptsCard() : `
     <div class="card band">
       <h2>${icon("upload")} Upload</h2>
       <p class="muted small">Bring an Obsidian folder or zip into this space, or download everything in it as a zip of markdown files, folders included. Restore puts a zip back: existing notes are overwritten and notes missing from the zip are deleted.</p>
@@ -7357,26 +7358,35 @@ function agentsCard(): string {
   const live = S.agentKeys.filter((k) => !k.revoked);
   return `<div class="card band">
     <h2>${icon("bot")} Agent keys</h2>
-    <p class="muted small">Give an AI agent a key and it runs this space: it reads and writes every note, and with <b>Spend</b> switched on it can also move the ICP and ck tokens the space holds (<code>/v1/balances</code>, <code>/v1/transfer</code>; every transfer is logged here). Agent notes are stamped with the agent's name and drawn as green diamonds in the graph. Issue a key, copy the setup prompt it shows, paste it into your agent, and the agent installs the skills from the Skills tab itself.</p>
+    <p class="muted small">Give an AI agent a key and it runs this space: it reads and writes every note, and with <b>Spend</b> switched on it can also move the ICP and ck tokens the space holds (<code>/v1/balances</code>, <code>/v1/transfer</code>; every transfer is logged here). Agent notes are stamped with the agent's name and drawn as green diamonds in the graph. Issue a key, copy the setup prompt it shows, paste it into your agent, and the agent connects the MCP server and installs the skills itself.</p>
     <form class="row tight" data-form="agent"><input class="input" name="newAgent" value="${esc(S.newAgent)}" placeholder="agent name" required aria-label="Agent name" style="max-width:260px"><button type="submit" class="btn btn-primary" ${S.busy ? "disabled" : ""}>${icon("plus")}Issue key</button></form>
-    ${S.issued ? `<div class="issued nudge"><div class="band-title">Key for ${esc(S.issued.name)}, shown once</div><div class="cmd"><code>${esc(S.issued.key)}</code><button type="button" class="btn btn-ghost" data-action="copy-key">${icon("copy")}Key</button></div><div class="row tight nudge"><button type="button" class="btn btn-primary" data-action="copy-skill">${icon("copy")}Copy the setup prompt</button><button type="button" class="btn" data-action="manage-tab" data-tab="skills">${icon("book")}Skills</button><span class="small muted">The prompt carries the URL and this key; paste it into your agent.</span></div></div>` : ""}
+    ${S.issued ? `<div class="issued nudge"><div class="band-title">Key for ${esc(S.issued.name)}, shown once</div><div class="cmd"><code>${esc(S.issued.key)}</code><button type="button" class="btn btn-ghost" data-action="copy-key">${icon("copy")}Key</button></div><div class="row tight nudge"><button type="button" class="btn btn-primary" data-action="copy-skill">${icon("copy")}Copy the setup prompt</button><span class="small muted">The prompt carries the URL and this key; paste it into your agent. The MCP setup for each client is below.</span></div></div>` : ""}
     ${live.length ? `<div class="runs nudge">${live.map((k) => `<div class="run"><span><b>${esc(k.name)}</b> <span class="small muted">· ${String(k.writes)} note${k.writes === 1n ? "" : "s"} written${k.last_used > 0n ? ` · last seen ${ago(k.last_used)}` : " · never used"}</span></span><span class="small muted">${when(k.created_at)}</span><button type="button" class="btn btn-ghost ${k.spend ? "on" : ""}" data-action="key-spend" data-name="${esc(k.name)}" data-on="${k.spend ? "0" : "1"}" title="${k.spend ? "This key can move the space's funds; click to stop it" : "Let this key move the space's funds"}">${icon("wallet")}${k.spend ? "Spends" : "Spend"}</button><button type="button" class="btn btn-ghost btn-danger" data-action="revoke-key" data-name="${esc(k.name)}">Revoke</button></div>`).join("")}</div>` : `<p class="small muted nudge">No agent keys yet.</p>`}
     <label class="switch nudge"><input type="checkbox" data-action="agent-chat" ${S.agentChat ? "checked" : ""}><span>Let agents chat for this space in the community (<code>POST /v1/chat</code>; each message costs the space a few million cycles)</span></label>
     <div class="cmd nudge"><span class="small muted">API</span><code>${esc(apiUrl(S.notebook!.canister.toText()))}</code><button type="button" class="btn btn-ghost" data-action="copy-cmd" data-value="${esc(apiUrl(S.notebook!.canister.toText()))}">${icon("copy")}</button></div>
   </div>`;
 }
-/** The one-line MCP connection for Claude Code, with the key just issued or a placeholder. */
-const mcpCommand = () => `claude mcp add --transport http agent-space "${apiUrl(S.notebook!.canister.toText())}/mcp" --header "Authorization: Bearer ${S.issued?.key ?? "<your agent key>"}"`;
-/** The Skills tab: the MCP server, the setup prompt an agent gets first, then every skill file. */
+/** How each client connects to the space's MCP server; the key is the one just issued, or a placeholder. */
+const MCP_CLIENTS: [string, string, (url: string, key: string) => string][] = [
+  ["claude", "Claude Code", (u, k) => `claude mcp add --transport http agent-space "${u}" --header "Authorization: Bearer ${k}"`],
+  ["codex", "Codex", (u, k) => `export AGENT_SPACE_KEY="${k}"\ncodex mcp add agent-space --url "${u}" --bearer-token-env-var AGENT_SPACE_KEY\n\n# or in ~/.codex/config.toml\n[mcp_servers.agent-space]\nurl = "${u}"\nhttp_headers = { Authorization = "Bearer ${k}" }`],
+  ["antigravity", "Antigravity", (u, k) => `// ~/.gemini/config/mcp_config.json (a project: .agents/mcp_config.json)\n{\n  "mcpServers": {\n    "agent-space": { "serverUrl": "${u}", "headers": { "Authorization": "Bearer ${k}" } }\n  }\n}`],
+  ["cursor", "Cursor", (u, k) => `// ~/.cursor/mcp.json (a project: .cursor/mcp.json), then enable it under Settings → MCP\n{\n  "mcpServers": {\n    "agent-space": { "url": "${u}", "headers": { "Authorization": "Bearer ${k}" } }\n  }\n}`],
+  ["other", "Any other", (u, k) => `Transport: Streamable HTTP (POST JSON-RPC, JSON answers, no event stream)\nURL:       ${u}\nHeader:    Authorization: Bearer ${k}\n\nNo MCP at all? POST the same JSON to ${u.replace(/\/mcp$/, "")}/v1/<tool> with the same header.`],
+];
+const mcpSetup = (client = S.mcpClient) => (MCP_CLIENTS.find(([id]) => id === client) ?? MCP_CLIENTS[0])[2](`${apiUrl(S.notebook!.canister.toText())}/mcp`, S.issued?.key ?? "<your agent key>");
+/** The MCP server with a setup per client, the setup prompt an agent gets first, then every skill file. */
 function skillsCard(): string {
   return `<div class="card band">
     <h2>${icon("bolt")} The MCP server</h2>
-    <p class="muted small">This space is an MCP server at <code>${esc(apiUrl(S.notebook!.canister.toText()))}/mcp</code>: every API route is a tool of the same name and the skill files are its resources. Claude Code connects with one line; any other client takes the same URL with the key in the Authorization header.${S.issued ? "" : " Issue a key under Agents to get it filled in."}</p>
-    <div class="cmd"><code>${esc(mcpCommand())}</code><button type="button" class="btn btn-ghost" data-action="copy-cmd" data-value="${esc(mcpCommand())}">${icon("copy")}</button></div>
+    <p class="muted small">This space is an MCP server at <code>${esc(apiUrl(S.notebook!.canister.toText()))}/mcp</code>: every API route is a tool of the same name and the skill files are its resources. Pick your client; the key goes in the Authorization header.${S.issued ? "" : " Issue a key above to get it filled in."}</p>
+    <nav class="segmented sub nudge" aria-label="MCP client">${MCP_CLIENTS.map(([id, label]) => `<button type="button" class="tab ${S.mcpClient === id ? "on" : ""}" data-action="mcp-client" data-client="${id}">${label}</button>`).join("")}</nav>
+    <pre class="skill-text nudge">${esc(mcpSetup())}</pre>
+    <div class="row tight"><button type="button" class="btn btn-primary" data-action="copy-cmd" data-value="${esc(mcpSetup())}">${icon("copy")}Copy</button></div>
   </div>
   <div class="card band">
     <h2>${icon("bot")} Set up an agent</h2>
-    <p class="muted small">Paste this prompt into your agent. It connects the MCP server, installs the format skills below, then proves the setup: a hello in the community, a first note, a post on the board, and a first read of its inbox.${S.issued ? "" : " It carries placeholders for the key: issue one under Agents and copy again to get it filled in."}</p>
+    <p class="muted small">Paste this prompt into your agent, whichever it is. It connects the MCP server, installs the format skills below, then proves the setup: a hello in the community, a first note, a post on the board, and a first read of its inbox.${S.issued ? "" : " It carries placeholders for the key: issue one above and copy again to get it filled in."}</p>
     <div class="row tight"><button type="button" class="btn btn-primary" data-action="copy-skill">${icon("copy")}Copy the setup prompt</button><a class="btn btn-ghost" href="/skill/PROMPT.md" target="_blank" rel="noopener">${icon("link")}Open the raw file</a></div>
     <pre class="skill-text nudge">${S.skillShown ? esc(S.skillShown) : "Loading…"}</pre>
   </div>
@@ -8235,6 +8245,7 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
       return;
     }
     case "chat-channel": return loadCommunity(el.dataset.channel!);
+    case "mcp-client": { S.mcpClient = el.dataset.client ?? "claude"; store("nb-mcp-client", S.mcpClient); return render(); }
     case "inbox-read": { store("nb-inbox-seen", (S.inbox?.items.reduce((m, i) => (i.id > m ? i.id : m), 0n) ?? 0n).toString()); S.inboxNew = 0; return render(); }
     case "inbox-refresh": return loadInbox();
     case "board-topic": { const t = el.dataset.topic ?? ""; store("nb-board-topic", t); if (location.hash !== "#/board") { S.board!.topic = t || undefined; location.hash = "#/board"; return; } return loadBoard(t); }

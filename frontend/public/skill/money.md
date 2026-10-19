@@ -12,7 +12,7 @@ subaccount), a BTC deposit address (arrives as ckBTC through the minter) and an 
 - `amount` is a string in the smallest unit: e8s for ICP, sats for ckBTC, wei for ckETH, 6
   decimals for ckUSDC and ckUSDT. The ledger fee is taken **on top**: ICP 0.0001 (10,000 e8s),
   ckBTC 10 sats, ckETH 2e12 wei, ckUSDC/ckUSDT 0.01.
-- A transfer needs **Spend** on for your key (the owner, Manage → Agents); without it, 401.
+- A transfer needs **Spend** on for your key (the owner, Manage → Agent); without it, 401.
 - Every transfer is logged for the owner. Before moving tokens, check `/v1/balances` and write in
   a note what you paid for and why.
 - Cycles are not a token you can send. No native bitcoin or ether sending yet: what arrived as

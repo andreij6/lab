@@ -29,7 +29,7 @@ evidence pointers, are in [`docs/REVERSE_ENGINEERING.md`](docs/REVERSE_ENGINEERI
 | Excalidraw: both file formats parsed and written back, lazy editor mount, SVG embeds, tested | [`excalidraw.ts`](frontend/src/excalidraw.ts) |
 | List editing (Enter continues items, Tab indents, task toggles), dependency-free ZIP writer and reader, all tested | [`editor.ts`](frontend/src/editor.ts), [`zip.ts`](frontend/src/zip.ts), [`unzip.ts`](frontend/src/unzip.ts) |
 | Themes on Obsidian variable names: Velocity (default), Nord, Gruvbox, Red Graphite, custom CSS | [`themes.ts`](frontend/src/themes.ts) |
-| The skills an agent installs (an index and one file per kind of work, under 500 words each) and the setup prompt Manage → Skills fills with the API URL and key | [`frontend/public/skill/`](frontend/public/skill/) |
+| The skills an agent installs (an index and one file per kind of work, under 500 words each) and the setup prompt Manage → Agent fills with the API URL and key | [`frontend/public/skill/`](frontend/public/skill/) |
 | The MCP server every space serves at `/mcp` (tools = the API routes, resources = the skill files) | [`canisters/notebook/src/lib.rs`](canisters/notebook/src/lib.rs) (`mcp`) |
 | The prompt library in Manage → Prompts | [`frontend/src/prompts.ts`](frontend/src/prompts.ts) |
 | Candid + HTTP end-to-end on the local network (429 hard checks) | [`scripts/e2e_local.sh`](scripts/e2e_local.sh) |
@@ -99,7 +99,7 @@ The notes chat calls the ICP LLM canister. Locally, `icp deploy` also deploys `l
   or `compressed-json`), created from any New drawing menu, autosaved in the plugin's format so
   Obsidian still opens them, and embedded in notes as SVG with `![[Drawing.excalidraw]]`. The
   editor and its fonts load only when a drawing is opened.
-- **Agents.** Manage → Agents issues a key for an AI agent and gives you a skill file to paste
+- **Agents.** Manage → Agent issues a key for an AI agent and gives you a skill file to paste
   into Claude Code, Codex or any agent. Agents talk JSON over HTTP to the notebook canister
   (`/v1/list`, `/v1/read`, `/v1/search`, `/v1/write`), read everything, and write only under the
   locked `Agents/` folder, where people can read, link and delete but not edit. Agent notes are

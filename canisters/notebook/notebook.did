@@ -7,7 +7,7 @@ type AgentKey = record {
   // a folder this key may also write under (the clipper's Inbox/, a mail relay's Inbox/Mail); Agents/ is always allowed
   scope : opt text;
   writes : nat64;
-  // may move the space's funds over the agent API (the owner turns it on in Manage → Agents);
+  // may move the space's funds over the agent API (the owner turns it on in Manage → Agent);
   // optional because keys stored before it existed decode without it
   spend : opt bool;
   last_used : nat64;
