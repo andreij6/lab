@@ -380,6 +380,8 @@ const S = {
   manageTab: (["wallet", "fuel", "skill", "data"].includes(store("nb-manage-tab") ?? "") ? store("nb-manage-tab") : "wallet") as ManageTab,
   /** the owner let agent keys post in the community for this space */
   agentChat: false,
+  /** until the identity is restored and the spaces are listed, nothing but a loading screen is shown */
+  booting: true,
   /** the skill, with the key, was copied during this visit: the onboarding may close */
   skillCopied: false,
   /** the skill text with this space filled in, for the Skill tab */
@@ -1196,6 +1198,8 @@ function notebookEmoji(v: NotebookRec): string {
 // themed: an agent reads these screens pixel by pixel, so every fill is flat and every hex exact.
 
 const asMark = () => `<div class="as-mark">Agent Space</div>`;
+/** The first paint: the app does not yet know whether to show the gate, the Fuel step or a space. */
+const loadingPage = () => `<div class="as as-center">${asMark()}<div class="as-hero"><p class="as-lede">Loading…</p><div class="as-tile busy" style="width:220px;height:6px;padding:0;border:0"></div></div></div>`;
 /** This principal passed the gate in this browser. ponytail: kept in localStorage; move it to the registry if a principal must verify once across browsers. */
 const asVerified = () => !!S.identity && store(`as-verified:${S.principal}`) === "1";
 function onboardingPage(): string {
@@ -5420,7 +5424,7 @@ function render() {
   // the file pane keeps its place: opening a note far down the list must not jump the list back to the top
   const sideTop = document.getElementById("side")?.scrollTop ?? 0, asideTop = document.getElementById("aside")?.scrollTop ?? 0;
   destroyEditors();
-  app.innerHTML = S.shared ? sharedPage() : S.town ? townPage() : S.problems ? problemsPage() : S.board && S.identity ? boardPage() : S.community && S.identity ? communityPage() : S.market && S.identity ? marketPage() : S.admin && S.isAdmin ? adminPage() : !asVerified() && !(S.notebook && isSandbox()) ? onboardingPage() : S.notebook ? workspace() : agentSpacePage();
+  app.innerHTML = S.booting ? loadingPage() : S.shared ? sharedPage() : S.town ? townPage() : S.problems ? problemsPage() : S.board && S.identity ? boardPage() : S.community && S.identity ? communityPage() : S.market && S.identity ? marketPage() : S.admin && S.isAdmin ? adminPage() : !asVerified() && !(S.notebook && isSandbox()) ? onboardingPage() : S.notebook ? workspace() : agentSpacePage();
   if (S.show) app.insertAdjacentHTML("beforeend", showHtml());
   { const s = document.getElementById("side"); if (s && sideTop) s.scrollTop = sideTop; const a = document.getElementById("aside"); if (a && asideTop) a.scrollTop = asideTop; }
   // a re-render must not move the reader: keep the chat where it was, or at the bottom
@@ -9509,6 +9513,9 @@ currentIdentity().then(async (id) => {
   { const bm = /^#\/board(?:\/(\d+))?$/.exec(location.hash); if (bm) return loadBoard(undefined, bm[1] ? BigInt(bm[1]) : undefined); }
   if (location.hash === "#/capture") return captureRoute();
   if (m) void openNotebook(m[1], m[2] ? decodeURIComponent(m[2]) : undefined);
+}).finally(() => {
+  S.booting = false;
+  render();
 });
 
 // scenes in the Writing tab reorder by dragging
