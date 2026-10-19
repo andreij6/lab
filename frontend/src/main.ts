@@ -363,7 +363,7 @@ const S = {
   principal: "",
   signin: { busy: false, error: "" },
   /** Agent Space: where a visitor is in the gate, then the wallet grid once verified */
-  as: { step: "landing" as "landing" | "tap" | "hunt", tap: { count: 0, start: 0, done: undefined as "pass" | "fail" | undefined }, hunt: undefined as Hunt | undefined, picked: new Set<number>(), huntDone: undefined as "pass" | "fail" | undefined, pay: "" as "" | "choose" | "creating", wallet: { loading: "", addrs: undefined as { id: string; btc: string; eth: string; icp: string } | undefined, order: undefined as { id: string; url: string; status: string; cents: number; tc: string; delivered?: string } | undefined } },
+  as: { step: "landing" as "landing" | "tap" | "hunt", tap: { count: 0, start: 0, done: undefined as "pass" | "fail" | undefined }, hunt: undefined as Hunt | undefined, picked: new Set<number>(), huntDone: undefined as "pass" | "fail" | undefined, pay: "" as "" | "choose" | "creating", wallet: { loading: "", addrs: undefined as { id: string; btc: string; eth: string; icp: string } | undefined, order: undefined as { id: string; url: string; status: string; cents: number; tc: string; delivered?: string; busy?: boolean; failed?: string } | undefined } },
   notebooks: undefined as NotebookRec[] | undefined,
   notebookInfo: new Map<string, Info>(),
   /** cycles health per notebook from the registry; answers even when the notebook is frozen */
@@ -1231,9 +1231,16 @@ function onboardingPage(): string {
  *  running. Paid, the space is made and the person lands in it. Locally the registry fronts the cycles. */
 function agentSpacePage(): string {
   const a = S.as, w = a.wallet, o = w.order;
-  const body = S.notebooks === undefined ? `<p class="as-lede">Looking for your space…</p>`
-    : a.pay === "creating" || S.busy === "create" ? `<p class="as-lede">Paid. Spinning up the canister with your cycles…</p><div class="as-tile busy" style="width:132px;height:8px;padding:0;border:0"></div>`
-    : o ? `<p class="as-lede">Order <span class="mono">${esc(o.id)}</span>: $${(o.cents / 100).toFixed(2)}, about ${o.tc} TC after the card fee · <b>${esc(o.status.replace(/([A-Z])/g, " $1").trim().toLowerCase())}</b>. The canister is made the moment the cycles land.</p><div class="as-row">${qrSvg(o.url, 160)}<a class="as-btn" href="${esc(o.url)}" target="_blank" rel="noopener">Open the payment page</a></div>`
+  const bar = `<div class="as-tile busy" style="width:220px;height:6px;padding:0;border:0;margin-top:4px"></div>`;
+  const status = o ? o.status : "";
+  const paid = ["PaymentPending", "Processing", "Delivered"].includes(status);
+  const stopped = ["Refunded", "RefundOwed", "NeedsReview"].includes(status);
+  const body = S.notebooks === undefined ? `<p class="as-lede">Looking for your space…</p>${bar}`
+    : a.pay === "creating" || S.busy === "create" ? `<p class="as-lede">Paid. Spinning up the canister with your cycles…</p>${bar}`
+    : o?.failed ? `<p class="as-lede">Paid, but the canister could not be made: <span class="as-err">${esc(o.failed)}</span></p><div class="as-row"><button type="button" class="as-btn" data-action="as-retry">Try again</button></div>`
+    : stopped ? `<p class="as-lede">Order <span class="mono">${esc(o!.id)}</span> stopped: ${esc(status.replace(/([A-Z])/g, " $1").trim().toLowerCase())}. Nothing was charged for cycles that did not arrive.</p><div class="as-row"><button type="button" class="as-btn" data-action="as-restart">Start over</button></div>`
+    : paid ? `<p class="as-lede">Paid. The cycles are on their way; the canister is made the moment they land.</p>${bar}`
+    : o ? `<p class="as-lede">$${(o.cents / 100).toFixed(2)} by card, about ${o.tc} TC after the fee. Pay on the page, here or on a phone through the code; this screen follows along.</p><div class="as-row">${qrSvg(o.url, 160)}<a class="as-btn" href="${esc(o.url)}" target="_blank" rel="noopener">Open the payment page</a></div><p class="as-tile-s">Waiting for the payment…</p>${bar}`
     : `<p class="as-lede">${isLocal ? "The local network has no card gateway: pick an amount and the registry fronts the first cycles." : "A card, in USD. The cycles buy your agent's canister and keep it running; the payment page opens here or on a phone through the QR code."}${S.error ? ` <span class="as-err">${esc(S.error)}</span>` : ""}</p><div class="as-row">${[5, 10, 20].map((d) => `<button type="button" class="as-btn" data-action="as-card" data-cents="${d * 100}">$${d}</button>`).join("")}</div>`;
   return `<div class="as as-center">${asMark()}<button type="button" class="as-out" data-action="sign-out">Sign out</button><div class="as-hero">
     <div class="as-steps mono"><span>03 Fuel</span></div>
@@ -5658,9 +5665,28 @@ const cyclesLedgerIdl: IDL.InterfaceFactory = ({ IDL: I }) => I.Service({
 });
 type CyclesLedger = { icrc1_balance_of: (a: { owner: Principal; subaccount: [] }) => Promise<bigint>; withdraw: (a: { amount: bigint; from_subaccount: []; to: Principal; created_at_time: [] }) => Promise<{ Ok: bigint } | { Err: unknown }> };
 const cyclesLedger = () => Actor.createActor<CyclesLedger>(cyclesLedgerIdl, { agent: HttpAgent.createSync({ identity: S.identity, rootKey: env.IC_ROOT_KEY }), canisterId: CYCLES_LEDGER });
-/** The order paid: make the space (the registry fronts its first cycles) and move the bought cycles into it. */
+const orderKey = () => `as-order:${S.principal}`;
+function startOrderPolling() {
+  clearInterval(orderTimer);
+  orderTimer = window.setInterval(() => void pollOrder(), 5000);
+  void pollOrder();
+}
+/** An order made before a reload: pick it up where it was. */
+function resumeOrder() {
+  const w = S.as.wallet;
+  if (w.order || S.notebooks?.[0]) return;
+  const kept = store(orderKey());
+  if (!kept) return;
+  try { w.order = JSON.parse(kept); } catch { store(orderKey(), null); return; }
+  S.as.pay = "choose";
+  render();
+  startOrderPolling();
+}
+/** The order paid: make the space (the registry fronts its first cycles), move the bought cycles into it, go in. */
 async function finishCardSpawn() {
   S.as.pay = "creating";
+  if (S.as.wallet.order) S.as.wallet.order.failed = undefined;
+  S.error = "";
   render();
   const id = await spawnNotebook("Agent M&M", "Money (wallet) & memory", true, async (made) => {
     if (isLocal) return;
@@ -5674,8 +5700,15 @@ async function finishCardSpawn() {
     } catch (e) { toast(`The cycles stayed on your cycles-ledger account (${errMsg(e)}); Manage → Fuel can move them later.`, "error"); }
   });
   S.as.pay = "";
-  S.as.wallet.order = undefined;
-  if (!id) render();
+  if (id) {
+    store(orderKey(), null);
+    S.as.wallet.order = undefined;
+    if (!location.hash.startsWith("#/notebook/")) location.hash = `#/notebook/${id}`;
+  } else {
+    // the payment stands: keep the order so the person can try the creation again
+    if (S.as.wallet.order) { S.as.wallet.order.failed = S.error || "the registry did not answer"; S.as.pay = "choose"; }
+    render();
+  }
 }
 async function asCard(cents: number) {
   const a = S.as, w = a.wallet, id = S.notebooks?.[0]?.canister.toText();
@@ -5690,29 +5723,37 @@ async function asCard(cents: number) {
     if ("Err" in r) throw new Error(`${r.Err.message} (${r.Err.code})`);
     const tcs = Number(r.Ok.net_usd_cents) / 100 / (Number(rate.xdr_usd_x10000) / 10_000);
     w.order = { id: r.Ok.order_id, url: r.Ok.payment_url, status: "AwaitingPayment", cents: Number(amount), tc: tcs.toFixed(2) };
-    if (!id) a.pay = "choose";
+    if (!id) { a.pay = "choose"; store(orderKey(), JSON.stringify(w.order)); }
     render();
-    clearInterval(orderTimer);
-    orderTimer = window.setInterval(() => void pollOrder(), 5000);
+    startOrderPolling();
   } catch (e) {
     toast(errMsg(e), "error");
   }
 }
 async function pollOrder() {
   const o = S.as.wallet.order;
-  if (!o || document.hidden) return;
-  const r = await gateway().order_status(o.id).catch(() => [] as const);
-  if (!r.length) return;
-  const status = Object.keys(r[0].status)[0];
-  const delivered = r[0].cycles_delivered[0];
-  if (status === o.status && !delivered) return;
-  o.status = status;
-  if (delivered) o.delivered = tc(delivered);
-  if (["Delivered", "Refunded", "RefundOwed", "NeedsReview"].includes(status)) {
-    clearInterval(orderTimer);
-    if (status === "Delivered") { if (S.notebooks?.[0]) toast(`${o.delivered} of cycles landed in the space.`, "ok"); else return finishCardSpawn(); }
+  if (!o || document.hidden || o.busy) return;
+  o.busy = true;
+  try {
+    const r = await gateway().order_status(o.id).catch(() => [] as const);
+    if (!r.length) return;
+    const status = Object.keys(r[0].status)[0];
+    const delivered = r[0].cycles_delivered[0];
+    if (status === o.status && !delivered) return;
+    o.status = status;
+    if (delivered) o.delivered = tc(delivered);
+    if (!S.notebooks?.[0]) store(orderKey(), JSON.stringify({ ...o, busy: undefined }));
+    if (["Delivered", "Refunded", "RefundOwed", "NeedsReview"].includes(status)) {
+      clearInterval(orderTimer);
+      if (status === "Delivered") {
+        if (S.notebooks?.[0]) { store(orderKey(), null); toast(`${o.delivered} of cycles landed in the space.`, "ok"); }
+        else return void finishCardSpawn();
+      }
+    }
+    render();
+  } finally {
+    o.busy = false;
   }
-  render();
 }
 
 async function signIn() {
@@ -5764,6 +5805,7 @@ async function loadNotebooks() {
     S.error = "";
     // home is the space itself once there is one; without one, the gate ends on the Fuel step
     if (location.hash === "#/" && S.notebooks[0] && asVerified()) { location.hash = `#/notebook/${S.notebooks[0].canister.toText()}`; return; }
+    if (!S.notebooks[0]) resumeOrder();
     render();
     if (S.notebooks[0]) void loadWallet(S.notebooks[0].canister.toText());
     await Promise.all(S.notebooks.map(async (v) => {
@@ -7775,6 +7817,8 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
     case "as-word": { const a = S.as; if (a.huntDone) return; const i = Number(el.dataset.i); if (a.picked.has(i)) a.picked.delete(i); else a.picked.add(i); el.classList.toggle("on", a.picked.has(i)); return; }
     case "as-submit": return asSubmit();
     case "as-card": return asCard(Number(el.dataset.cents));
+    case "as-retry": return finishCardSpawn();
+    case "as-restart": clearInterval(orderTimer); store(orderKey(), null); S.as.wallet.order = undefined; S.as.pay = ""; return render();
     case "refresh-balances": S.walletBalances = undefined; render(); return loadBalances();
     case "agent-chat": { const on = (el as HTMLInputElement).checked; try { unwrap(await nb().set_agent_chat(on)); S.agentChat = on; toast(on ? "Agents can post in #general for this space." : "Agents can no longer post for this space.", "ok"); } catch (e) { toast(errMsg(e), "error"); (el as HTMLInputElement).checked = !on; } return; }
     case "key-spend": {
