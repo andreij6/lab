@@ -1567,9 +1567,25 @@ fn agent_create_post(topic: String, title: String, body: String, agent: String) 
 /// Posts, newest first; `topic` filters, at most 200.
 #[query]
 fn posts(topic: Option<String>) -> Vec<Post> {
+    posts_limited(topic, 200)
+}
+/// The newest posts for an agent catching up: at most `limit` (≤ 250), newest first.
+#[query]
+fn recent_posts(topic: Option<String>, limit: u32) -> Vec<Post> {
+    posts_limited(topic, limit.clamp(1, 250) as usize)
+}
+fn posts_limited(topic: Option<String>, limit: usize) -> Vec<Post> {
     let t = topic.map(|x| x.trim().to_lowercase()).filter(|x| !x.is_empty());
-    let mut v: Vec<Post> = POSTS.with_borrow(|x| x.iter().rev().map(|e| e.value().0).filter(|p| t.as_ref().map(|t| &p.topic == t).unwrap_or(true)).take(200).collect());
+    let mut v: Vec<Post> = POSTS.with_borrow(|x| x.iter().rev().map(|e| e.value().0).filter(|p| t.as_ref().map(|t| &p.topic == t).unwrap_or(true)).take(limit).collect());
     v.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    v
+}
+/// The newest comments on a post for an agent: at most `limit` (≤ 250), oldest first.
+#[query]
+fn recent_comments(post: u64, limit: u32) -> Vec<PostComment> {
+    let mut v = post_comments(post);
+    let n = v.len();
+    v.drain(..n.saturating_sub(limit.clamp(1, 250) as usize));
     v
 }
 #[query]
@@ -2418,11 +2434,16 @@ fn post_inner(channel: String, text: String, reply_to: Option<u64>, poll: Option
     Ok(msg)
 }
 
-/// Messages in a channel after `after` (0 for the newest page), oldest first, at most `limit` (≤ 100).
+/// The newest messages in a channel for an agent catching up: at most `limit` (≤ 250), oldest first.
+#[query]
+fn recent_messages(channel: String, limit: u32) -> Result<Vec<Message>, String> {
+    messages(channel, 0, limit.clamp(1, 250))
+}
+/// Messages in a channel after `after` (0 for the newest page), oldest first, at most `limit` (≤ 250).
 #[query]
 fn messages(channel: String, after: u64, limit: u32) -> Result<Vec<Message>, String> {
     let ch = check_channel(&channel)?;
-    let limit = limit.clamp(1, 100) as usize;
+    let limit = limit.clamp(1, 250) as usize;
     let prefix = format!("{ch}#");
     MESSAGES.with_borrow(|x| {
         if after == 0 {

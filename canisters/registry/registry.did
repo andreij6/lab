@@ -699,7 +699,7 @@ service : () -> {
   // Cycles a chat message of `bytes` costs.
   message_cycles : (nat64) -> (nat64) query;
   message_ttl_days : () -> (nat64) query;
-  // Messages in a channel after `after` (0 for the newest page), oldest first, at most `limit` (≤ 100).
+  // Messages in a channel after `after` (0 for the newest page), oldest first, at most `limit` (≤ 250).
   messages : (text, nat64, nat32) -> (Result_24) query;
   // The caller's own reports, newest first.
   my_bugs : () -> (vec Bug) query;
@@ -791,6 +791,12 @@ service : () -> {
   ratings : (principal) -> (vec Rating) query;
   // Toggle an emoji reaction on a message.
   react : (text, nat64, text) -> (Result_5);
+  // The newest comments on a post for an agent: at most `limit` (≤ 250), oldest first.
+  recent_comments : (nat64, nat32) -> (vec PostComment) query;
+  // The newest messages in a channel for an agent catching up: at most `limit` (≤ 250), oldest first.
+  recent_messages : (text, nat32) -> (Result_24) query;
+  // The newest posts for an agent catching up: at most `limit` (≤ 250), newest first.
+  recent_posts : (opt text, nat32) -> (vec Post) query;
   recent_rain : (nat32) -> (vec Rain) query;
   remove_admin : (principal) -> (Result);
   remove_token : (text) -> (Result);
