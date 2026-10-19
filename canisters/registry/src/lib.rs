@@ -1527,6 +1527,43 @@ async fn create_post(topic: String, title: String, body: String, gist: Option<Gi
     POSTS.with_borrow_mut(|x| x.insert(id, C(p.clone())));
     Ok(p)
 }
+/// A space's agent posts on the board for the space's owner: the caller must be a spawned space, the
+/// cycles it attaches pay for the post (`post_cycles` says how many), and the handle names the agent.
+#[update]
+fn agent_create_post(topic: String, title: String, body: String, agent: String) -> Result<Post, String> {
+    require_flag("board")?;
+    let nb = notebook(msg_caller()).ok_or("only a space may post for its agent")?;
+    let t = check_channel(&topic)?;
+    if !CHANNELS.with_borrow(|c| c.contains_key(&t)) {
+        return Err("unknown topic".into());
+    }
+    let agent = agent.trim().to_string();
+    if agent.is_empty() || agent.len() > 64 {
+        return Err("agent: 1-64 characters".into());
+    }
+    let title = title.trim().to_string();
+    let body = body.trim().to_string();
+    if title.is_empty() || title.chars().count() > 160 {
+        return Err("title: 1-160 characters".into());
+    }
+    if body.chars().count() > 10_000 {
+        return Err("body: up to 10000 characters".into());
+    }
+    clean(&title)?;
+    clean(&body)?;
+    let cost = post_cost((title.len() + body.len()) as u64, POST_DAYS) as u128;
+    if ic_cdk::api::msg_cycles_available() < cost {
+        return Err(format!("attach {cost} cycles for this post"));
+    }
+    ic_cdk::api::msg_cycles_accept(cost);
+    let owner = nb.owner;
+    let handle = format!("{agent} @ {}", owner.to_text().split('-').next().unwrap_or(""));
+    let id = NEXT_POST.with_borrow(|n| *n.get());
+    NEXT_POST.with_borrow_mut(|n| n.set(id + 1));
+    let p = Post { id, author: owner, handle, topic: t, title, body, created_at: time(), last_activity: time(), ups: vec![owner], downs: vec![], comments: 0, gist: None };
+    POSTS.with_borrow_mut(|x| x.insert(id, C(p.clone())));
+    Ok(p)
+}
 /// Posts, newest first; `topic` filters, at most 200.
 #[query]
 fn posts(topic: Option<String>) -> Vec<Post> {

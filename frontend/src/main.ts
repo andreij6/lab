@@ -1333,8 +1333,7 @@ function folderHtml(f: Folder, depth: number): string {
   for (const sub of f.folders) {
     const open = !S.collapsed.has(sub.path);
     const count = countFiles(sub);
-    const agentRoot = sub.path === AGENT_ROOT;
-    rows.push(`<div class="tree-row folder ${open ? "open" : ""} ${agentRoot ? "agent-folder" : ""}" style="--d:${depth}" data-action="fold" data-path="${esc(sub.path)}" data-kind="folder" draggable="${!isAgentPath(sub.path)}" title="${agentRoot ? "Written by agents only; you can read, link and delete" : esc(sub.path)}">${depth ? `<span class="guide" style="--d:${depth - 1}"></span>` : ""}${icon("chevron", "chev")}${icon(agentRoot ? "lock" : open ? "folder-open" : "folder", "folder-ico")}<span class="name">${esc(sub.name)}</span>${shareBadge(sub.path)}<span class="cnt">${count || ""}</span>${more("folder", sub.path)}</div>`);
+    rows.push(`<div class="tree-row folder ${open ? "open" : ""}" style="--d:${depth}" data-action="fold" data-path="${esc(sub.path)}" data-kind="folder" draggable="true" title="${esc(sub.path)}">${depth ? `<span class="guide" style="--d:${depth - 1}"></span>` : ""}${icon("chevron", "chev")}${icon(open ? "folder-open" : "folder", "folder-ico")}<span class="name">${esc(sub.name)}</span>${shareBadge(sub.path)}<span class="cnt">${count || ""}</span>${more("folder", sub.path)}</div>`);
     if (open) rows.push(folderHtml(sub, depth + 1));
   }
   const openTabs = new Set(S.panes.flatMap((p) => p.tabs));

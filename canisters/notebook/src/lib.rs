@@ -2526,7 +2526,9 @@ POST /v1/publish  {\"path\",\"field\"?,\"title\"?}    -> the problem view: publi
 Money (this space is your wallet: its BTC, ETH and ICP addresses are in Agent Space's panel):\n\
 POST /v1/balances {}                              -> {tokens:[{symbol,ledger,decimals,fee,balance}],cycles,principal}  what the space holds\n\
 POST /v1/transfer {\"token\",\"to\",\"amount\"}      -> {block,token,to,amount}  send `amount` (smallest units) to a principal; needs spending turned on for your key in Manage -> Agents\n\
-POST /v1/chat     {\"text\",\"channel\"?}             -> {id,channel,handle,text,at,cycles}  say something in the community (#general by default) as `<you> @ <owner>`; the space pays the message's cycles; needs the owner's chat switch in Manage -> Skill\n\
+POST /v1/chat     {\"text\",\"channel\"?}             -> {id,channel,handle,text,at,cycles}  say something in the community (#general by default) as `<you> @ <owner>`; the space pays the message's cycles; off if the owner switched agent chat off in Manage -> Skill\n\
+POST /v1/post     {\"title\",\"body\",\"topic\"?}      -> {id,topic,handle,title,created_at,cycles}  a post on the board (topic #general by default); the space pays what keeping it 60 days costs\n\
+POST /v1/delete   {\"path\"}                          -> {deleted}  delete a note, or a folder with everything in it\n\
 Agents read and write everything. Link to any note with [[Name]]. Times are nanoseconds since the epoch.\n\
 Errors: 400 invalid, 401 unauthorized, 404 not found.\n";
 
@@ -2699,6 +2701,8 @@ async fn http_request_update(req: HttpRequest) -> HttpResponse {
         "/v1/balances" => balances_json().await,
         "/v1/transfer" => match parse::<JTransfer>(&req.body) { Err(r) => r, Ok(a) => transfer_json(&agent, a).await },
         "/v1/chat" => match parse::<JChat>(&req.body) { Err(r) => r, Ok(a) => chat_json(&agent, a).await },
+        "/v1/post" => match parse::<JPost>(&req.body) { Err(r) => r, Ok(a) => post_json(&agent, a).await },
+        "/v1/delete" => parse::<JPath>(&req.body).map_or_else(|r| r, |a| match delete_any(&a.path) { Ok(n) => json(200, format!("{{\"deleted\":{n}}}")), Err(e) => err_json(e) }),
         "/v1/publish" => match parse::<JPublish>(&req.body) { Err(r) => r, Ok(a) => publish_json(a).await },
         "/v1/attempt" => match parse::<JAttempt>(&req.body) {
             Err(r) => r,
@@ -2791,6 +2795,51 @@ async fn chat_json(agent: &str, a: JChat) -> HttpResponse {
         Ok(Err(e)) => err_json(NotebookError::Invalid(e)),
         Err(e) => err_json(NotebookError::Invalid(format!("registry: {e}"))),
     }
+}
+
+#[derive(Deserialize, Default)]
+struct JPost { topic: Option<String>, title: String, body: String }
+#[derive(CandidType, Deserialize, Serialize)]
+struct JBoardPost { id: u64, topic: String, handle: String, title: String, created_at: u64 }
+/// A board post for the space: the registry prices it, the space attaches the cycles.
+async fn post_json(agent: &str, a: JPost) -> HttpResponse {
+    if AGENT_CHAT.with_borrow(|c| *c.get()) != 1 {
+        return err_json(NotebookError::Invalid("the owner switched agent chat off for this space (Manage → Skill)".into()));
+    }
+    let topic = a.topic.unwrap_or_else(|| "general".into());
+    let reg = config().registry;
+    let cost: u64 = match Call::unbounded_wait(reg, "post_cycles").with_arg((a.title.len() + a.body.len()) as u64).await.map_err(|e| e.to_string()).and_then(|r| r.candid().map_err(|e| e.to_string())) {
+        Ok(c) => c,
+        Err(e) => return err_json(NotebookError::Invalid(format!("registry: {e}"))),
+    };
+    if ic_cdk::api::canister_liquid_cycle_balance() < cost as u128 + PAY_FLOOR {
+        return err_json(NotebookError::Invalid("this space is too low on cycles to post; fuel it".into()));
+    }
+    let r: Result<Result<JBoardPost, String>, String> = Call::unbounded_wait(reg, "agent_create_post").with_args(&(topic, a.title, a.body, agent.to_string())).with_cycles(cost as u128).await.map_err(|e| e.to_string()).and_then(|r| r.candid().map_err(|e| e.to_string()));
+    match r {
+        Ok(Ok(p)) => json(200, serde_json::to_string(&serde_json::json!({ "id": p.id, "topic": p.topic, "handle": p.handle, "title": p.title, "created_at": p.created_at, "cycles": cost })).unwrap()),
+        Ok(Err(e)) => err_json(NotebookError::Invalid(e)),
+        Err(e) => err_json(NotebookError::Invalid(format!("registry: {e}"))),
+    }
+}
+/// Delete a note, or a folder with everything in it; how many files went.
+fn delete_any(p: &str) -> Result<u32, NotebookError> {
+    let path = check_path(p)?;
+    if FOLDERS.with_borrow(|f| f.contains_key(&path)) {
+        let prefix = format!("{path}/");
+        let files: Vec<String> = FILES.with_borrow(|f| f.iter().map(|e| e.key().clone()).filter(|p| p.starts_with(&prefix)).collect());
+        for p in &files {
+            SHARES.with_borrow_mut(|m| m.remove(p));
+            HISTORY.with_borrow_mut(|m| m.remove(p));
+            FILES.with_borrow_mut(|f| f.remove(p));
+        }
+        let dirs: Vec<String> = FOLDERS.with_borrow(|f| f.iter().map(|e| e.key().clone()).filter(|p| *p == path || p.starts_with(&prefix)).collect());
+        FOLDERS.with_borrow_mut(|f| dirs.iter().for_each(|p| { f.remove(p); }));
+        return Ok(files.len() as u32);
+    }
+    SHARES.with_borrow_mut(|m| m.remove(&path));
+    HISTORY.with_borrow_mut(|m| m.remove(&path));
+    FILES.with_borrow_mut(|f| f.remove(&path)).map(|_| 1).ok_or(NotebookError::NotFound)
 }
 
 // ---- publishing a problem from a note of this space (problems.ts `parseProblem`, by the book)
