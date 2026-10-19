@@ -1482,8 +1482,9 @@ function editorBody(p: Pane): string {
   if (c.endsWith(".md") && !locked && quizKind(d.text)) {
     const asSrc = p.view === "edit";
     const kind = quizKind(d.text)!;
-    return `<div class="editor-bar"><input class="title" name="title" data-pane="${p.id}" value="${esc(title(c))}" aria-label="Quiz name" spellcheck="false" autocomplete="off"><span class="right-actions">${badges}<button type="button" class="btn btn-ghost" data-action="view" data-pane="${p.id}" title="Quiz or markdown source (${MOD}E)">${icon(asSrc ? "edit" : "check")}<span class="small lbl">${asSrc ? "Source" : kind === "cards" ? "Cards" : "Quiz"}</span></button><button type="button" class="btn btn-ghost icon-btn" data-action="menu-current" data-pane="${p.id}" title="More" aria-label="Note actions">${icon("more")}</button></span></div>
-      <div class="path-hint">${esc(c)}</div>
+    // a phone shows the deck or the quiz alone: the tab names it, the ⋯ menu and the status bar carry the rest
+    return `${S.mobile ? "" : `<div class="editor-bar"><input class="title" name="title" data-pane="${p.id}" value="${esc(title(c))}" aria-label="Quiz name" spellcheck="false" autocomplete="off"><span class="right-actions">${badges}<button type="button" class="btn btn-ghost" data-action="view" data-pane="${p.id}" title="Quiz or markdown source (${MOD}E)">${icon(asSrc ? "edit" : "check")}<span class="small lbl">${asSrc ? "Source" : kind === "cards" ? "Cards" : "Quiz"}</span></button><button type="button" class="btn btn-ghost icon-btn" data-action="menu-current" data-pane="${p.id}" title="More" aria-label="Note actions">${icon("more")}</button></span></div>
+      <div class="path-hint">${esc(c)}</div>`}
       ${asSrc ? `<div class="editor-panes view-edit"><div class="cm-host" data-cm="${esc(c)}" data-pane="${p.id}"></div></div>` : `<div class="qz" data-quiz="${esc(c)}">${quizHtml(c, d.text)}</div>`}
       <div class="statusbar"><span data-status-path="${esc(c)}"><i class="dot ${d.saving ? "saving" : d.dirty ? "dirty" : ""}"></i>${d.saving ? "Saving…" : d.dirty ? "Unsaved" : "Saved"}</span><span class="muted kb-hint">${kind === "cards" ? "Flashcards · tap a card to flip · Spaced Repetition plugin format" : "Multiple choice · pick, then Check"}</span></div>`;
   }
@@ -2223,17 +2224,27 @@ function chatScrolled() {
 document.addEventListener("scroll", (e) => { if ((e.target as HTMLElement | null)?.hasAttribute?.("data-chat-log")) chatScrolled(); }, true);
 /** Phones: the bottom bar slides away once a note is scrolled down a little and comes back on the way up or at
  * the top. Measured from where the direction last turned, since a finger or a wheel scrolls in tiny steps. */
-let noteY = 0, noteAnchor = 0;
+let noteY = 0, noteAnchor = 0, readHidden = false, barsSettling = false;
+/** The bottom bar and the note's header (title, actions, path) go together: away while reading down, back on the way up. */
+function applyReadHidden() {
+  document.querySelector(".shell-main")?.classList.toggle("bar-hidden", readHidden);
+  document.querySelector(".pane")?.classList.toggle("head-hidden", readHidden);
+}
 document.addEventListener("scroll", (e) => {
-  if (!S.mobile) return;
+  if (!S.mobile || barsSettling) return;
   const t = e.target as HTMLElement | null;
   if (!t?.matches?.(".preview, .cm-scroller")) return;
-  const y = t.scrollTop, main = document.querySelector(".shell-main"), pane = t.closest(".pane");
+  const y = t.scrollTop;
   if ((y > noteY) !== (noteY > noteAnchor)) noteAnchor = noteY;
-  // the bottom bar and the note's header (title, actions, path) go together: away on the way down, back on the way up
-  if (y - noteAnchor > 24 && y > 40) { main?.classList.add("bar-hidden"); pane?.classList.add("head-hidden"); }
-  else if (noteAnchor - y > 24 || y <= 0) { main?.classList.remove("bar-hidden"); pane?.classList.remove("head-hidden"); }
+  const was = readHidden;
+  if (y - noteAnchor > 24 && y > 40) readHidden = true;
+  else if (noteAnchor - y > 24 || y <= 0) readHidden = false;
   noteY = y;
+  if (readHidden === was) return;
+  applyReadHidden();
+  // hiding the bars makes the reader taller, which can clamp its scroll back up: not a scroll up by the reader
+  barsSettling = true;
+  setTimeout(() => { barsSettling = false; noteY = noteAnchor = t.scrollTop; }, 350);
 }, true);
 function renderChannels() { const p = document.getElementById("chanpane"); if (p) p.innerHTML = channelsHtml(); }
 function renderOnline() { const p = document.getElementById("onlinepane"); if (p) p.innerHTML = onlineHtml(); }
@@ -5519,10 +5530,13 @@ function render() {
   const chatTop = document.querySelector<HTMLElement>("[data-chat-log]")?.scrollTop;
   // the file pane keeps its place: opening a note far down the list must not jump the list back to the top
   const sideTop = document.getElementById("side")?.scrollTop ?? 0, asideTop = document.getElementById("aside")?.scrollTop ?? 0;
+  const previewTop = S.mobile ? document.querySelector<HTMLElement>(".pane .preview")?.scrollTop ?? 0 : 0;
   destroyEditors();
   app.innerHTML = S.booting ? loadingPage() : S.shared ? sharedPage() : S.town ? townPage() : S.problems ? problemsPage() : S.inbox && (S.identity || isSandbox()) ? inboxPage() : S.board && S.identity ? boardPage() : S.community && S.identity ? communityPage() : S.market && S.identity ? marketPage() : S.admin && S.isAdmin ? adminPage() : !asVerified() && !(S.notebook && isSandbox()) ? onboardingPage() : S.notebook ? workspace() : agentSpacePage();
   if (S.show) app.insertAdjacentHTML("beforeend", showHtml());
   { const s = document.getElementById("side"); if (s && sideTop) s.scrollTop = sideTop; const a = document.getElementById("aside"); if (a && asideTop) a.scrollTop = asideTop; }
+  // a phone's reader stays where it was, with the bars still away if it had scrolled down
+  if (S.mobile) { const pv = app.querySelector<HTMLElement>(".pane .preview"); if (pv && previewTop) pv.scrollTop = previewTop; else if (!pv || !previewTop) readHidden = false; noteY = previewTop; noteAnchor = previewTop; applyReadHidden(); }
   // a re-render must not move the reader: keep the chat where it was, or at the bottom
   if (S.community) { const log = app.querySelector<HTMLElement>("[data-chat-log]"); if (log) { log.scrollTop = S.community.atBottom === false && chatTop !== undefined ? chatTop : log.scrollHeight; chatScrolled(); } }
   mountEditors();

@@ -236,7 +236,7 @@ body.dragging-tab .dropzone { display: flex; } .dropzone.drop-into { background:
   .side, .aside, .workspace > .main { display: none; grid-row: 1; grid-column: 1; min-height: 0; }
   .workspace.m-files .side, .workspace.m-note > .main, .workspace.m-links .aside { display: flex; }
   .side, .aside { border: 0; }
-  .panes-grid { grid-template-columns: 1fr; } .pane { border-right: 0; }
+  .panes-grid { grid-template-columns: 1fr; flex-direction: column; } .panes-grid > .pane { flex: 1 1 auto; min-height: 0; } .pane { border-right: 0; } /* the one pane fills the screen, so the status bar sits above the bottom bar */
   .editor-panes.view-split { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; } .editor-panes.view-split .draft { border-right: 0; border-bottom: 1px solid var(--line); }
   .draft, .preview { padding: 14px 16px; }
   .editor-bar .lbl { display: none; } .title { font-size: 1.15rem; }
