@@ -1247,6 +1247,7 @@ function agentSpacePage(): string {
     <div class="as-steps mono"><span>03 Fuel</span></div>
     <h1 class="as-h1">Fuel your agent.</h1>
     ${body}
+    <p class="as-tile-s">Signed in as <span class="mono" title="${esc(S.principal)}">${esc(S.principal)}</span>. No space belongs to this principal yet; if you made one on another device, that device signed in as a different Internet Identity.</p>
   </div></div>`;
 }
 
