@@ -1201,7 +1201,7 @@ const asMark = () => `<div class="as-mark">Agent Space</div>`;
 /** The first paint: the app does not yet know whether to show the gate, the Fuel step or a space. */
 const loadingPage = () => `<div class="as as-center">${asMark()}<div class="as-hero"><p class="as-lede">Loading…</p><div class="as-tile busy" style="width:220px;height:6px;padding:0;border:0"></div></div></div>`;
 /** This principal passed the gate in this browser. ponytail: kept in localStorage; move it to the registry if a principal must verify once across browsers. */
-const asVerified = () => !!S.identity && store(`as-verified:${S.principal}`) === "1";
+const asVerified = () => !!S.identity && (store(`as-verified:${S.principal}`) === "1" || !!S.notebooks?.[0]);
 function onboardingPage(): string {
   const a = S.as;
   if (a.step === "landing") return `<div class="as as-center">${asMark()}<div class="as-hero">
@@ -5753,12 +5753,16 @@ async function signIn() {
     if (!S.identity) throw new Error("No identity was returned");
     S.principal = S.identity.getPrincipal().toText();
     S.signin = { busy: false, error: "" };
-    // not yet verified: straight into the first test; verified people land in their space, or on Fuel
-    if (!asVerified()) { S.as.step = "tap"; S.as.tap = { count: 0, start: 0, done: undefined }; }
     if (S.shared) return openShared(S.shared.canister, S.shared.path);
+    // the spaces decide where this person goes: into their space, or into the first test
+    S.booting = true;
     render();
     await loadNotebooks();
+    S.booting = false;
+    if (!asVerified()) { S.as.step = "tap"; S.as.tap = { count: 0, start: 0, done: undefined }; }
+    render();
   } catch (e) {
+    S.booting = false;
     S.signin = { busy: false, error: errMsg(e) || "The identity provider did not respond" };
     render();
   }
@@ -5790,6 +5794,8 @@ async function loadNotebooks() {
     registry().tokens().then((t) => { S.tokens = t; }).catch(() => {});
     S.notebooks = await registry().my_notebooks();
     S.error = "";
+    // a principal with a space passed the gate once, on some device: this one remembers it too
+    if (S.notebooks[0]) store(`as-verified:${S.principal}`, "1");
     // home is the space itself once there is one; without one, the gate ends on the Fuel step
     if (location.hash === "#/" && S.notebooks[0] && asVerified()) { location.hash = `#/notebook/${S.notebooks[0].canister.toText()}`; return; }
     if (!S.notebooks[0]) resumeOrder();
