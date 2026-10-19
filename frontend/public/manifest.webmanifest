@@ -4,8 +4,8 @@
   "description": "Organize your thoughts, get feedback, build a knowledge base.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#121316",
-  "theme_color": "#4338ca",
+  "background_color": "#1f2024",
+  "theme_color": "#1b7eee",
   "icons": [
     {
       "src": "/icon.svg",

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="linear-gradient-1" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#23264a"/>
+      <stop offset="1" stop-color="#161826"/>
+    </linearGradient>
+    <radialGradient id="radial-gradient-1" cx="256" cy="256" r="256" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#9184d9" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#9184d9" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <title>Agent Space G</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M112 0 L400 0 C461.856 0 512 50.144 512 112 L512 400 C512 461.856 461.856 512 400 512 L112 512 C50.144 512 0 461.856 0 400 L0 112 C0 50.144 50.144 0 112 0 Z" fill="url(#linear-gradient-1)"/>
+    <path d="M112 0 L400 0 C461.856 0 512 50.144 512 112 L512 400 C512 461.856 461.856 512 400 512 L112 512 C50.144 512 0 461.856 0 400 L0 112 C0 50.144 50.144 0 112 0 Z" fill="url(#radial-gradient-1)"/>
+    <path d="M140 92 L316 92 L388 164 L388 420 C388 438.667 378.667 448 360 448 L140 448 C121.333 448 112 438.667 112 420 L112 120 C112 101.333 121.333 92 140 92 Z" fill="#eceff4"/>
+    <path d="M316 92 L316 164 L388 164 Z" fill="#b5abfc"/>
+    <path d="M172 252 C172 238.745 182.745 228 196 228 C209.255 228 220 238.745 220 252 C220 265.255 209.255 276 196 276 C182.745 276 172 265.255 172 252 Z" fill="#9184d9"/>
+    <path d="M276 252 C276 238.745 286.745 228 300 228 C313.255 228 324 238.745 324 252 C324 265.255 313.255 276 300 276 C286.745 276 276 265.255 276 252 Z" fill="#9184d9"/>
+    <path d="M184 332 C226.667 372 269.333 372 312 332" fill="none" stroke="#9184d9" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

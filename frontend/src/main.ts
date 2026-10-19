@@ -1108,7 +1108,9 @@ function panebar(left: { on: boolean; what: string; action: string; off?: boolea
   const b = (x: typeof left, side: "left" | "right") => `<button type="button" class="btn btn-ghost icon-btn ${x.on || x.off ? "" : "accent"}" data-action="${x.action}" title="${x.off ? `No ${x.what} on this view` : `${x.on ? "Hide" : "Show"} ${x.what} (${MOD}⇧${side === "left" ? "[" : "]"})`}" aria-label="Toggle ${x.what}" aria-pressed="${x.on}" ${x.off ? "disabled" : ""}>${icon(side === "left" ? "panel-left" : "panel-right")}</button>`;
   return S.mobile ? "" : `<div class="panebar">${b(left, "left")}<span class="panebar-mid">${middle}</span>${b(right, "right")}</div>`;
 }
-const brand = () => `<a class="brand" href="#/" data-action="nav" title="Agent Space: your wallet and your space"><span class="mark"></span>Agent Space</a>`;
+/** The mark: the cell, a hexagon the agent lives in, lit from within, in the theme's accent (brand/build_agent_space_logos.py, A). */
+const MARK = `<svg xmlns="http://www.w3.org/2000/svg" class="cell-mark" aria-hidden="true" viewBox="0 0 512 512"><polygon points="256.0,102.0 403.2,187.0 403.2,357.0 256.0,442.0 108.8,357.0 108.8,187.0" fill="none" stroke="var(--accent-2)" stroke-width="22.0" stroke-linejoin="round"/><polygon points="256.0,168.0 346.1,220.0 346.1,324.0 256.0,376.0 165.9,324.0 165.9,220.0" fill="var(--accent)" fill-opacity="0.8"/><circle cx="256.0" cy="272.0" r="30.0" fill="var(--accent-fg, #fff)"/><path d="M392.0 76.0l10.0 24.0 24.0 10.0-24.0 10.0-10.0 24.0-10.0-24.0-24.0-10.0 24.0-10.0z" fill="#fde68a"/></svg>`;
+const brand = () => `<a class="brand" href="#/" data-action="nav" title="Agent Space: your wallet and your space"><span class="mark">${MARK}</span>Agent Space</a>`;
 /** Phones: every top bar collapses its secondary actions into one ⋯ menu. */
 const moreBtn = () => `<button type="button" class="btn btn-ghost icon-btn" data-action="more-menu" title="More" aria-label="More">${icon("more")}</button>`;
 /** Phones: the ⋯ button opens a full-screen list of every major route, the current one marked. */
@@ -1206,7 +1208,7 @@ function notebookEmoji(v: NotebookRec): string {
 // --- Agent Space: the gate (Rapid Tap, Color Hunt), then the wallet grid. Fixed Nocturne colors, never
 // themed: an agent reads these screens pixel by pixel, so every fill is flat and every hex exact.
 
-const asMark = () => `<div class="as-mark">Agent Space</div>`;
+const asMark = () => `<div class="as-mark">${MARK}Agent Space</div>`;
 /** The first paint: the app does not yet know whether to show the gate, the Fuel step or a space. */
 const loadingPage = () => `<div class="as as-center">${asMark()}<div class="as-hero"><p class="as-lede">Loading…</p><div class="as-tile busy" style="width:220px;height:6px;padding:0;border:0"></div></div></div>`;
 /** This principal passed the gate in this browser. ponytail: kept in localStorage; move it to the registry if a principal must verify once across browsers. */

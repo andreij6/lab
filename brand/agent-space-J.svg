@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="linear-gradient-1" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#23264a"/>
+      <stop offset="1" stop-color="#161826"/>
+    </linearGradient>
+    <radialGradient id="radial-gradient-1" cx="256" cy="256" r="256" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#9184d9" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#9184d9" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <title>Agent Space J</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M112 0 L400 0 C461.856 0 512 50.144 512 112 L512 400 C512 461.856 461.856 512 400 512 L112 512 C50.144 512 0 461.856 0 400 L0 112 C0 50.144 50.144 0 112 0 Z" fill="url(#linear-gradient-1)"/>
+    <path d="M112 0 L400 0 C461.856 0 512 50.144 512 112 L512 400 C512 461.856 461.856 512 400 512 L112 512 C50.144 512 0 461.856 0 400 L0 112 C0 50.144 50.144 0 112 0 Z" fill="url(#radial-gradient-1)"/>
+    <path d="M96 160 C96 144 104 136 120 136 L206 136 L240 170 L392 170 C408 170 416 178 416 194 L416 222 L96 222 Z" fill="#9184d9"/>
+    <path d="M118 222 L446 222 L406 390 C402 406 392 414 376 414 L118 414 C103.333 414 96 406.667 96 392 Z" fill="#b5abfc"/>
+    <path d="M392 84 L402.2 107.8 L426 118 L402.2 128.2 L392 152 L381.8 128.2 L358 118 L381.8 107.8 Z" fill="#fde68a"/>
+  </g>
+</svg>

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="linear-gradient-1" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#23264a"/>
+      <stop offset="1" stop-color="#161826"/>
+    </linearGradient>
+    <radialGradient id="radial-gradient-1" cx="256" cy="256" r="256" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#9184d9" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#9184d9" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="linear-gradient-2" x1="256" y1="432" x2="256" y2="92" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#9184d9" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#9184d9" stop-opacity="0.16"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-3" x1="158.95" y1="164.95" x2="353.05" y2="359.05" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#b5abfc"/>
+      <stop offset="1" stop-color="#9184d9"/>
+    </linearGradient>
+  </defs>
+  <title>Agent Space A</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M112 0 L400 0 C461.856 0 512 50.144 512 112 L512 400 C512 461.856 461.856 512 400 512 L112 512 C50.144 512 0 461.856 0 400 L0 112 C0 50.144 50.144 0 112 0 Z" fill="url(#linear-gradient-1)"/>
+    <path d="M112 0 L400 0 C461.856 0 512 50.144 512 112 L512 400 C512 461.856 461.856 512 400 512 L112 512 C50.144 512 0 461.856 0 400 L0 112 C0 50.144 50.144 0 112 0 Z" fill="url(#radial-gradient-1)"/>
+    <path d="M256 92 L403.2 177 L403.2 347 L256 432 L108.8 347 L108.8 177 Z" fill="url(#linear-gradient-2)" stroke="#b5abfc" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M256 158 L346.1 210 L346.1 314 L256 366 L165.9 314 L165.9 210 Z" fill="url(#linear-gradient-3)"/>
+    <path d="M226 262 C226 245.431 239.431 232 256 232 C272.569 232 286 245.431 286 262 C286 278.569 272.569 292 256 292 C239.431 292 226 278.569 226 262 Z" fill="#ffffff"/>
+    <path d="M392 76 L402.2 99.8 L426 110 L402.2 120.2 L392 144 L381.8 120.2 L358 110 L381.8 99.8 Z" fill="#fde68a"/>
+  </g>
+</svg>
