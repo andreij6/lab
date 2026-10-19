@@ -1116,7 +1116,7 @@ const moreBtn = () => `<button type="button" class="btn btn-ghost icon-btn" data
 /** Phones: the ⋯ button opens a full-screen list of every major route, the current one marked. */
 function routeSheet(el: HTMLElement) {
   const nbId = S.notebook?.canister.toText();
-  const inNb = !!S.notebook && !S.community && !S.board && !S.market && !S.admin && !S.town && !S.problems;
+  const inNb = !!S.notebook && !S.community && !S.board && !S.inbox && !S.market && !S.admin && !S.town && !S.problems;
   type R = { label: string; icon: string; on: boolean; go: () => void; sub?: boolean; hidden?: boolean };
   const tab = (t: Tab, label: string, ic: string): R => ({ label, icon: ic, hidden: !featureOn(t), on: inNb && S.tab === t, go: () => { const i = document.createElement("i"); i.dataset.tab = t; if (!inNb) { S.community = undefined; S.board = undefined; S.market = undefined; S.admin = undefined; S.town = undefined; clearInterval(townTimer); location.hash = `#/notebook/${nbId}`; } void onAction("tab", i, new MouseEvent("click")); } });
   const routes: R[] = !S.identity ? [
@@ -1124,7 +1124,7 @@ function routeSheet(el: HTMLElement) {
     ...(flag("town") ? [{ label: "Town", icon: "town", on: !!S.town, go: () => { location.hash = "#/town"; } } as R] : []),
     ...(flag("problems") ? [{ label: "Problems", icon: "target", on: !!S.problems, go: () => { location.hash = "#/problems"; } } as R] : []),
   ] : [
-    ...(S.notebook ? [tab("manage", "Wallet", "wallet"), { label: "Notes", icon: "folder-open", on: inNb && S.tab === "notes", go: () => { if (!inNb) location.hash = `#/notebook/${nbId}`; else { const i = document.createElement("i"); i.dataset.tab = "notes"; void onAction("tab", i, new MouseEvent("click")); } } } as R, ...FEATURES.filter((f) => f.id === "graph" || (f.id === "chat" && flag("chat"))).map((f) => tab(f.id, f.label, f.icon))].filter((r) => !r.hidden) : [{ label: "Agent Space", icon: "list", on: !S.community && !S.board && !S.market && !S.admin && !S.town && !S.problems, go: () => { location.hash = "#/"; } }]),
+    ...(S.notebook ? [tab("manage", "Wallet", "wallet"), { label: "Notes", icon: "folder-open", on: inNb && S.tab === "notes", go: () => { if (!inNb) location.hash = `#/notebook/${nbId}`; else { const i = document.createElement("i"); i.dataset.tab = "notes"; void onAction("tab", i, new MouseEvent("click")); } } } as R, ...FEATURES.filter((f) => f.id === "graph" || (f.id === "chat" && flag("chat"))).map((f) => tab(f.id, f.label, f.icon))].filter((r) => !r.hidden) : [{ label: "Agent Space", icon: "list", on: !S.community && !S.board && !S.inbox && !S.market && !S.admin && !S.town && !S.problems, go: () => { location.hash = "#/"; } }]),
     { label: "Community", icon: "users", on: !!S.community, go: () => { location.hash = "#/community"; } },
     ...(flag("board") ? [{ label: "Board", icon: "pin", on: !!S.board, go: () => { location.hash = "#/board"; } } as R] : []),
     { label: S.inboxNew ? `Inbox · ${S.inboxNew} new` : "Inbox", icon: "inbox", on: !!S.inbox, go: () => { location.hash = "#/inbox"; } },
@@ -1287,7 +1287,7 @@ function shell(body: string): string {
 /** The vertical icon bar: sections of the open notebook on top, the app-wide places at the bottom. From a page without a notebook, a section opens the last notebook. */
 function ribbonHtml(i?: Info, low = false): string {
   if (S.mobile) return "";
-  const inNb = !!S.notebook && !S.community && !S.board && !S.market && !S.admin && !S.town && !S.problems;
+  const inNb = !!S.notebook && !S.community && !S.board && !S.inbox && !S.market && !S.admin && !S.town && !S.problems;
   const rb = (tab: Tab, label: string, ic: string, extra = "") => `<button type="button" class="rb ${inNb && S.tab === tab ? "on" : ""}" data-action="ribbon-tab" data-tab="${tab}" title="${label}" aria-label="${label}" aria-pressed="${inNb && S.tab === tab}">${icon(ic)}${extra}</button>`;
   const tripLate = S.trips.watching.some((w) => w.overdue && !w.closed);
   const tip: Partial<Record<Tab, string>> = {
@@ -8243,7 +8243,7 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
     case "noop": return;
     case "ribbon-tab": {
       const tab = el.dataset.tab as Tab;
-      if (S.notebook && !S.community && !S.board && !S.market && !S.admin && !S.town && !S.problems) return onAction("tab", el, ev!);
+      if (S.notebook && !S.community && !S.board && !S.inbox && !S.market && !S.admin && !S.town && !S.problems) return onAction("tab", el, ev!);
       const id = S.notebook?.canister.toText() ?? store("nb-last")?.match(/notebook\/([a-z0-9-]+)/)?.[1] ?? S.notebooks?.[0]?.canister.toText();
       if (!id) { location.hash = "#/"; return; }
       S.tab = tab;
