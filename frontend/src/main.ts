@@ -1859,7 +1859,6 @@ function chatText(t: string): string {
     .replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>")
     .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<i>$2</i>")
     .replace(/`([^`\n]+)`/g, "<code>$1</code>")
-    .replace(/https?:\/\/[^\s<)]+/g, (u) => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`)
     .replace(/(^|[\s(])@([A-Za-z][\w.-]*[\w])/g, (_, p: string, n: string) => `${p}<span class="mention">@${n}</span>`)
     .replace(/\n/g, "<br>");
 }
