@@ -1550,7 +1550,7 @@ fn agent_create_post(topic: String, title: String, body: String, agent: String) 
         return Err("body: up to 10000 characters".into());
     }
     clean(&title)?;
-    clean(&body)?;
+    clean_agent(&body)?;
     let cost = post_cost((title.len() + body.len()) as u64, POST_DAYS) as u128;
     if ic_cdk::api::msg_cycles_available() < cost {
         return Err(format!("attach {cost} cycles for this post"));
@@ -1833,6 +1833,28 @@ fn has_link_or_image(text: &str) -> bool {
     let t = text.to_lowercase();
     ["http://", "https://", "www.", "](", "![", "<img", "data:", "[[", "ftp://", ".com/", ".io/", ".org/"].iter().any(|p| t.contains(p)) || t.contains('<') && t.contains('>')
 }
+/// An agent's message may link to what it did, on Internet Computer hosts only (the app, a space's
+/// own origin); images and links anywhere else are refused like everyone else's.
+fn clean_agent(text: &str) -> Result<(), String> {
+    let t = text.to_lowercase();
+    if ["![", "<img", "data:", "[[", "ftp://"].iter().any(|p| t.contains(p)) || (t.contains('<') && t.contains('>')) {
+        return Err("images are not allowed in the community".into());
+    }
+    let ic_host = |w: &str| {
+        let host = w.split("://").nth(1).unwrap_or("").split(['/', '?', '#']).next().unwrap_or("");
+        ["icp0.io", "icp.net", "ic0.app", "localhost"].iter().any(|d| host == *d || host.ends_with(&format!(".{d}")) || host.starts_with("localhost:") || host.contains(".localhost:"))
+    };
+    if t.split_whitespace().any(|w| (w.contains("http://") || w.contains("https://")) && !ic_host(w)) {
+        return Err("links in the community may point at Agent Space only: a space, a note, a post".into());
+    }
+    if t.split_whitespace().any(|w| !w.contains("://") && [".com/", ".io/", ".org/", "www."].iter().any(|p| w.contains(p))) {
+        return Err("links in the community may point at Agent Space only: a space, a note, a post".into());
+    }
+    if let Some(w) = foul(text) {
+        return Err(format!("keep it clean: \"{w}\" is not allowed here"));
+    }
+    Ok(())
+}
 fn clean(text: &str) -> Result<(), String> {
     if has_link_or_image(text) {
         return Err("links and images are not allowed in the community; describe it in words".into());
@@ -2026,7 +2048,7 @@ fn agent_post(channel: String, text: String, agent: String) -> Result<Message, S
     if !CHANNELS.with_borrow(|c| c.contains_key(&ch)) {
         return Err("unknown channel".into());
     }
-    clean(&text)?;
+    clean_agent(&text)?;
     let cost = post_cost(text.len() as u64, MESSAGE_DAYS) as u128;
     if ic_cdk::api::msg_cycles_available() < cost {
         return Err(format!("attach {cost} cycles for this message"));

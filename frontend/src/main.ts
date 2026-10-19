@@ -381,6 +381,8 @@ const S = {
   manageTab: (["wallet", "fuel", "skill", "data"].includes(store("nb-manage-tab") ?? "") ? store("nb-manage-tab") : "wallet") as ManageTab,
   /** the owner let agent keys post in the community for this space */
   agentChat: false,
+  /** the skill, with the key, was copied during this visit: the onboarding may close */
+  skillCopied: false,
   /** the skill text with this space filled in, for the Skill tab */
   skillShown: "",
   /** what the space holds on each ledger the registry lists, for the Wallet tab */
@@ -1857,6 +1859,7 @@ function chatText(t: string): string {
     .replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>")
     .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<i>$2</i>")
     .replace(/`([^`\n]+)`/g, "<code>$1</code>")
+    .replace(/https?:\/\/[^\s<)]+/g, (u) => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`)
     .replace(/(^|[\s(])@([A-Za-z][\w.-]*[\w])/g, (_, p: string, n: string) => `${p}<span class="mention">@${n}</span>`)
     .replace(/\n/g, "<br>");
 }
@@ -2369,17 +2372,17 @@ function onboarding(step = 0) {
   const issued = S.issued;
   if (step === 0 && issued) step = 1;
   const steps: { title: string; body: string; next: string }[] = [
-    { title: "Give your agent a key", next: "Skip for now", body: `<p>Your space is run by an agent. The key is what it sends on every call; name the agent and issue it one (you can revoke it in Manage → Skill).</p><form class="row tight nudge" data-form="agent"><input class="input" name="newAgent" value="${esc(S.newAgent)}" placeholder="agent name" required aria-label="Agent name" style="max-width:260px"><button type="submit" class="btn btn-primary" ${S.busy ? "disabled" : ""}>${icon("plus")}Issue key</button></form>` },
+    { title: "Give your agent a key", next: "", body: `<p>Your space is run by an agent. The key is what it sends on every call; name the agent and issue it one (you can revoke it in Manage → Skill).</p><form class="row tight nudge" data-form="agent"><input class="input" name="newAgent" value="${esc(S.newAgent)}" placeholder="agent name" required aria-label="Agent name" style="max-width:260px"><button type="submit" class="btn btn-primary" ${S.busy ? "disabled" : ""}>${icon("plus")}Issue key</button></form>` },
     { title: "Copy the skill", next: "Done", body: `<p>The skill carries the key for <b>${esc(issued?.name ?? "your agent")}</b> and tells it everything: to save the file, to say hello in the community, the API, the rules and what each action costs.</p><div class="row tight nudge"><button type="button" class="btn btn-primary" data-action="copy-skill">${icon("copy")}Copy the skill with the key</button></div><p class="small muted nudge">Paste it into your agent. The key is shown nowhere else; the skill is in Manage → Skill any time, with placeholders unless a key was just issued.</p>` },
   ];
   const st = steps[step];
   const el = document.createElement("div");
   el.className = "scrim onboard";
   el.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="ob-t"><div class="ob-dots">${steps.map((_, i) => `<i class="${i === step ? "on" : i < step ? "done" : ""}"></i>`).join("")}</div><h2 id="ob-t">${esc(st.title)}</h2>${st.body}
-    <div class="actions"><button type="button" class="btn btn-primary" data-ob="next">${st.next}</button></div></div>`;
+    ${st.next ? `<div class="actions"><button type="button" class="btn btn-primary" data-ob="next" ${S.skillCopied ? "" : "disabled"} title="${S.skillCopied ? "" : "Copy the skill first"}">${st.next}</button></div>` : ""}</div>`;
   el.addEventListener("click", async (e) => {
     const b = (e.target as HTMLElement).closest<HTMLElement>("[data-ob]")?.dataset.ob;
-    if (!b) return;
+    if (!b || !S.skillCopied) return;
     el.remove();
     S.settings.onboarded = true;
     await saveSettings();
@@ -7341,7 +7344,7 @@ let skillText = "";
 async function agentSkill(k: { name: string; key: string } = S.issued ?? { name: "<agent name>", key: "<your agent key>" }): Promise<string> {
   if (!skillText) skillText = await (await fetch("/skill.md")).text();
   const id = S.notebook!.canister.toText();
-  return skillText.replaceAll("__URL__", apiUrl(id)).replaceAll("__NOTEBOOK__", id).replaceAll("__AGENT__", k.name).replaceAll("__KEY__", k.key);
+  return skillText.replaceAll("__URL__", apiUrl(id)).replaceAll("__APP__", location.origin).replaceAll("__NOTEBOOK__", id).replaceAll("__AGENT__", k.name).replaceAll("__KEY__", k.key);
 }
 function clipperCard(): string {
   const key = S.clipperKey;
@@ -8716,6 +8719,7 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
       return toast("Key copied.", "ok");
     case "copy-skill":
       await copy(await agentSkill());
+      if (S.issued && !S.skillCopied) { S.skillCopied = true; if (document.querySelector(".onboard")) onboarding(1); }
       return toast("Agent skill copied. Paste it into your agent.", "ok");
     case "revoke-key":
       if (!(await confirmDialog(`Revoke the key for ${el.dataset.name}?`, "The agent stops working at once. Its notes stay.", "Revoke"))) return;
