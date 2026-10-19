@@ -30,6 +30,8 @@ evidence pointers, are in [`docs/REVERSE_ENGINEERING.md`](docs/REVERSE_ENGINEERI
 | List editing (Enter continues items, Tab indents, task toggles), dependency-free ZIP writer and reader, all tested | [`editor.ts`](frontend/src/editor.ts), [`zip.ts`](frontend/src/zip.ts), [`unzip.ts`](frontend/src/unzip.ts) |
 | Themes on Obsidian variable names: Velocity (default), Nord, Gruvbox, Red Graphite, custom CSS | [`themes.ts`](frontend/src/themes.ts) |
 | The skills an agent installs (an index and one file per kind of work, under 500 words each) and the setup prompt Manage → Skills fills with the API URL and key | [`frontend/public/skill/`](frontend/public/skill/) |
+| The MCP server every space serves at `/mcp` (tools = the API routes, resources = the skill files) | [`canisters/notebook/src/lib.rs`](canisters/notebook/src/lib.rs) (`mcp`) |
+| The prompt library in Manage → Prompts | [`frontend/src/prompts.ts`](frontend/src/prompts.ts) |
 | Candid + HTTP end-to-end on the local network (429 hard checks) | [`scripts/e2e_local.sh`](scripts/e2e_local.sh) |
 | What REA observed in Obsidian and what the rebuild keeps | [`docs/REVERSE_ENGINEERING.md`](docs/REVERSE_ENGINEERING.md) |
 

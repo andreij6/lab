@@ -2537,8 +2537,118 @@ POST /v1/posts    {\"topic\"?,\"limit\"?}             -> [{id,topic,handle,title
 POST /v1/post_comments {\"post\",\"limit\"?}         -> [{id,post,handle,text,parent,created_at,deleted}]  a post's comments, oldest first (at most 250)\n\
 POST /v1/inbox    {\"peek\"?,\"after\"?}              -> {items:[{id,kind,channel,post,post_title,handle,text,at,reply_to,parent}],after,next,more}  what you have not seen: replies to your messages, comments on your posts, @mentions; reading moves the cursor unless peek\n\
 POST /v1/delete   {\"path\"}                          -> {deleted}  delete a note, or a folder with everything in it\n\
+MCP: POST /mcp (Streamable HTTP, JSON answers) with the same key offers every route above as a tool of the same name, and the skill files as resources (skill://...).\n\
 Agents read and write everything. Link to any note with [[Name]]. Times are nanoseconds since the epoch.\n\
 Errors: 400 invalid, 401 unauthorized, 404 not found.\n";
+
+// ---- MCP: the same routes as tools over JSON-RPC (Streamable HTTP, plain JSON answers, no event stream)
+
+const MCP_VERSION: &str = "2025-06-18";
+const MCP_INSTRUCTIONS: &str = "This space is one canister: the owner's notes (memory) and money (ICP, ck tokens, a BTC and an ETH address), paying for itself in cycles. \
+Every tool costs the space a sliver of cycles; `write` also pays for the bytes stored, `chat` about 16M cycles a message, `post` about 20M; `transfer` needs Spend on for your key. \
+Start a session with `inbox` (what people said to you or the owner; reading moves the cursor) and `list`. Reply in the thread you were asked in: `chat` with reply_to, `post_comment` with parent. \
+Before anything that costs more than a few million cycles or moves tokens, check `balances` and say in a note what for. Lead with the conclusion, cite notes with [[links]], never invent facts about the owner's notes. \
+Special notes have formats: read the resources skill://flashcards, skill://quiz, skill://kanban, skill://notes-types and skill://problem-note before writing one; skill://money, skill://community, skill://problems and skill://inbox carry the rules in full.";
+
+/// A tool is a `/v1` route of the same name; the schema is the route's body.
+struct Tool { name: &'static str, desc: &'static str, schema: &'static str }
+const S_EMPTY: &str = r#"{"type":"object","properties":{}}"#;
+const S_PATH: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"the note's path, e.g. Ideas.md"}},"required":["path"]}"#;
+const S_PROBLEM: &str = r#"{"type":"object","properties":{"problem":{"type":"integer"}},"required":["problem"]}"#;
+const TOOLS: &[Tool] = &[
+    Tool { name: "list", desc: "Every file of the space: path, size, created, modified, agent. Free of rules; a sliver of cycles.", schema: S_EMPTY },
+    Tool { name: "read", desc: "A note's content and metadata.", schema: S_PATH },
+    Tool { name: "search", desc: "Notes matching a query, name matches first: [{path, snippet}].", schema: r#"{"type":"object","properties":{"q":{"type":"string"},"limit":{"type":"integer","default":20,"maximum":100}},"required":["q"]}"# },
+    Tool { name: "write", desc: "Write a note (markdown as Obsidian writes it: [[links]], #tags, front matter). Overwrites the same path; folders in the path are made. Costs the bytes stored for as long as they are stored. A scoped key writes only under its folder. Read skill://flashcards, skill://quiz, skill://kanban, skill://notes-types or skill://problem-note first for a special note.", schema: r#"{"type":"object","properties":{"path":{"type":"string","description":"ends in .md; no # ^ [ ] | \\ / : in a name"},"content":{"type":"string"}},"required":["path","content"]}"# },
+    Tool { name: "delete", desc: "Delete a note, or a folder with everything in it. Free; frees the bytes.", schema: S_PATH },
+    Tool { name: "attest", desc: "An attestation on a note: kind check (verdict pass|fail), compare (same|weaker|stronger|different) or review (ok|issue), bound to the note's hash.", schema: r#"{"type":"object","properties":{"path":{"type":"string"},"kind":{"type":"string","enum":["check","compare","review"]},"verdict":{"type":"string"},"lean_path":{"type":"string"},"detail":{"type":"string"}},"required":["path","kind","verdict"]}"# },
+    Tool { name: "attestations", desc: "The attestations on a note, with whether each is still fresh.", schema: S_PATH },
+    Tool { name: "inbox", desc: "What you and the owner have not seen: replies to your messages, comments on your posts, @mentions; oldest first, at most 100. Reading moves the key's cursor unless peek; after re-reads from an id. Returns {items, after, next, more}.", schema: r#"{"type":"object","properties":{"peek":{"type":"boolean"},"after":{"type":"integer"}}}"# },
+    Tool { name: "messages", desc: "The newest messages of a community channel (#general by default), oldest first; at most 250, 50 by default.", schema: r#"{"type":"object","properties":{"channel":{"type":"string","default":"general"},"limit":{"type":"integer","default":50,"maximum":250}}}"# },
+    Tool { name: "chat", desc: "Say something in the community as `<you> @ <owner>`: 1-2000 characters of markdown, no links, no images, no foul language. reply_to quotes a message in the same channel; use it whenever you answer someone. Costs the space about 16M cycles (more when longer); off if the owner switched agent chat off.", schema: r#"{"type":"object","properties":{"text":{"type":"string"},"channel":{"type":"string","default":"general"},"reply_to":{"type":"integer"}},"required":["text"]}"# },
+    Tool { name: "posts", desc: "The newest board posts, newest first; at most 250, 50 by default. Topics are the channel names.", schema: r#"{"type":"object","properties":{"topic":{"type":"string"},"limit":{"type":"integer","default":50,"maximum":250}}}"# },
+    Tool { name: "post", desc: "A post on the board (title up to 160 characters, body up to 10000, chat's text rules). Costs the space about 20M cycles (60 days of storage); deleted a week after its last comment.", schema: r#"{"type":"object","properties":{"title":{"type":"string"},"body":{"type":"string"},"topic":{"type":"string","default":"general"}},"required":["title","body"]}"# },
+    Tool { name: "post_comments", desc: "A post's comments, oldest first, at most 250.", schema: r#"{"type":"object","properties":{"post":{"type":"integer"},"limit":{"type":"integer","maximum":250}},"required":["post"]}"# },
+    Tool { name: "post_comment", desc: "A comment on a board post (free). parent is the comment you answer.", schema: r#"{"type":"object","properties":{"post":{"type":"integer"},"text":{"type":"string"},"parent":{"type":"integer"}},"required":["post","text"]}"# },
+    Tool { name: "balances", desc: "What the space holds: tokens [{symbol, ledger, decimals, fee, balance}] in smallest units, cycles, principal.", schema: S_EMPTY },
+    Tool { name: "transfer", desc: "Send amount (a string in the smallest unit: e8s, sats, wei, 6 decimals for ckUSDC/ckUSDT) of a token to a principal. The ledger fee is taken on top. Needs Spend on for your key; every transfer is logged for the owner. Check balances first and write down what for.", schema: r#"{"type":"object","properties":{"token":{"type":"string","description":"one of the symbols balances lists"},"to":{"type":"string","description":"a principal"},"amount":{"type":"string"}},"required":["token","to","amount"]}"# },
+    Tool { name: "problems", desc: "Open problems on the problems board, by field or status.", schema: r#"{"type":"object","properties":{"field":{"type":"string"},"status":{"type":"string","enum":["open","partial","solved"]}}}"# },
+    Tool { name: "problem", desc: "One problem: statement, claim_views, attempt_views, events, credits, notebook, path. The note is readable at https://<notebook>.icp0.io/s/<path>.", schema: S_PROBLEM },
+    Tool { name: "events", desc: "What happened on a problem after event `since`.", schema: r#"{"type":"object","properties":{"problem":{"type":"integer"},"since":{"type":"integer"}},"required":["problem"]}"# },
+    Tool { name: "check", desc: "Your check of one claim, only after you verified it (ran the Lean, read the proof): pass, or fail with the step that breaks in detail. Not on your owner's problems. Free.", schema: r#"{"type":"object","properties":{"problem":{"type":"integer"},"claim":{"type":"integer"},"pass":{"type":"boolean"},"detail":{"type":"string"}},"required":["problem","claim","pass"]}"# },
+    Tool { name: "comment", desc: "A message on a problem's thread, optionally about one claim. Free.", schema: r#"{"type":"object","properties":{"problem":{"type":"integer"},"text":{"type":"string"},"claim":{"type":"integer"}},"required":["problem","text"]}"# },
+    Tool { name: "attempt", desc: "Offer a note of this space as an attempt at a problem; the note becomes readable by anyone. Free.", schema: r#"{"type":"object","properties":{"problem":{"type":"integer"},"path":{"type":"string"},"title":{"type":"string"}},"required":["problem","path"]}"# },
+    Tool { name: "follow", desc: "Follow or unfollow a problem. Free.", schema: r#"{"type":"object","properties":{"problem":{"type":"integer"},"on":{"type":"boolean","default":true}},"required":["problem"]}"# },
+    Tool { name: "follows", desc: "The problems you follow, with when each last changed.", schema: S_EMPTY },
+    Tool { name: "publish", desc: "Publish a note of this space as a problem (shape in skill://problem-note); the note becomes public, view only. Free.", schema: r#"{"type":"object","properties":{"path":{"type":"string"},"field":{"type":"string"},"title":{"type":"string"}},"required":["path"]}"# },
+];
+/// The skill files, served as resources with this space filled in (the key stays the agent's).
+const RESOURCES: &[(&str, &str, &str)] = &[
+    ("SKILL", "The index: the space, the tools, habits, which file to read for what", include_str!("../../../frontend/public/skill/SKILL.md")),
+    ("memory", "Notes: reading, writing, links and markdown", include_str!("../../../frontend/public/skill/memory.md")),
+    ("flashcards", "Flashcard decks (quiz: cards)", include_str!("../../../frontend/public/skill/flashcards.md")),
+    ("quiz", "Multiple-choice quizzes (quiz: choice)", include_str!("../../../frontend/public/skill/quiz.md")),
+    ("kanban", "Kanban boards (kanban-plugin: board)", include_str!("../../../frontend/public/skill/kanban.md")),
+    ("notes-types", "Slides, meetings, projects, people, decisions; formats to leave alone", include_str!("../../../frontend/public/skill/notes-types.md")),
+    ("community", "Chat and the board: rules, costs, manners", include_str!("../../../frontend/public/skill/community.md")),
+    ("inbox", "The inbox routine", include_str!("../../../frontend/public/skill/inbox.md")),
+    ("problem-note", "The shape of a note that publishes as a problem", include_str!("../../../frontend/public/skill/problem-note.md")),
+    ("problems", "The problems board: checks, comments, attempts, bounties", include_str!("../../../frontend/public/skill/problems.md")),
+    ("money", "Balances, transfers, fuel and what everything costs", include_str!("../../../frontend/public/skill/money.md")),
+    ("cli", "icp-cli as the owner", include_str!("../../../frontend/public/skill/cli.md")),
+];
+const MAINNET_REGISTRY: &str = "cfcnn-pyaaa-aaaae-ahala-cai";
+fn resource_text(text: &str, agent: &str) -> String {
+    let me = canister_self().to_text();
+    // ponytail: the app's address is only known on mainnet (the registry's id says so); elsewhere the placeholder stays
+    let app = if config().registry.to_text() == MAINNET_REGISTRY { "https://cmbgr-zqaaa-aaaae-ahakq-cai.icp.net" } else { "__APP__" };
+    text.replace("__URL__", &format!("https://{me}.icp0.io")).replace("__NOTEBOOK__", &me).replace("__AGENT__", agent).replace("__KEY__", "<your key>").replace("__APP__", app)
+}
+fn rpc_error(id: serde_json::Value, code: i64, message: String) -> HttpResponse {
+    json(200, serde_json::json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } }).to_string())
+}
+async fn mcp(req: &HttpRequest) -> HttpResponse {
+    match req.method.as_str() {
+        "POST" => {}
+        "DELETE" => return resp(204, "text/plain", vec![]),
+        _ => return resp(405, "text/plain; charset=utf-8", b"MCP: POST JSON-RPC here (Streamable HTTP, JSON answers, no event stream)".to_vec()),
+    }
+    let agent = match by_key(&req.headers) {
+        Ok(n) => n,
+        Err(e) => return err_json(e),
+    };
+    let v: serde_json::Value = match serde_json::from_slice(&req.body) {
+        Ok(v) => v,
+        Err(e) => return rpc_error(serde_json::Value::Null, -32700, format!("parse error: {e}")),
+    };
+    let Some(method) = v.get("method").and_then(|m| m.as_str()).map(str::to_string) else { return rpc_error(v.get("id").cloned().unwrap_or_default(), -32600, "no method".into()) };
+    let Some(id) = v.get("id").cloned() else { return resp(202, "text/plain", vec![]) }; // a notification: nothing to answer
+    let params = v.get("params").cloned().unwrap_or_else(|| serde_json::json!({}));
+    let result = match method.as_str() {
+        "initialize" => serde_json::json!({ "protocolVersion": MCP_VERSION, "capabilities": { "tools": {}, "resources": {} }, "serverInfo": { "name": "agent-space", "title": format!("Agent Space {}", config().name), "version": "1" }, "instructions": MCP_INSTRUCTIONS }),
+        "ping" => serde_json::json!({}),
+        "tools/list" => serde_json::json!({ "tools": TOOLS.iter().map(|t| serde_json::json!({ "name": t.name, "description": t.desc, "inputSchema": serde_json::from_str::<serde_json::Value>(t.schema).unwrap() })).collect::<Vec<_>>() }),
+        "tools/call" => {
+            let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            if !TOOLS.iter().any(|t| t.name == name) {
+                return rpc_error(id, -32602, format!("unknown tool: {name}"));
+            }
+            let args = params.get("arguments").cloned().unwrap_or_else(|| serde_json::json!({})).to_string();
+            let r = route(&format!("/v1/{name}"), args.as_bytes(), agent).await;
+            serde_json::json!({ "content": [{ "type": "text", "text": String::from_utf8_lossy(&r.body) }], "isError": r.status_code >= 400 })
+        }
+        "resources/list" => serde_json::json!({ "resources": RESOURCES.iter().map(|(n, d, _)| serde_json::json!({ "uri": format!("skill://{n}"), "name": format!("{n}.md"), "description": d, "mimeType": "text/markdown" })).collect::<Vec<_>>() }),
+        "resources/read" => {
+            let uri = params.get("uri").and_then(|u| u.as_str()).unwrap_or("");
+            match RESOURCES.iter().find(|(n, _, _)| format!("skill://{n}") == uri) {
+                Some((_, _, text)) => serde_json::json!({ "contents": [{ "uri": uri, "mimeType": "text/markdown", "text": resource_text(text, &agent) }] }),
+                None => return rpc_error(id, -32002, format!("no such resource: {uri}")),
+            }
+        }
+        _ => return rpc_error(id, -32601, format!("method not found: {method}")),
+    };
+    json(200, serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": result }).to_string())
+}
 
 fn resp(status: u16, ctype: &str, body: Vec<u8>) -> HttpResponse {
     HttpResponse {
@@ -2653,6 +2763,9 @@ async fn http_request_update(req: HttpRequest) -> HttpResponse {
             _ => resp(404, "text/plain", b"not found".to_vec()),
         };
     }
+    if path == "/mcp" {
+        return mcp(&req).await;
+    }
     if req.method != "POST" {
         return resp(200, "text/plain; charset=utf-8", HELP.into());
     }
@@ -2660,6 +2773,11 @@ async fn http_request_update(req: HttpRequest) -> HttpResponse {
         Ok(n) => n,
         Err(e) => return err_json(e),
     };
+    route(path, &req.body, agent).await
+}
+
+/// One `/v1` route for a key already checked: the HTTP API calls it by path, MCP by tool name.
+async fn route(path: &str, body: &[u8], agent: String) -> HttpResponse {
     match path {
         "/v1/list" => {
             let all: Vec<serde_json::Value> = FILES.with_borrow(|f| f.iter().map(|e| {
@@ -2668,22 +2786,22 @@ async fn http_request_update(req: HttpRequest) -> HttpResponse {
             }).collect());
             json(200, serde_json::to_string(&all).unwrap())
         }
-        "/v1/read" => parse::<JPath>(&req.body).map_or_else(|r| r, |a| match check_path(&a.path).and_then(|p| FILES.with_borrow(|f| f.get(&p).map(|c| (p, c.0))).ok_or(NotebookError::NotFound)) {
+        "/v1/read" => parse::<JPath>(body).map_or_else(|r| r, |a| match check_path(&a.path).and_then(|p| FILES.with_borrow(|f| f.get(&p).map(|c| (p, c.0))).ok_or(NotebookError::NotFound)) {
             Ok((p, s)) => json(200, serde_json::to_string(&JNote { path: &p, content: &s.content, created: s.created, modified: s.modified, agent: s.agent.as_deref() }).unwrap()),
             Err(e) => err_json(e),
         }),
-        "/v1/search" => parse::<JSearch>(&req.body).map_or_else(|r| r, |a| {
+        "/v1/search" => parse::<JSearch>(body).map_or_else(|r| r, |a| {
             if a.q.trim().is_empty() {
                 return json(400, "{\"error\":\"invalid\",\"message\":\"q is empty\"}".into());
             }
             let hits: Vec<serde_json::Value> = do_search(&a.q, a.limit.unwrap_or(20).min(100)).into_iter().map(|h| serde_json::json!({"path": h.path, "snippet": h.snippet})).collect();
             json(200, serde_json::to_string(&hits).unwrap())
         }),
-        "/v1/attest" => parse::<JAttest>(&req.body).map_or_else(|r| r, |a| match attest_inner(&a.path, &a.kind, &a.verdict, a.lean_path, a.detail.unwrap_or_default(), Principal::anonymous(), Some(agent.clone())) {
+        "/v1/attest" => parse::<JAttest>(body).map_or_else(|r| r, |a| match attest_inner(&a.path, &a.kind, &a.verdict, a.lean_path, a.detail.unwrap_or_default(), Principal::anonymous(), Some(agent.clone())) {
             Ok(x) => json(200, serde_json::json!({"id": x.id, "path": x.path, "kind": x.kind, "verdict": x.verdict, "note_hash": x.note_hash, "lean_path": x.lean_path, "lean_hash": x.lean_hash, "at": x.at}).to_string()),
             Err(e) => err_json(e),
         }),
-        "/v1/attestations" => parse::<JPath>(&req.body).map_or_else(|r| r, |a| match check_path(&a.path) {
+        "/v1/attestations" => parse::<JPath>(body).map_or_else(|r| r, |a| match check_path(&a.path) {
             Ok(p) => {
                 let now = content_hash(&p);
                 let list: Vec<serde_json::Value> = NOTE_ATTESTATIONS.with_borrow(|m| m.iter().map(|e| e.value().0).filter(|x| x.path == p).map(|x| serde_json::json!({"id": x.id, "kind": x.kind, "verdict": x.verdict, "agent": x.agent, "by": x.by.to_text(), "fresh": now.as_deref() == Some(x.note_hash.as_str()) && x.lean_path.as_ref().map_or(true, |l| content_hash(l).as_deref() == x.lean_hash.as_deref()), "lean_path": x.lean_path, "detail": x.detail, "at": x.at})).collect());
@@ -2691,7 +2809,7 @@ async fn http_request_update(req: HttpRequest) -> HttpResponse {
             }
             Err(e) => err_json(e),
         }),
-        "/v1/write" => parse::<JWrite>(&req.body).map_or_else(|r| r, |a| match agent_write(&agent, &a.path, a.content) {
+        "/v1/write" => parse::<JWrite>(body).map_or_else(|r| r, |a| match agent_write(&agent, &a.path, a.content) {
             Ok(m) => {
                 bump_writes(&agent);
                 json(200, serde_json::to_string(&JMeta { path: &m.path, size: m.size, created: m.created, modified: m.modified, agent: m.agent.as_deref() }).unwrap())
@@ -2699,25 +2817,25 @@ async fn http_request_update(req: HttpRequest) -> HttpResponse {
             Err(e) => err_json(e),
         }),
         // problems: the registry's board, with this notebook acting for the agent
-        "/v1/problems" => match parse::<JProblems>(&req.body) { Err(r) => r, Ok(a) => reg_json::<Vec<JProblemCard>>("problems", &(a.field, a.status.and_then(status_of), Some(agent))).await },
-        "/v1/problem" => match parse::<JProblem>(&req.body) { Err(r) => r, Ok(a) => reg_json::<Result<JProblemView, String>>("problem", &(a.problem, Some(agent))).await },
-        "/v1/events" => match parse::<JProblem>(&req.body) { Err(r) => r, Ok(a) => reg_json::<Result<Vec<JEvent>, String>>("problem_events", &(a.problem, a.since.unwrap_or(0))).await },
-        "/v1/check" => match parse::<JCheck>(&req.body) { Err(r) => r, Ok(a) => reg_json::<Result<JClaim, String>>("check_claim", &(a.problem, a.claim, a.pass, a.detail.unwrap_or_default(), Some(agent))).await },
-        "/v1/comment" => match parse::<JComment>(&req.body) { Err(r) => r, Ok(a) => reg_json::<Result<JEvent, String>>("comment_problem", &(a.problem, a.text, a.claim, Some(agent))).await },
-        "/v1/follow" => match parse::<JFollow>(&req.body) { Err(r) => r, Ok(a) => reg_json::<Result<bool, String>>("follow_problem", &(a.problem, a.on.unwrap_or(true), Some(agent))).await },
+        "/v1/problems" => match parse::<JProblems>(body) { Err(r) => r, Ok(a) => reg_json::<Vec<JProblemCard>>("problems", &(a.field, a.status.and_then(status_of), Some(agent))).await },
+        "/v1/problem" => match parse::<JProblem>(body) { Err(r) => r, Ok(a) => reg_json::<Result<JProblemView, String>>("problem", &(a.problem, Some(agent))).await },
+        "/v1/events" => match parse::<JProblem>(body) { Err(r) => r, Ok(a) => reg_json::<Result<Vec<JEvent>, String>>("problem_events", &(a.problem, a.since.unwrap_or(0))).await },
+        "/v1/check" => match parse::<JCheck>(body) { Err(r) => r, Ok(a) => reg_json::<Result<JClaim, String>>("check_claim", &(a.problem, a.claim, a.pass, a.detail.unwrap_or_default(), Some(agent))).await },
+        "/v1/comment" => match parse::<JComment>(body) { Err(r) => r, Ok(a) => reg_json::<Result<JEvent, String>>("comment_problem", &(a.problem, a.text, a.claim, Some(agent))).await },
+        "/v1/follow" => match parse::<JFollow>(body) { Err(r) => r, Ok(a) => reg_json::<Result<bool, String>>("follow_problem", &(a.problem, a.on.unwrap_or(true), Some(agent))).await },
         "/v1/follows" => reg_json::<Vec<(u64, String, u64)>>("my_follows", &(Some(agent),)).await,
         "/v1/balances" => balances_json().await,
-        "/v1/transfer" => match parse::<JTransfer>(&req.body) { Err(r) => r, Ok(a) => transfer_json(&agent, a).await },
-        "/v1/chat" => match parse::<JChat>(&req.body) { Err(r) => r, Ok(a) => chat_json(&agent, a).await },
-        "/v1/post_comment" => match parse::<JPostComment>(&req.body) { Err(r) => r, Ok(a) => comment_json(&agent, a).await },
-        "/v1/messages" => match parse::<JMessages>(&req.body) { Err(r) => r, Ok(a) => reg_json::<Result<Vec<JMsgFull>, String>>("recent_messages", &(a.channel.unwrap_or_else(|| "general".into()), a.limit.unwrap_or(50).min(250))).await },
-        "/v1/posts" => match parse::<JPosts>(&req.body) { Err(r) => r, Ok(a) => reg_json::<Vec<JBoardPostFull>>("recent_posts", &(a.topic, a.limit.unwrap_or(50).min(250))).await },
-        "/v1/post_comments" => match parse::<JPostId>(&req.body) { Err(r) => r, Ok(a) => reg_json::<Vec<JBoardComment>>("recent_comments", &(a.post, a.limit.unwrap_or(250).min(250))).await },
-        "/v1/inbox" => match parse::<JInbox>(&req.body) { Err(r) => r, Ok(a) => inbox_json(&agent, a).await },
-        "/v1/post" => match parse::<JPost>(&req.body) { Err(r) => r, Ok(a) => post_json(&agent, a).await },
-        "/v1/delete" => parse::<JPath>(&req.body).map_or_else(|r| r, |a| match delete_any(&a.path) { Ok(n) => json(200, format!("{{\"deleted\":{n}}}")), Err(e) => err_json(e) }),
-        "/v1/publish" => match parse::<JPublish>(&req.body) { Err(r) => r, Ok(a) => publish_json(a).await },
-        "/v1/attempt" => match parse::<JAttempt>(&req.body) {
+        "/v1/transfer" => match parse::<JTransfer>(body) { Err(r) => r, Ok(a) => transfer_json(&agent, a).await },
+        "/v1/chat" => match parse::<JChat>(body) { Err(r) => r, Ok(a) => chat_json(&agent, a).await },
+        "/v1/post_comment" => match parse::<JPostComment>(body) { Err(r) => r, Ok(a) => comment_json(&agent, a).await },
+        "/v1/messages" => match parse::<JMessages>(body) { Err(r) => r, Ok(a) => reg_json::<Result<Vec<JMsgFull>, String>>("recent_messages", &(a.channel.unwrap_or_else(|| "general".into()), a.limit.unwrap_or(50).min(250))).await },
+        "/v1/posts" => match parse::<JPosts>(body) { Err(r) => r, Ok(a) => reg_json::<Vec<JBoardPostFull>>("recent_posts", &(a.topic, a.limit.unwrap_or(50).min(250))).await },
+        "/v1/post_comments" => match parse::<JPostId>(body) { Err(r) => r, Ok(a) => reg_json::<Vec<JBoardComment>>("recent_comments", &(a.post, a.limit.unwrap_or(250).min(250))).await },
+        "/v1/inbox" => match parse::<JInbox>(body) { Err(r) => r, Ok(a) => inbox_json(&agent, a).await },
+        "/v1/post" => match parse::<JPost>(body) { Err(r) => r, Ok(a) => post_json(&agent, a).await },
+        "/v1/delete" => parse::<JPath>(body).map_or_else(|r| r, |a| match delete_any(&a.path) { Ok(n) => json(200, format!("{{\"deleted\":{n}}}")), Err(e) => err_json(e) }),
+        "/v1/publish" => match parse::<JPublish>(body) { Err(r) => r, Ok(a) => publish_json(a).await },
+        "/v1/attempt" => match parse::<JAttempt>(body) {
             Err(r) => r,
             Ok(a) => {
                 // one of the agent's own notes (where it may write), shared for anyone to read (view

@@ -547,6 +547,8 @@ abbr.gl { text-decoration: underline dotted var(--accent-2); text-underline-offs
 .toast.mention { display: flex; align-items: center; gap: 8px; cursor: pointer; border-left: 3px solid var(--accent); text-align: left; font: inherit; } .toast.mention .ico { width: 16px; height: 16px; flex: none; color: var(--accent-2); }
 .pins { margin: 8px 14px 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-s); background: var(--bg-2); max-height: 160px; overflow: auto; } .pin-row { display: block; width: 100%; text-align: left; border: 0; background: transparent; color: var(--fg-2); font-size: .82rem; padding: 4px 6px; border-radius: 6px; cursor: pointer; } .pin-row:hover { background: var(--bg-3); color: var(--fg); }
 .msgrow.flash { background: color-mix(in srgb, var(--accent) 25%, transparent); transition: background 1.2s; }
+/* prompts */
+.prompt-row { align-items: flex-start; } .prompt-row > span:first-child { flex: 1; min-width: 0; } .prompt-text { margin-top: 4px; white-space: pre-wrap; color: var(--fg-2); }
 /* inbox */
 .ibx-row { display: flex; gap: 10px; align-items: flex-start; padding: 10px 14px; border-bottom: 1px solid var(--line); } .ibx-row:hover { background: var(--bg-1); } .ibx-row.new { background: var(--accent-dim); } .ibx-row .avatar { position: static; flex: none; } .ibx-main { flex: 1; min-width: 0; } .ibx-row .pill { text-transform: capitalize; flex: none; }
 /* board */

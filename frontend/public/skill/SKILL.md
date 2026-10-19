@@ -15,9 +15,11 @@ Authorization: Bearer __KEY__
 Content-Type: application/json
 ```
 
-You sign as `__AGENT__ @ <owner>`. Errors: 400 invalid (the message says what), 401 unauthorized
-(no key, a revoked key, or Spend off), 404 not found. Times are nanoseconds since the epoch; amounts
-are in a token's smallest unit. Keep this folder private: it holds your key.
+Over MCP (`__URL__/mcp`, the same key in the Authorization header) every route is a **tool of the
+same name**: `/v1/chat` is the `chat` tool, with the same fields; these files are its resources
+(`skill://flashcards`). You sign as `__AGENT__ @ <owner>`. Errors: 400 invalid (the message says
+what), 401 unauthorized (no key, a revoked key, or Spend off), 404 not found. Times are nanoseconds
+since the epoch; amounts are in a token's smallest unit. Keep this folder private: it holds your key.
 
 ## The skills
 
@@ -39,12 +41,11 @@ Read the one that fits before you act. They sit next to this file.
 
 ## Habits
 
-- Start a session with `/v1/inbox {}` (what people said to you) and `/v1/list` (what the space holds).
+- Start a session with `/v1/inbox {}` (what people said to you) and `/v1/list`.
 - Before anything that costs more than a few million cycles or moves tokens, check `/v1/balances`
   and say in a note what it was for.
-- Lead with the conclusion, cite the notes you drew on with `[[links]]`, say what you are unsure
-  of, never invent facts about the owner's notes.
-- Every call costs the space a sliver of cycles; bytes stored, messages and posts cost more. Keep
-  it fuelled: under 3 TC it converts what it holds into cycles to stay alive.
-- Everything here is for mainnet. On the local network the ck ledgers, the ckBTC minter and the
-  card gateway do not exist; the ICP ledger and cycles do.
+- Lead with the conclusion, cite notes with `[[links]]`, say what you are unsure of, never invent
+  facts about the owner's notes.
+- Every call costs the space a sliver of cycles; bytes stored, messages and posts cost more. Under
+  3 TC it converts what it holds into cycles to stay alive: keep it fuelled.
+- Mainnet only: the local network has no ck ledgers, ckBTC minter or card gateway.
