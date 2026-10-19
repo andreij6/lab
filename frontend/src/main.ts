@@ -50,7 +50,6 @@ import { isAttachment, renderDiagrams, renderMarkdown } from "./markdown";
 import { section, backlinkContext, base, buildIndex, dir, frontmatter, fuzzy, graphData, headings, resolve, search, setFrontmatter, stem, tree, untitled, type Folder, type Index } from "./notes";
 import { unzip } from "./unzip";
 import { approveWithOisy, principalSubaccount, transferWithOisy } from "./oisy";
-import { cacheDel, cacheGet, cacheSet, clearQueue, queueWrite, queued, type Queued } from "./offline";
 import { registerSW } from "virtual:pwa-register";
 import { THEMES, applyTheme, loadThemeState, saveThemeState, type ThemeState } from "./themes";
 import { zip } from "./zip";
@@ -449,7 +448,6 @@ const S = {
   org: { q: "", selected: new Set<string>(), triage: false, triageIdx: 0 } as { q: string; sort?: { key: string; dir: number }; selected: Set<string>; triage: boolean; triageIdx: number },
   trips: { mine: [] as Watch[], watching: [] as Watch[] },
   kit: {} as { claimsFor?: string },
-  conflicts: [] as { canister: string; path: string; mine: string; theirs: string }[],
   board: undefined as { topic?: string; sort: "hot" | "new" | "top"; posts: Post[]; open?: Post; comments: PostComment[]; channels: Channel[]; member?: Member; fee: bigint; loading: boolean; replyTo?: bigint; github?: string; showSide: boolean; showAside: boolean } | undefined,
   /** projects per notebook for the list page footer */
   projectsByNotebook: new Map<string, { active: number; done: number }>(),
@@ -467,9 +465,6 @@ const S = {
   snapshots: undefined as SnapshotInfo[] | undefined,
   price: 0n,
   oisyAccount: store("nb-oisy") ?? "",
-  offline: !navigator.onLine,
-  fromCache: false,
-  pendingWrites: 0,
   graphStyle: { colorBy: (store("nb-graph-color") ?? "none") as "none" | "folder" | "tag", hideAttachments: store("nb-graph-noattach") === "1", query: "", orphans: false },
   topupAmount: "0.5",
   error: "",
@@ -671,7 +666,7 @@ function alignmentHtml(c: string): string {
   const ledger = decls.filter((d) => refs.includes(d.name) || (!refs.length && (d.kind === "theorem" || d.kind === "lemma"))).map((d) => ({ d, missing: unmentionedHyps(d, prose ?? d.doc) }));
   const attest = [...(S.noteAttest.get(c) ?? []), ...(lean !== c ? S.noteAttest.get(lean) ?? [] : [])].sort((a, b) => Number(b.attestation.at - a.attestation.at));
   const who = (a: AttestationView) => a.attestation.agent ? `agent ${esc(a.attestation.agent)}` : a.attestation.by.toText() === S.principal ? "you" : shortPrincipal(a.attestation.by.toText());
-  const can = !S.frozen && !S.fromCache;
+  const can = !S.frozen;
   return `<div class="pane-title">Formal alignment${al ? ` <span class="count">${Math.round(al.coverage * 100)}%</span>` : ""}</div>
     <div class="align">
       <div class="small muted">${lean === c ? "This is the Lean note." : `Lean: <a href="#" data-action="open" data-path="${esc(lean)}">${esc(title(lean))}</a>`}${decls.some((d) => d.flags.length) ? ` · <span class="danger">${decls.flatMap((d) => d.flags).length} flag${decls.flatMap((d) => d.flags).length === 1 ? "" : "s"}: ${esc([...new Set(decls.flatMap((d) => d.flags))].join(", "))}</span>` : ""}</div>
@@ -1267,14 +1262,10 @@ function shell(body: string): string {
   const alert = isSandbox()
     ? `<div class="alert-bar sandbox-bar"><span class="grow">🧪 <b>Browser sandbox</b><span class="lbl"> · stored in this browser only, no ICP needed</span></span><button type="button" class="btn btn-primary" data-action="sandbox-mint" title="Spawn a canister of your own and copy every note into it">${icon("bolt")}Mint<span class="lbl"> to a canister</span></button>${S.identity ? `<a class="btn btn-ghost" href="#/" data-action="nav">${icon("list")}<span class="lbl">Agent Space</span></a>` : `<button type="button" class="btn btn-ghost" data-action="sign-in" title="Sign in with Internet Identity">${icon("out")}<span class="lbl">Sign in with Internet Identity</span></button>`}</div>`
     : S.frozen
-    ? `<div class="alert-bar">${icon("bolt")}This space is frozen: it cannot answer until it is topped up. ${S.notes?.length ? "You are seeing the last copy saved on this device." : ""} <button type="button" class="btn btn-ghost" data-action="freeze-modal">Top up</button></div>`
-    : S.conflicts.length
-    ? `<div class="alert-bar">${icon("split")}${S.conflicts.length} note${S.conflicts.length === 1 ? " was" : "s were"} changed here offline and elsewhere too. <button type="button" class="btn btn-ghost" data-action="conflicts-open">Choose versions</button></div>`
-    : S.offline || S.fromCache
-    ? `<div class="alert-bar">${icon("bolt")}You are offline${S.pendingWrites ? `; ${S.pendingWrites} change${S.pendingWrites === 1 ? "" : "s"} waiting to sync` : ""}.</div>`
+    ? `<div class="alert-bar">${icon("bolt")}This space is frozen: it cannot answer until it is topped up. <button type="button" class="btn btn-ghost" data-action="freeze-modal">Top up</button></div>`
     : low && S.tab !== "manage"
       ? `<div class="alert-bar">${icon("bolt")}Low on cycles: ${tc(i!.cycles)} left. <button type="button" class="btn btn-ghost" data-action="tab" data-tab="manage">Top up</button></div>`
-      : S.pendingWrites ? `<div class="alert-bar">${icon("refresh")}${S.pendingWrites} offline change${S.pendingWrites === 1 ? "" : "s"} waiting. <button type="button" class="btn btn-ghost" data-action="sync">Sync now</button></div>` : "";
+      : "";
   return shellBody(body, i, low, alert, mobileNav);
 }
 /** The vertical icon bar: sections of the open notebook on top, the app-wide places at the bottom. From a page without a notebook, a section opens the last notebook. */
@@ -1406,7 +1397,7 @@ function aside(): string {
   const c = cur();
   if (!c) return `<div class="empty-side">Backlinks, outgoing links and a local graph appear here when a note is open.</div>`;
   if (S.asideMode === "comments") markCommentsSeen(c);
-  if (S.asideMode === "comments") return `${asideTabs(c)}<div class="threads">${threadsHtml(S.comments, c, { canComment: !S.frozen && !S.fromCache, owner: true })}</div>`;
+  if (S.asideMode === "comments") return `${asideTabs(c)}<div class="threads">${threadsHtml(S.comments, c, { canComment: !S.frozen, owner: true })}</div>`;
   const all = paths();
   const back = [...(S.idx.backlinks.get(c) ?? [])].filter((p) => p !== c);
   const out = [...(S.idx.links.get(c) ?? [])].filter((p) => p !== c);
@@ -2396,8 +2387,7 @@ async function addStarters(chosen: Set<Tab>) {
   const files = examples(new Set(chosen), dayKey(new Date())).filter(([p]) => !have.has(p));
   if (!files.length) return;
   try {
-    if (S.offline) { for (const [p, c] of files) await createQuiet(p, c); }
-    else {
+    {
       const r = await nb().write_many(files, false);
       if (r.__kind__ === "Err") throw new Error(describe(r.Err));
       await loadNotebook();
@@ -4277,16 +4267,8 @@ async function addToPeriodic(kind: Period, path: string) {
 /** Create a note without opening it (for rollups, links and generated files). */
 async function createQuiet(path: string, content: string) {
   if (!S.notes || note(path)) return;
-  try {
-    if (S.offline || S.fromCache) throw new Error("offline");
-    const m = unwrap(await nb().write(path, content));
-    S.notes.push({ path, content, created: m.created, modified: m.modified });
-  } catch (e) {
-    if (!(S.offline || S.fromCache || !navigator.onLine)) throw e;
-    await queueWrite({ canister: S.notebook!.canister.toText(), path, content, at: Date.now(), base: "0" });
-    S.notes.push({ path, content, created: BigInt(Date.now()) * 1_000_000n, modified: 0n });
-    S.pendingWrites = (await queued()).filter((q) => q.canister === S.notebook!.canister.toText()).length;
-  }
+  const m = unwrap(await nb().write(path, content));
+  S.notes.push({ path, content, created: m.created, modified: m.modified });
   S.notes.sort((x, y) => x.path.localeCompare(y.path));
   if (dir(path) && !S.folders.includes(dir(path))) S.folders = [...S.folders, dir(path)].sort();
   reindex();
@@ -5778,8 +5760,7 @@ async function signIn() {
   }
 }
 async function signOut() {
-  const pending = S.pendingWrites ? ` ${S.pendingWrites} change${S.pendingWrites === 1 ? " is" : "s are"} still waiting to sync and will be lost.` : "";
-  if ((await ask({ title: "Sign out?", body: `You will need Internet Identity to sign back in.${pending}`, ok: "Sign out", danger: !!pending })) === null) return;
+  if ((await ask({ title: "Sign out?", body: "You will need Internet Identity to sign back in.", ok: "Sign out" })) === null) return;
   await saveAll();
   if (devMode) {
     store(DEV_ON, null);
@@ -5804,7 +5785,6 @@ async function loadNotebooks() {
     registry().price().then((p) => { S.price = p; }).catch(() => {});
     registry().tokens().then((t) => { S.tokens = t; }).catch(() => {});
     S.notebooks = await registry().my_notebooks();
-    void cacheSet("nb:list", S.notebooks);
     S.error = "";
     // home is the space itself once there is one; without one, the gate ends on the Fuel step
     if (location.hash === "#/" && S.notebooks[0] && asVerified()) { location.hash = `#/notebook/${S.notebooks[0].canister.toText()}`; return; }
@@ -5820,8 +5800,8 @@ async function loadNotebooks() {
     }));
     void loadActivity();
   } catch (e) {
-    const cached = await cacheGet<NotebookRec[]>("nb:list");
-    if (cached?.length) { S.notebooks = cached; S.offline = true; } else { S.error = errMsg(e); S.notebooks = []; }
+    S.error = errMsg(e);
+    S.notebooks = [];
   }
   render();
 }
@@ -5970,11 +5950,9 @@ async function loadNotebook() {
   const [cm, pub] = await Promise.all([a.all_comments(), a.published()]);
   S.comments = cm.__kind__ === "Ok" ? cm.Ok : [];
   S.published = pub ?? null;
-  S.fromCache = false;
   S.notes = notes.sort((x, y) => x.path.localeCompare(y.path));
   attachments.clear();
   S.folders = unwrap(folders);
-  void cacheSet(`nb:${S.notebook!.canister.toText()}`, { notes: S.notes, folders: S.folders, settings: S.settings, at: Date.now() });
   S.info = info;
   S.topups = topups;
   void nb().usage().then((u) => { S.usage = u; }).catch(() => {});
@@ -6014,36 +5992,22 @@ async function openNotebook(id: string, path?: string) {
     if (path && note(path)) await open(path);
     void sweepBoards();
     if (!isSandbox()) {
-      if (!S.settings.onboarded && !S.fromCache) setTimeout(() => onboarding(), 400);
+      if (!S.settings.onboarded) setTimeout(() => onboarding(), 400);
       void loadHealth(id).then((h) => { if (urgent(h) && S.notebook?.canister.toText() === id) { render(); freezeModal(id, h!); } });
     }
   } catch (e) {
     const h = await loadHealth(id);
-    const cached = await cacheGet<{ notes: Note[]; folders: string[]; settings: Settings; at: number }>(`nb:${id}`);
+    S.notes = [];
+    S.folders = [];
+    reindex();
     if (h?.frozen) {
       S.frozen = true;
-      S.notes = cached?.notes ?? [];
-      S.folders = cached?.folders ?? [];
-      S.fromCache = true;
-      reindex();
       render();
       freezeModal(id, h);
       return;
     }
-    if (cached) {
-      S.notes = cached.notes;
-      S.folders = cached.folders;
-      S.settings = parseSettings(cached.settings);
-      S.fromCache = true;
-      reindex();
-      restoreTabs();
-      toast(`Offline: showing the copy from ${ago(BigInt(cached.at) * 1_000_000n)}. Edits are queued until you are back online.`, "info");
-    } else {
-      toast(errMsg(e), "error");
-      S.notes = [];
-    }
+    toast(errMsg(e), "error");
   }
-  S.pendingWrites = (await queued()).filter((q) => q.canister === id).length;
   render();
   if (path && note(path)) await open(path);
   else if (cur()) syncHash();
@@ -6222,7 +6186,6 @@ async function save(path: string) {
   d.saving = true;
   status(path);
   try {
-    if (S.offline || S.fromCache) throw new Error("offline");
     const m = unwrap(await nb().write(path, content));
     const n = note(path);
     if (n) {
@@ -6234,113 +6197,14 @@ async function save(path: string) {
     renderSide();
     if (!d.dirty) void runRules(path);
     if (!d.dirty) republishProblem(path, content);
-    void cacheSet(`nb:${S.notebook.canister.toText()}`, { notes: S.notes, folders: S.folders, settings: S.settings, at: Date.now() });
   } catch (e) {
-    if (errMsg(e) === "offline" || !navigator.onLine) {
-      await queueWrite({ canister: S.notebook.canister.toText(), path, content, at: Date.now(), base: String(note(path)?.modified ?? 0n) });
-      const n = note(path);
-      if (n) n.content = content;
-      if (d.text === content) d.dirty = false;
-      S.pendingWrites = (await queued()).filter((q) => q.canister === S.notebook!.canister.toText()).length;
-      toast(`Saved offline; ${S.pendingWrites} change${S.pendingWrites === 1 ? "" : "s"} will sync when you are back online.`, "info");
-    } else toast(`Could not save ${path}: ${errMsg(e)}`, "error");
+    toast(`Could not save ${path}: ${errMsg(e)}`, "error");
   }
   d.saving = false;
   status(path);
   if (d.dirty) scheduleSave(path);
 }
 
-function conflictDialog() {
-  document.querySelector(".scrim.conflicts")?.remove();
-  const c = S.conflicts[0];
-  if (!c) return;
-  const scrim = document.createElement("div");
-  scrim.className = "scrim conflicts";
-  scrim.innerHTML = `<div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="cf-t"><h2 id="cf-t">${icon("split")} ${esc(c.path)}</h2><p class="muted small">You changed this note offline, and it was also changed elsewhere${S.conflicts.length > 1 ? ` (1 of ${S.conflicts.length})` : ""}.</p>
-    <div class="grid2 conflict"><div><div class="band-title">Yours (offline)</div><pre>${esc(c.mine)}</pre></div><div><div class="band-title">Theirs (now on the canister)</div><pre>${esc(c.theirs)}</pre></div></div>
-    <div class="actions"><button type="button" class="btn" data-action="conflict-theirs" data-i="0">Keep theirs</button><button type="button" class="btn" data-action="conflict-both" data-i="0">Keep both</button><button type="button" class="btn btn-primary" data-action="conflict-mine" data-i="0">Keep mine</button></div></div>`;
-  scrim.addEventListener("click", (e) => { if (e.target === scrim) scrim.remove(); });
-  document.body.append(scrim);
-}
-async function resolveConflict(i: number, choice: "mine" | "theirs" | "both") {
-  const c = S.conflicts[i];
-  if (!c) return;
-  try {
-    const api = notebookOf(c.canister);
-    if (choice === "mine") unwrap(await api.write(c.path, c.mine));
-    if (choice === "both") { const copy = `${stem(c.path)} (offline copy)${c.path.endsWith(".md") ? ".md" : c.path.slice(c.path.lastIndexOf("."))}`; unwrap(await api.write(copy, c.mine)); }
-    S.conflicts.splice(i, 1);
-    await cacheSet("conflicts", S.conflicts);
-    if (S.notebook?.canister.toText() === c.canister) await loadNotebook();
-  } catch (e) { return toast(errMsg(e), "error"); }
-  document.querySelector(".scrim.conflicts")?.remove();
-  render();
-  if (S.conflicts.length) conflictDialog(); else toast("All versions sorted.", "ok");
-}
-/** Keep every notebook on this device for offline use: notes, folders and settings in IndexedDB. */
-async function keepOffline() {
-  const list = S.notebooks ?? [];
-  let n = 0;
-  for (const v of list) {
-    const id = v.canister.toText();
-    try {
-      const a = notebookOf(id);
-      const notes: Note[] = [];
-      let after: string | null = null;
-      do { const page: { notes: Note[]; next?: string | null } = unwrap(await a.read_page(after, 300)); notes.push(...page.notes); after = page.next ?? null; } while (after);
-      const [folders, settings] = await Promise.all([a.folders(), a.get_settings()]);
-      let st: Partial<Settings> = {};
-      try { st = settings.__kind__ === "Ok" && settings.Ok ? JSON.parse(settings.Ok) : {}; } catch { /* defaults */ }
-      await cacheSet(`nb:${id}`, { notes, folders: unwrap(folders), settings: parseSettings(st), at: Date.now() });
-      n++;
-    } catch { /* frozen or unreachable: skip */ }
-  }
-  await cacheSet("nb:list", list);
-  store("nb-offline-at", String(Date.now()));
-  toast(`${n} space${n === 1 ? " is" : "s are"} on this device for offline use.`, "ok");
-  render();
-}
-/** Replay writes made offline, then reload the notebook. */
-async function syncQueue() {
-  const all = await queued();
-  if (!all.length || !S.identity) return;
-  let ok = 0;
-  const left: Queued[] = [];
-  S.conflicts = (await cacheGet<typeof S.conflicts>("conflicts")) ?? [];
-  let clash = 0;
-  for (const q of all) {
-    try {
-      const api = notebookOf(q.canister);
-      if (q.base !== undefined) {
-        const rr = await api.read(q.path);
-        const theirs = rr.__kind__ === "Ok" ? rr.Ok : undefined;
-        // changed on the server since this device went offline: keep both, let the person choose
-        if (theirs && theirs.modified > BigInt(q.base) && theirs.content !== q.content) { S.conflicts.push({ canister: q.canister, path: q.path, mine: q.content, theirs: theirs.content }); clash++; continue; }
-      }
-      const r = await api.write(q.path, q.content);
-      if (r.__kind__ === "Err") throw new Error(describe(r.Err));
-      ok++;
-    } catch {
-      left.push(q);
-    }
-  }
-  await clearQueue();
-  for (const q of left) await queueWrite(q);
-  await cacheSet("conflicts", S.conflicts);
-  S.pendingWrites = left.length;
-  if (ok) toast(`Synced ${ok} offline change${ok === 1 ? "" : "s"}.`, "ok");
-  if (clash) toast(`${clash} note${clash === 1 ? " was" : "s were"} also changed elsewhere; choose which version to keep.`, "info");
-  if (S.notebook && !left.length) {
-    try {
-      await loadNotebook();
-      render();
-    } catch {
-      /* still offline */
-    }
-  }
-}
-window.addEventListener("online", () => { S.offline = false; render(); void syncQueue(); });
-window.addEventListener("offline", () => { S.offline = true; render(); });
 async function saveAll() {
   await Promise.all([...S.drafts.keys()].map((p) => save(p)));
 }
@@ -6383,17 +6247,7 @@ async function newNote(name?: string, folder?: string, paneId?: number, content 
   if (isAgentPath(where)) where = "";
   const path = name ? (/\.(md|ipynb|canvas|sheet|dash)$/i.test(name) ? name : `${name}.md`) : untitled(paths(), where);
   try {
-    let m: { created: bigint; modified: bigint };
-    try {
-      if (S.offline || S.fromCache) throw new Error("offline");
-      m = unwrap(await nb().write(path, content));
-    } catch (e) {
-      if (!(errMsg(e) === "offline" || !navigator.onLine)) throw e;
-      await queueWrite({ canister: S.notebook!.canister.toText(), path, content, at: Date.now(), base: "0" });
-      m = { created: BigInt(Date.now()) * 1_000_000n, modified: 0n };
-      S.pendingWrites = (await queued()).filter((q) => q.canister === S.notebook!.canister.toText()).length;
-      toast("Created offline; it syncs when you are back in range.", "info");
-    }
+    const m = unwrap(await nb().write(path, content));
     S.notes.push({ path, content, created: m.created, modified: m.modified });
     S.notes.sort((x, y) => x.path.localeCompare(y.path));
     if (dir(path) && !S.folders.includes(dir(path))) S.folders = [...S.folders, dir(path)].sort();
@@ -6638,9 +6492,6 @@ async function deleteNotebook() {
   if (r.__kind__ !== "Ok") return void toast(`Not deleted: ${r.Err}`, "error");
   const id = nb.canister.toText();
   S.notebooks = others;
-  void cacheSet("nb:list", others);
-  void cacheDel(`nb:${id}`);
-  void queued().then((q) => cacheSet("queue", q.filter((w) => w.canister !== id)));
   if (store("nb-last")?.includes(id)) store("nb-last", null);
   S.notebook = undefined;
   S.notes = undefined;
@@ -6734,8 +6585,8 @@ async function pdfBytesFor(el: HTMLElement, load: boolean): Promise<Uint8Array |
   const att = el.dataset.pdfAttach;
   if (att) { const d = attachment(att); return d ? dataUrlBytes(d) : undefined; }
   const url = el.dataset.pdfUrl!;
-  let b = pdfBytesMem.get(url) ?? (await cacheGet<Uint8Array>(`pdf:${url}`).catch(() => undefined));
-  if (!b && load) { b = await fetchPdf(url); void cacheSet(`pdf:${url}`, b).catch(() => {}); }
+  let b = pdfBytesMem.get(url);
+  if (!b && load) b = await fetchPdf(url);
   if (b) pdfBytesMem.set(url, b);
   return b;
 }
@@ -8171,8 +8022,6 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
     case "trip-home": { if ((await ask({ title: "Back home?", body: "Your contact stops watching this trip.", ok: "I'm back" })) === null) return; const r = await registry().close_watch(BigInt(el.dataset.id!)); if (r.__kind__ === "Err") return toast(r.Err, "error"); await loadWatches(); toast("Welcome back. Write the review while it is fresh.", "ok"); return render(); }
     case "gear-compare": return gearCompare();
     case "deck-add": { const k = el.dataset.deck!; await createQuiet(`Skills/${k}.md`, DECKS[k]); S.tab = "notes"; return open(`Skills/${k}.md`); }
-    case "conflicts-open": return conflictDialog();
-    case "keep-offline": return keepOffline();
     case "crypto-refresh": case "crypto-watch": case "crypto-trade-add": case "crypto-trade-close": case "crypto-thesis-add": case "crypto-thesis-held": case "crypto-thesis-broke": case "crypto-thesis-share": case "crypto-card": case "crypto-channel": return cryptoAction(action, el);
     case "career-app-add": case "career-board": case "career-followed": case "career-heard": case "career-exp-add": case "career-resume-new": case "career-compile": case "career-feedback": case "career-story-add": case "career-practice": case "career-contacted": case "career-person-add": case "career-channel": return careerAction(action, el);
     case "pdf-load": case "pdf-all": {
@@ -8190,7 +8039,6 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
       return;
     }
     case "nb-delete": return deleteNotebook();
-    case "conflict-mine": case "conflict-theirs": case "conflict-both": return resolveConflict(Number(el.dataset.i), action.slice(9) as "mine" | "theirs" | "both");
     case "chat-clear":
       S.chat.messages = [];
       return render();
@@ -8737,8 +8585,6 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
       return importDialog();
     case "restore":
       return restoreDialog();
-    case "sync":
-      return syncQueue();
     case "share-notebook":
       return shareDialog("", "notebook");
     case "del-comment":
@@ -9612,7 +9458,7 @@ setInterval(() => {
   void notebookOf(sh.canister).ping(sh.path).then((h) => { if (h.__kind__ === "Ok" && S.shared?.path === sh.path) { const now = h.Ok.map((p) => p.toText()); if (now.join() !== (S.shared.here ?? []).join()) { S.shared.here = now; render(); } } }).catch(() => {});
 }, 45_000);
 setInterval(async () => {
-  if (!S.notebook || S.frozen || S.fromCache || document.hidden) return;
+  if (!S.notebook || S.frozen || document.hidden) return;
   try {
     const r = await nb().all_comments();
     if (r.__kind__ !== "Ok") return;
