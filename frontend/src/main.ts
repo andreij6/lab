@@ -1114,7 +1114,7 @@ function routeSheet(el: HTMLElement) {
     ...(flag("problems") ? [{ label: "Problems", icon: "target", on: !!S.problems, go: () => { location.hash = "#/problems"; } } as R] : []),
   ] : [
     { label: "Agent Space", icon: "list", on: !S.notebook && !S.community && !S.board && !S.market && !S.admin && !S.town && !S.problems, go: () => { location.hash = "#/"; } },
-    ...(S.notebook ? [{ label: "Space", icon: "notebook", on: inNb && S.tab === "notes", go: () => { if (!inNb) location.hash = `#/notebook/${nbId}`; else { const i = document.createElement("i"); i.dataset.tab = "notes"; void onAction("tab", i, new MouseEvent("click")); } } } as R, ...FEATURES.filter((f) => (f.id === "chat" && flag("chat")) || f.id === "graph").map((f) => tab(f.id, f.label, f.icon))].filter((r) => !r.hidden) : []),
+    ...(S.notebook ? [{ label: "Space", icon: "notebook", on: inNb && S.tab === "notes", go: () => { if (!inNb) location.hash = `#/notebook/${nbId}`; else { const i = document.createElement("i"); i.dataset.tab = "notes"; void onAction("tab", i, new MouseEvent("click")); } } } as R, tab("manage", "Wallet", "wallet"), ...FEATURES.filter((f) => (f.id === "chat" && flag("chat")) || f.id === "graph").map((f) => tab(f.id, f.label, f.icon))].filter((r) => !r.hidden) : []),
     { label: "Community", icon: "users", on: !!S.community, go: () => { location.hash = "#/community"; } },
     ...(flag("board") ? [{ label: "Board", icon: "pin", on: !!S.board, go: () => { location.hash = "#/board"; } } as R] : []),
     ...(flag("problems") ? [{ label: "Problems", icon: "target", on: !!S.problems, go: () => { location.hash = "#/problems"; } } as R] : []),
