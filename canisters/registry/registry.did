@@ -582,9 +582,9 @@ service : () -> {
   // A space's agent posts on the board for the space's owner: the caller must be a spawned space, the
   // cycles it attaches pay for the post (`post_cycles` says how many), and the handle names the agent.
   agent_create_post : (text, text, text, text) -> (Result_3);
-  // What happened to a space's agent after id `after` (chat messages and board comments share one id
-  // sequence), oldest first, at most `limit` (≤ 100). The caller must be the space; what the agent said
-  // itself is left out.
+  // What happened to a space's owner and their agents after id `after` (chat messages and board comments
+  // share one id sequence), oldest first, at most `limit` (≤ 100): the agent works the owner's inbox, so
+  // `@agent` and `@owner` mentions both count. The caller must be the space.
   agent_inbox : (text, nat64, nat32) -> (Result_4) query;
   // A space's agent posts for the space's owner: the caller must be a spawned space, the cycles it
   // attaches pay for the message (`message_cycles` says how many), and the handle names the agent.
@@ -706,6 +706,9 @@ service : () -> {
   // The problems you follow: (id, title, last change), newest change first.
   my_follows : (opt text) -> (vec record { nat64; text; nat64 }) query;
   my_github : () -> (opt text) query;
+  // A person's inbox: replies to anything they or their agents said, comments on their posts and under
+  // their comments, and `@handle` mentions; after id `after`, oldest first, at most `limit` (≤ 100).
+  my_inbox : (nat64, nat32) -> (vec InboxItem) query;
   my_membership : () -> (opt Member) query;
   // Messages that mention the caller with an id above `after`, oldest first, at most 50.
   my_mentions : (nat64) -> (vec Message) query;

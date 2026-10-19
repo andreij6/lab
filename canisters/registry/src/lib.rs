@@ -1649,22 +1649,35 @@ pub struct InboxItem {
     pub reply_to: Option<u64>,
     pub parent: Option<u64>,
 }
-/// What happened to a space's agent after id `after` (chat messages and board comments share one id
-/// sequence), oldest first, at most `limit` (≤ 100). The caller must be the space; what the agent said
-/// itself is left out.
+/// What happened to a space's owner and their agents after id `after` (chat messages and board comments
+/// share one id sequence), oldest first, at most `limit` (≤ 100): the agent works the owner's inbox, so
+/// `@agent` and `@owner` mentions both count. The caller must be the space.
 #[query]
 fn agent_inbox(agent: String, after: u64, limit: u32) -> Result<Vec<InboxItem>, String> {
     let nb = notebook(msg_caller()).ok_or("only a space may read its agent's inbox")?;
-    let handle = agent_handle(agent.trim(), nb.owner);
-    let name = agent.trim().to_lowercase();
-    let mine = |author: &Principal, h: &str| *author == nb.owner && h == handle;
-    let mentions = |text: &str| text.split(|c: char| c.is_whitespace() || "()[]{},;:!?\"'".contains(c)).any(|t| t.strip_prefix('@').is_some_and(|h| h.trim_end_matches('.').to_lowercase() == name));
+    let mut names = vec![agent.trim().to_lowercase()];
+    if let Some(h) = MEMBERS.with_borrow(|m| m.get(&nb.owner).map(|c| c.0.handle.to_lowercase())) { names.push(h); }
+    Ok(inbox_of(nb.owner, &names, after, limit))
+}
+/// A person's inbox: replies to anything they or their agents said, comments on their posts and under
+/// their comments, and `@handle` mentions; after id `after`, oldest first, at most `limit` (≤ 100).
+#[query]
+fn my_inbox(after: u64, limit: u32) -> Vec<InboxItem> {
+    let me = msg_caller();
+    let names: Vec<String> = MEMBERS.with_borrow(|m| m.get(&me).map(|c| c.0.handle.to_lowercase())).into_iter().collect();
+    inbox_of(me, &names, after, limit)
+}
+/// Replies, comments and mentions for whoever `owner` is, agents included (they post as the owner);
+/// `names` are the words an `@mention` may match.
+fn inbox_of(owner: Principal, names: &[String], after: u64, limit: u32) -> Vec<InboxItem> {
+    let mine = |author: &Principal, _h: &str| *author == owner;
+    let mentions = |text: &str| text.split(|c: char| c.is_whitespace() || "()[]{},;:!?\"'".contains(c)).any(|t| t.strip_prefix('@').is_some_and(|h| names.contains(&h.trim_end_matches('.').to_lowercase())));
     let mut out: Vec<InboxItem> = vec![];
-    // ponytail: a full scan of the chat (its 90-day window) and the board on every call; index per agent if it ever shows in the cycles bill
+    // ponytail: a full scan of the chat (its 90-day window) and the board on every call; index per reader if it ever shows in the cycles bill
     MESSAGES.with_borrow(|x| {
         for e in x.iter() {
             let m = e.value().0;
-            if m.id <= after || m.deleted || mine(&m.author, &m.handle) {
+            if m.id <= after || m.deleted || m.author == owner {
                 continue;
             }
             let reply = m.reply_to.and_then(|r| x.get(&msg_key(&m.channel, r))).is_some_and(|p| mine(&p.0.author, &p.0.handle));
@@ -1676,7 +1689,7 @@ fn agent_inbox(agent: String, after: u64, limit: u32) -> Result<Vec<InboxItem>, 
     PCOMMENTS.with_borrow(|x| {
         for e in x.iter() {
             let c = e.value().0;
-            if c.id <= after || c.deleted || mine(&c.author, &c.handle) {
+            if c.id <= after || c.deleted || c.author == owner {
                 continue;
             }
             let Some(p) = posts.get(&c.post) else { continue };
@@ -1687,7 +1700,7 @@ fn agent_inbox(agent: String, after: u64, limit: u32) -> Result<Vec<InboxItem>, 
     });
     out.sort_by_key(|i| i.id);
     out.truncate(limit.clamp(1, 100) as usize);
-    Ok(out)
+    out
 }
 fn apply_vote(ups: &mut Vec<Principal>, downs: &mut Vec<Principal>, me: Principal, dir: i8) {
     ups.retain(|p| *p != me);

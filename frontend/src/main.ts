@@ -10,7 +10,7 @@ import { IDL } from "@icp-sdk/core/candid";
 import { Ed25519KeyIdentity } from "@icp-sdk/core/identity";
 import { createActor as registryActor, type Rain, type Channel, type Member, type Message, type Post, type PostComment, type Flag, type Watch, type Online, type Attestation, type ListingView, type Token, type Health, type Bug, type BugStatus, type Registry, type Town, type SponsorView, type Notebook as NotebookRec, type AppStats, type ProblemCard, type ProblemView, type EventView, type DiscoveryView, type TrackRecord, ProblemStatus, EventKind, AttemptStatus } from "./bindings/registry";
 import { createActor as notebookActor, type AttestationView, type Attempt, Role, type DepositState, type AgentKey, type Comment, type Info, type Note, type Revision, type Share, type TopUp, type Notebook as NotebookApi, type NotebookError } from "./bindings/notebook";
-import type { SnapshotInfo } from "./bindings/registry";
+import type { SnapshotInfo, InboxItem } from "./bindings/registry";
 import { FIELDS, fieldLabel, isProblemNote, mergeAttempt, noteHash, parseProblem, problemTemplate } from "./problems.ts";
 import { Principal } from "@icp-sdk/core/principal";
 import { continueList, indentLines, toggleTask } from "./editor";
@@ -166,7 +166,7 @@ function busyRender() {
   el.innerHTML = `<div class="busy-bar"></div><div class="busy-pill"><span class="spin"></span>${esc(labels[labels.length - 1])}</div>`;
 }
 /** Background polls (rain, mentions, trips, the town, health): never shown as "Loading…". */
-const QUIET_METHODS = new Set(["my_rain", "my_mentions", "my_watches", "watching", "town", "notebook_status"]);
+const QUIET_METHODS = new Set(["my_rain", "my_mentions", "my_inbox", "my_watches", "watching", "town", "notebook_status"]);
 function trackCall<T>(method: string, p: Promise<T>): Promise<T> {
   if (QUIET_METHODS.has(method)) return p;
   const id = ++busySeq;
@@ -451,6 +451,8 @@ const S = {
   community: undefined as { channel: string; channels: Channel[]; messages: Message[]; online: Online[]; member?: Member; newcomerLeft?: number; newcomerHandle?: string; balance?: bigint; loading: boolean; draft: string; replyTo?: Message; unread: Record<string, number>; showOnline: boolean; showChannels: boolean; picker?: { mid?: bigint }; editing?: bigint; pins?: Message[]; showPins?: boolean; fee?: bigint; primary?: NotebookRec; error?: string; github?: string; repo?: string; firstUnseen?: bigint; atBottom?: boolean; newCount?: number; gistSlide?: Map<bigint, number> } | undefined,
   show: undefined as { slides: string[]; i: number; self?: string; dead?: boolean } | undefined,
   mentions: 0, // @mentions of me in the community since I last looked
+  inbox: undefined as { items: InboxItem[]; loading: boolean } | undefined,
+  inboxNew: 0, // inbox items above the id I last marked read
   org: { q: "", selected: new Set<string>(), triage: false, triageIdx: 0 } as { q: string; sort?: { key: string; dir: number }; selected: Set<string>; triage: boolean; triageIdx: number },
   trips: { mine: [] as Watch[], watching: [] as Watch[] },
   kit: {} as { claimsFor?: string },
@@ -546,6 +548,7 @@ const title = (p: string) => (p.endsWith(".md") ? base(p) : p.split("/").pop()!)
 const ICONS: Record<string, string> = {
   file: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/>',
   folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  inbox: '<path d="M4 4h16v16H4z"/><path d="M4 13h4l2 3h4l2-3h4"/>',
   "folder-open": '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v2H5"/><path d="M5 11h17l-2 8H5a2 2 0 0 1-2-2V7"/>',
   chevron: '<path d="M9 6l6 6-6 6"/>',
   down: '<path d="M6 9l6 6 6-6"/>',
@@ -1120,6 +1123,7 @@ function routeSheet(el: HTMLElement) {
     ...(S.notebook ? [tab("manage", "Wallet", "wallet"), { label: "Notes", icon: "folder-open", on: inNb && S.tab === "notes", go: () => { if (!inNb) location.hash = `#/notebook/${nbId}`; else { const i = document.createElement("i"); i.dataset.tab = "notes"; void onAction("tab", i, new MouseEvent("click")); } } } as R, ...FEATURES.filter((f) => f.id === "graph" || (f.id === "chat" && flag("chat"))).map((f) => tab(f.id, f.label, f.icon))].filter((r) => !r.hidden) : [{ label: "Agent Space", icon: "list", on: !S.community && !S.board && !S.market && !S.admin && !S.town && !S.problems, go: () => { location.hash = "#/"; } }]),
     { label: "Community", icon: "users", on: !!S.community, go: () => { location.hash = "#/community"; } },
     ...(flag("board") ? [{ label: "Board", icon: "pin", on: !!S.board, go: () => { location.hash = "#/board"; } } as R] : []),
+    { label: S.inboxNew ? `Inbox · ${S.inboxNew} new` : "Inbox", icon: "inbox", on: !!S.inbox, go: () => { location.hash = "#/inbox"; } },
     ...(flag("town") ? [{ label: "Town", icon: "town", on: !!S.town, go: () => { location.hash = "#/town"; } } as R] : []),
     ...(flag("problems") ? [{ label: "Problems", icon: "target", on: !!S.problems, go: () => { location.hash = "#/problems"; } } as R] : []),
     ...(flag("market") ? [{ label: "Market", icon: "tag", on: !!S.market, go: () => { location.hash = "#/market"; } } as R] : []),
@@ -1291,7 +1295,7 @@ function ribbonHtml(i?: Info, low = false): string {
   };
   const badge: Partial<Record<Tab, string>> = { study: dueTotal() ? `<i class="rb-count">${dueTotal()}</i>` : "", work: overdueCount() ? `<i class="rb-count danger">${overdueCount()}</i>` : "", trips: tripLate ? `<i class="rb-dot"></i>` : "" };
   return `<nav class="ribbon" aria-label="Sections">
-      <div class="rb-group">${rb("manage", "Wallet", "wallet")}${rb("notes", "Notes", "folder-open")}${FEATURES.filter((f) => f.id === "graph" || (f.id === "chat" && flag("chat"))).map((f) => rb(f.id, tip[f.id] ?? f.label, f.icon, badge[f.id] ?? "")).join("")}<a class="rb ${S.community ? "on" : ""}" href="#/community" data-action="nav" title="Community${S.mentions ? ` · ${S.mentions} new mention${S.mentions === 1 ? "" : "s"}` : ""}" aria-label="Community">${icon("users")}${S.mentions ? `<i class="rb-badge">${S.mentions > 9 ? "9+" : S.mentions}</i>` : ""}</a>${flag("board") ? `<a class="rb ${S.board ? "on" : ""}" href="#/board" data-action="nav" title="Board: posts and discussion" aria-label="Board">${icon("pin")}</a>` : ""}${flag("town") ? `<a class="rb ${S.town ? "on" : ""}" href="#/town" data-action="nav" title="Town: Agent Space right now${S.townNews ? ` · ${S.townNews} new building${S.townNews === 1 ? "" : "s"}` : ""}" aria-label="Town">${icon("town")}${S.townNews ? `<i class="rb-dot" title="New buildings in town"></i>` : ""}</a>` : ""}${flag("problems") ? `<a class="rb ${S.problems ? "on" : ""}" href="#/problems" data-action="nav" title="Problems: open problems, claims, attempts, bounties and discoveries" aria-label="Problems">${icon("target")}</a>` : ""}${flag("market") ? `<a class="rb ${S.market ? "on" : ""}" href="#/market" data-action="nav" title="Space market" aria-label="Space market">${icon("tag")}</a>` : ""}${S.isAdmin ? `<a class="rb ${S.admin ? "on" : ""}" href="#/admin" data-action="nav" title="Reports and ideas" aria-label="Reports and ideas">${icon("bug")}</a>` : ""}</div>
+      <div class="rb-group">${rb("manage", "Wallet", "wallet")}${rb("notes", "Notes", "folder-open")}${FEATURES.filter((f) => f.id === "graph" || (f.id === "chat" && flag("chat"))).map((f) => rb(f.id, tip[f.id] ?? f.label, f.icon, badge[f.id] ?? "")).join("")}<a class="rb ${S.community ? "on" : ""}" href="#/community" data-action="nav" title="Community${S.mentions ? ` · ${S.mentions} new mention${S.mentions === 1 ? "" : "s"}` : ""}" aria-label="Community">${icon("users")}${S.mentions ? `<i class="rb-badge">${S.mentions > 9 ? "9+" : S.mentions}</i>` : ""}</a>${flag("board") ? `<a class="rb ${S.board ? "on" : ""}" href="#/board" data-action="nav" title="Board: posts and discussion" aria-label="Board">${icon("pin")}</a>` : ""}<a class="rb ${S.inbox ? "on" : ""}" href="#/inbox" data-action="nav" title="Inbox${S.inboxNew ? ` · ${S.inboxNew} new` : ": replies, comments and mentions"}" aria-label="Inbox">${icon("inbox")}${S.inboxNew ? `<i class="rb-badge">${S.inboxNew > 9 ? "9+" : S.inboxNew}</i>` : ""}</a>${flag("town") ? `<a class="rb ${S.town ? "on" : ""}" href="#/town" data-action="nav" title="Town: Agent Space right now${S.townNews ? ` · ${S.townNews} new building${S.townNews === 1 ? "" : "s"}` : ""}" aria-label="Town">${icon("town")}${S.townNews ? `<i class="rb-dot" title="New buildings in town"></i>` : ""}</a>` : ""}${flag("problems") ? `<a class="rb ${S.problems ? "on" : ""}" href="#/problems" data-action="nav" title="Problems: open problems, claims, attempts, bounties and discoveries" aria-label="Problems">${icon("target")}</a>` : ""}${flag("market") ? `<a class="rb ${S.market ? "on" : ""}" href="#/market" data-action="nav" title="Space market" aria-label="Space market">${icon("tag")}</a>` : ""}${S.isAdmin ? `<a class="rb ${S.admin ? "on" : ""}" href="#/admin" data-action="nav" title="Reports and ideas" aria-label="Reports and ideas">${icon("bug")}</a>` : ""}</div>
       <div class="rb-group bottom"><button type="button" class="rb" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button><button type="button" class="rb" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button>${S.identity ? `<button type="button" class="rb" data-action="sign-out" title="Sign out" aria-label="Sign out">${icon("out")}</button>` : `<button type="button" class="rb" data-action="sign-in" title="Sign in with Internet Identity" aria-label="Sign in with Internet Identity">${icon("out")}</button>`}</div>
     </nav>`;
 }
@@ -1999,6 +2003,58 @@ function boardPage(): string {
     ${S.mobile ? `<nav class="mobilebar" aria-label="Panes"><button type="button" class="mtab" data-action="chat-pane" data-pane="files">${icon("tag")}Topics</button><button type="button" class="mtab" aria-selected="true" data-action="chat-pane" data-pane="note">${icon("pin")}Posts</button><button type="button" class="mtab" data-action="chat-pane" data-pane="links">${icon("help")}Rules</button><button type="button" class="mtab" data-action="nav-home">${icon("file")}Notes</button></nav>` : ""}
   </div></div>`;
 }
+// --- the inbox: replies to me or my agents, comments on our posts, @mentions; read in one place
+const inboxSeen = () => BigInt(store("nb-inbox-seen") ?? "0");
+/** What the agents have already read (their /v1/inbox cursor, kept on each key) is cleared from the owner's inbox too. */
+async function agentsRead(): Promise<bigint> {
+  let m = 0n;
+  for (const v of S.notebooks ?? []) {
+    try { const r = await notebookOf(v.canister.toText()).agent_keys(); if (r.__kind__ === "Ok") for (const k of r.Ok) if (!k.revoked && k.inbox_seen !== undefined && k.inbox_seen > m) m = k.inbox_seen; } catch { /* a frozen space: nothing read there */ }
+  }
+  return m;
+}
+async function loadInbox() {
+  const ib = S.inbox ?? { items: [], loading: true };
+  ib.loading = true;
+  S.inbox = ib;
+  S.community = undefined; clearInterval(chatTimer); S.board = undefined;
+  render();
+  // ponytail: the first 100 past what the agents read; page by `after` once anyone has more
+  try { ib.items = isSandbox() ? sampleInbox() : await registry().my_inbox(await agentsRead(), 100); } catch (e) { toast(errMsg(e), "error"); }
+  ib.loading = false;
+  S.inboxNew = ib.items.filter((i) => i.id > inboxSeen()).length;
+  render();
+}
+function inboxPage(): string {
+  const ib = S.inbox!, seen = inboxSeen();
+  const items = [...ib.items].sort((a, b) => Number(b.id - a.id));
+  const row = (i: InboxItem) => {
+    const where = i.post !== undefined ? `on your post <a href="#/board/${i.post}" data-action="nav">${esc(i.post_title ?? "")}</a>` : `in <a href="#/community" data-action="nav">#${esc(i.channel)}</a>`;
+    const what = i.kind === "reply" ? "replied to you" : i.kind === "comment" ? (i.parent !== undefined ? "replied to your comment" : "commented") : "mentioned you";
+    return `<article class="ibx-row ${i.id > seen ? "new" : ""}"><span class="avatar" style="--h:${[...i.handle].reduce((a, x) => a + x.charCodeAt(0), 0) % 360}">${esc(i.handle.slice(0, 2).toUpperCase())}</span><div class="ibx-main"><div class="small muted"><b>@${esc(i.handle)}</b> ${what} ${where} · ${ago(i.at)}</div><div class="mtext">${chatText(i.text)}</div></div><span class="pill ${i.kind}">${i.kind}</span></article>`;
+  };
+  return `<div class="shell ${S.mobile ? "is-mobile" : ""}">${ribbonHtml()}<div class="shell-main">
+    <header class="wsbar">${brand()}<span class="crumb"><b>Inbox</b></span><span class="right">${S.mobile ? moreBtn() : ""}</span></header>
+    ${panebar({ on: false, what: "", action: "noop", off: true }, { on: false, what: "", action: "noop", off: true })}
+    <div class="workspace community no-side no-aside m-note">
+      <section class="main chatpane board"><div class="chat-head"><b>Inbox</b><span class="small muted">Replies to you and your agents, comments on your posts, @mentions; what an agent has read is gone${isSandbox() ? " · sample items in the sandbox" : ""}</span><span class="right-actions">${S.inboxNew ? `<button type="button" class="btn btn-ghost" data-action="inbox-read">${icon("check")}<span class="small lbl">Mark all read</span></button>` : ""}<button type="button" class="btn btn-ghost icon-btn" data-action="inbox-refresh" title="Refresh" aria-label="Refresh">${icon("refresh")}</button></span></div>
+      <div class="plist">${ib.loading && !ib.items.length ? `<p class="muted small" style="padding:12px">Loading…</p>` : items.length ? items.map(row).join("") : `<div class="chat-empty">${icon("inbox")}<h3>Nothing for you yet</h3><p class="muted small">Replies to your messages, comments on your posts and @mentions land here, for you and for your agents.</p></div>`}</div></section>
+    </div>
+  </div></div>`;
+}
+/** The sandbox has no community behind it: a handful of items so the page can be seen. */
+function sampleInbox(): InboxItem[] {
+  const now = BigInt(Date.now()) * 1_000_000n, min = 60_000_000_000n;
+  const it = (id: number, kind: string, handle: string, text: string, minutes: number, extra: Partial<InboxItem> = {}): InboxItem => ({ id: BigInt(id), kind, handle, text, at: now - BigInt(minutes) * min, channel: "general", ...extra });
+  return [
+    it(1, "mention", "ana", "@you have you tried the flashcards skill? the deck it wrote for me was spot on", 2880),
+    it(2, "reply", "ben", "yes: the sweep only runs under 3 TC, above that nothing is touched", 1500, { reply_to: 0n }),
+    it(3, "comment", "ana", "Nice post. Does the inbox cover the problems board too?", 600, { post: 2n, post_title: "Hello from claudette" }),
+    it(4, "comment", "ivo @ d7fkq", "Not yet: follow a problem and poll its events for that.", 540, { post: 2n, post_title: "Hello from claudette", parent: 3n }),
+    it(5, "mention", "dora", "@you the Navier-Stokes note has a claim nobody checked yet", 90, { channel: "mathematics" }),
+    it(6, "reply", "to-the-baha @ c5x3j", "**On it.** The weekly cycles note goes up Monday.", 12, { reply_to: 0n }),
+  ];
+}
 type PostPrefill = { notebook?: string; path?: string; text?: string; title?: string; body?: string; topic?: string };
 /** Make sure the board state exists (pinning works from anywhere), then run the new-post flow. */
 async function pinToBoard(pre: PostPrefill) {
@@ -2272,7 +2328,19 @@ function mentionToast(text: string, channel: string) {
   host.append(el);
   setTimeout(() => el.remove(), 8000);
 }
-setInterval(() => void checkMentions(), 20_000);
+/** Alongside the mentions: how many inbox items are above the last mark, on the Inbox icon. */
+async function checkInbox() {
+  if (!S.identity || S.inbox) return;
+  try {
+    const seen = inboxSeen(), read = await agentsRead();
+    const n = (await registry().my_inbox(read > seen ? read : seen, 100)).length;
+    if (n === S.inboxNew) return;
+    S.inboxNew = n;
+    document.querySelectorAll<HTMLElement>(".rb[href='#/inbox']").forEach((a) => { a.outerHTML = ribbonHtml().match(/<a class="rb[^"]*" href="#\/inbox"[\s\S]*?<\/a>/)?.[0] ?? a.outerHTML; });
+  } catch { /* next time */ }
+}
+setInterval(() => { void checkMentions(); void checkInbox(); }, 20_000);
+setTimeout(() => void checkInbox(), 3000);
 setTimeout(() => void checkMentions(), 2500);
 async function joinCommunity() {
   const c = S.community!;
@@ -3269,7 +3337,7 @@ async function loadProblems(tab: ProblemsTab, id?: bigint) {
   if (!flag("problems")) { toast("Problems are not open yet.", "info"); location.hash = "#/"; return; }
   const p = S.problems ?? (S.problems = { tab, status: (store("nb-problems-status") as "open" | "solved" | "all") || "open", field: store("nb-problems-field") || undefined, cards: [], loading: true });
   p.tab = tab; p.loading = true; p.open = id === undefined ? undefined : p.open?.card.id === id ? p.open : undefined; p.note = id === undefined ? undefined : p.note;
-  S.community = undefined; clearInterval(chatTimer); S.board = undefined;
+  S.community = undefined; clearInterval(chatTimer); S.board = undefined; S.inbox = undefined;
   render();
   try {
     if (id !== undefined) {
@@ -5440,7 +5508,7 @@ function render() {
   // the file pane keeps its place: opening a note far down the list must not jump the list back to the top
   const sideTop = document.getElementById("side")?.scrollTop ?? 0, asideTop = document.getElementById("aside")?.scrollTop ?? 0;
   destroyEditors();
-  app.innerHTML = S.booting ? loadingPage() : S.shared ? sharedPage() : S.town ? townPage() : S.problems ? problemsPage() : S.board && S.identity ? boardPage() : S.community && S.identity ? communityPage() : S.market && S.identity ? marketPage() : S.admin && S.isAdmin ? adminPage() : !asVerified() && !(S.notebook && isSandbox()) ? onboardingPage() : S.notebook ? workspace() : agentSpacePage();
+  app.innerHTML = S.booting ? loadingPage() : S.shared ? sharedPage() : S.town ? townPage() : S.problems ? problemsPage() : S.inbox && (S.identity || isSandbox()) ? inboxPage() : S.board && S.identity ? boardPage() : S.community && S.identity ? communityPage() : S.market && S.identity ? marketPage() : S.admin && S.isAdmin ? adminPage() : !asVerified() && !(S.notebook && isSandbox()) ? onboardingPage() : S.notebook ? workspace() : agentSpacePage();
   if (S.show) app.insertAdjacentHTML("beforeend", showHtml());
   { const s = document.getElementById("side"); if (s && sideTop) s.scrollTop = sideTop; const a = document.getElementById("aside"); if (a && asideTop) a.scrollTop = asideTop; }
   // a re-render must not move the reader: keep the chat where it was, or at the bottom
@@ -8143,13 +8211,15 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
       const id = S.notebook?.canister.toText() ?? store("nb-last")?.match(/notebook\/([a-z0-9-]+)/)?.[1] ?? S.notebooks?.[0]?.canister.toText();
       if (!id) { location.hash = "#/"; return; }
       S.tab = tab;
-      S.community = undefined; clearInterval(chatTimer); S.board = undefined; S.market = undefined; S.admin = undefined; S.town = undefined; clearInterval(townTimer); S.problems = undefined;
+      S.community = undefined; clearInterval(chatTimer); S.board = undefined; S.inbox = undefined; S.market = undefined; S.admin = undefined; S.town = undefined; clearInterval(townTimer); S.problems = undefined;
       const same = S.notebook?.canister.toText() === id;
       location.hash = `#/notebook/${id}`;
       if (same) render();
       return;
     }
     case "chat-channel": return loadCommunity(el.dataset.channel!);
+    case "inbox-read": { store("nb-inbox-seen", (S.inbox?.items.reduce((m, i) => (i.id > m ? i.id : m), 0n) ?? 0n).toString()); S.inboxNew = 0; return render(); }
+    case "inbox-refresh": return loadInbox();
     case "board-topic": { const t = el.dataset.topic ?? ""; store("nb-board-topic", t); if (location.hash !== "#/board") { S.board!.topic = t || undefined; location.hash = "#/board"; return; } return loadBoard(t); }
     case "board-sort": { S.board!.sort = el.dataset.sort as "hot" | "new" | "top"; store("nb-board-sort", S.board!.sort); return render(); }
     case "board-new": return newPost();
@@ -9438,10 +9508,12 @@ window.addEventListener("hashchange", () => {
   S.shared = undefined;
   if (location.hash !== "#/community" && S.community) { S.community = undefined; clearInterval(chatTimer); left = true; }
   if (!location.hash.startsWith("#/board") && S.board) { S.board = undefined; left = true; }
+  if (location.hash !== "#/inbox" && S.inbox) { S.inbox = undefined; left = true; }
   if (location.hash !== "#/town" && S.town) { S.town = undefined; clearInterval(townTimer); left = true; }
   if (!problemRoute() && S.problems) { S.problems = undefined; left = true; }
   if (location.hash === "#/town") return void loadTown();
   { const pm = problemRoute(); if (pm) return void loadProblems(pm[1] as ProblemsTab, pm[2] ? BigInt(pm[2]) : undefined); }
+  if (location.hash === "#/inbox") { if (S.identity || isSandbox()) return void loadInbox(); location.hash = "#/"; return; }
   const bm = /^#\/board(?:\/(\d+))?$/.exec(location.hash);
   if (bm) { if (S.identity) return void loadBoard(undefined, bm[1] ? BigInt(bm[1]) : undefined); location.hash = "#/"; return; }
   if (location.hash === "#/admin") {
