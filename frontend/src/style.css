@@ -812,7 +812,7 @@ body .wsbar, body .topbar { padding-right: 50px; } /* keep the corner clear for 
 .as .mono, .as-timer, .as-count, .as-addr, .as-id { font-family: ui-monospace, Menlo, monospace; }
 .as-center { display: grid; place-items: center; padding: 24px; }
 .as-mark { position: absolute; top: 16px; left: 18px; font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: #75798c; }
-.as-out { position: absolute; top: 12px; right: 18px; font: inherit; font-size: 11px; color: #75798c; background: none; border: 0; cursor: pointer; }
+.as-out { position: fixed; bottom: 16px; right: 18px; font: inherit; font-size: 11px; color: #75798c; background: none; border: 0; cursor: pointer; }
 .as-hero { display: flex; flex-direction: column; align-items: flex-start; gap: 16px; width: min(420px, 100%); }
 .as-h1 { font-size: 25px; font-weight: 500; line-height: 1.12; letter-spacing: -.015em; margin: 0; }
 .as-lede { color: #b2b6ca; margin: 0; }
