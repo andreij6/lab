@@ -1269,9 +1269,9 @@ function shell(body: string): string {
   const low = lowCycles(i);
   const mobileNav = S.mobile && (S.tab === "notes" || S.tab === "chat")
     ? `<nav class="mobilebar" aria-label="Panes">
-        <button type="button" class="mtab" aria-selected="${S.mobilePane === "files"}" data-action="mpane" data-pane="files">${icon("folder")}Files</button>
+        <button type="button" class="mtab" aria-selected="${S.mobilePane === "files"}" data-action="mpane" data-pane="files">${icon("folder")}Tree</button>
         <button type="button" class="mtab" aria-selected="${S.mobilePane === "note"}" data-action="mpane" data-pane="note">${icon(S.tab === "chat" ? "chat" : "file")}${S.tab === "chat" ? "Chat" : "Note"}</button>
-        <button type="button" class="mtab" aria-selected="${S.mobilePane === "links"}" data-action="mpane" data-pane="links">${icon(S.tab === "chat" ? "folder" : "links")}${S.tab === "chat" ? "Sources" : "Links"}</button>
+        ${S.tab === "chat" ? `<button type="button" class="mtab" aria-selected="${S.mobilePane === "links"}" data-action="mpane" data-pane="links">${icon("folder")}Sources</button>` : ""}
         <button type="button" class="mtab" data-action="palette">${icon("search")}Find</button>
       </nav>`
     : "";
@@ -1373,7 +1373,7 @@ function side(): string {
   const tags = [...S.idx.tags.entries()].sort((a, b) => b[1].size - a[1].size || a[0].localeCompare(b[0]));
   return `<div class="pane-head"><button type="button" class="btn btn-ghost icon-btn" data-action="today" title="Today's note (${MOD}⇧D)" aria-label="Today's note">${icon("calendar")}</button><button type="button" class="btn btn-ghost icon-btn" data-action="root-menu" title="Space actions" aria-label="Space actions">${icon("more")}</button></div>
     ${bookmarks}${S.settings.searches.length && !S.query.trim() && !S.tag ? `<div class="pane-title">Saved searches</div>${S.settings.searches.map((x, i) => `<div class="bm-row" data-action="org-open" data-i="${i}" title="${esc(x.q)}">${icon("search")}<span class="name">${esc(x.name)}</span><span class="cnt small faint">${runQuery(orgNotes(), x.q).length}</span></div>`).join("")}` : ""}<div class="tree" data-tree>${body}</div>
-    ${tags.length ? `<div class="pane-title">Tags</div><div class="tags">${tags.map(([t, ps]) => `<button type="button" class="tag-chip ${S.tag === t ? "active" : ""}" data-action="tag" data-tag="${esc(t)}">#${esc(t)}<span class="cnt">${ps.size}</span></button>`).join("")}</div>` : ""}`;
+    ${tags.length ? `<button type="button" class="pane-title pane-fold ${store("nb-tags-open") === "1" ? "open" : ""}" data-action="tags-toggle" aria-expanded="${store("nb-tags-open") === "1"}">${icon("chevron")}Tags<span class="cnt small faint">${tags.length}</span></button>${store("nb-tags-open") === "1" ? `<div class="tags">${tags.map(([t, ps]) => `<button type="button" class="tag-chip ${S.tag === t ? "active" : ""}" data-action="tag" data-tag="${esc(t)}">#${esc(t)}<span class="cnt">${ps.size}</span></button>`).join("")}</div>` : ""}` : ""}`;
 }
 
 // --- workspace: links pane
@@ -6171,7 +6171,10 @@ async function refreshInfo() {
 
 function syncHash() {
   const c = cur();
-  location.hash = `#/notebook/${S.notebook!.canister.toText()}${c ? `/${encodeURIComponent(c)}` : ""}`;
+  const h = `#/notebook/${S.notebook!.canister.toText()}${c ? `/${encodeURIComponent(c)}` : ""}`;
+  // a phone keeps one history entry for "a note is open": note to note replaces it, so Back always lands on the tree
+  if (S.mobile && c && /^#\/notebook\/[a-z0-9-]+\/./.test(location.hash) && location.hash !== h) history.replaceState(history.state, "", h);
+  else location.hash = h;
 }
 
 /** Open a note in the focused pane: replaces the active tab unless `newTab`; `paneId` targets a pane. */
@@ -7937,6 +7940,7 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
     case "mpane":
       S.mobilePane = el.dataset.pane as MobilePane;
       return render();
+    case "tags-toggle": store("nb-tags-open", store("nb-tags-open") === "1" ? "0" : "1"); return renderSide();
     case "chat-folders":
       S.chat.excluded = el.dataset.all === "1" ? new Set() : new Set(chatFolders());
       store(`nb-chat-off-${S.notebook!.canister.toText()}`, JSON.stringify([...S.chat.excluded]));
@@ -9596,6 +9600,8 @@ window.addEventListener("hashchange", () => {
     const path = m[2] ? decodeURIComponent(m[2]) : undefined;
     if (S.notebook?.canister.toText() !== m[1]) void (async () => { if (S.identity && !S.notebooks && m[1] !== SANDBOX_ID) await loadNotebooks(); await openNotebook(m[1], path); })();
     else if (path && path !== cur() && note(path)) void open(path);
+    // Back from a note on a phone: the hash is the space's root again, and the tree is what to show
+    else if (!path && S.mobile && S.mobilePane !== "files") { S.mobilePane = "files"; render(); }
     // back (or a typed link) from the community or board to the notebook already open: without this the old page stayed on screen
     else if (left) render();
   }
