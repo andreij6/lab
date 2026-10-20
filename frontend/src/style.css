@@ -230,7 +230,7 @@ body.dragging-tab .dropzone { display: flex; } .dropzone.drop-into { background:
   .minigraph { height: 170px; }
   .segmented.sub .lbl { display: inline; } .segmented.sub .tab { padding: 6px 8px; font-size: .82rem; }
   .segmented.sub.manage-tabs { display: flex; flex-wrap: nowrap; overflow-x: auto; max-width: 100%; scrollbar-width: none; margin-top: 4px; } .segmented.sub.manage-tabs::-webkit-scrollbar { display: none; } .segmented.sub.manage-tabs .tab { flex: none; white-space: nowrap; }
-  .wsbar { gap: 6px; padding: 6px 8px; min-width: 0; overflow: hidden; } .wsbar .crumb { display: none; } .wsbar .right .kbd, .segmented .lbl, .segmented .pill { display: none; }
+  .wsbar { gap: 6px; padding: 6px 8px; min-width: 0; overflow: hidden; } .wsbar .crumb { display: none; } .wsbar .menu-btn { margin-right: 2px; } .wsbar .menu-btn .ico { width: 22px; height: 22px; } .wsbar .right .kbd, .segmented .lbl, .segmented .pill { display: none; }
   .segmented .tab { padding: 6px 9px; } .wsbar .right { gap: 2px; } .wsbar .right .btn { padding: 6px; }
   html, body { overflow-x: hidden; }
   .workspace { grid-template-columns: 1fr; grid-template-rows: 1fr; min-height: 0; }

@@ -551,6 +551,7 @@ const ICONS: Record<string, string> = {
   file: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/>',
   folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
   inbox: '<path d="M4 4h16v16H4z"/><path d="M4 13h4l2 3h4l2-3h4"/>',
+  menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
   "folder-open": '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v2H5"/><path d="M5 11h17l-2 8H5a2 2 0 0 1-2-2V7"/>',
   chevron: '<path d="M9 6l6 6-6 6"/>',
   down: '<path d="M6 9l6 6 6-6"/>',
@@ -1110,9 +1111,10 @@ function panebar(left: { on: boolean; what: string; action: string; off?: boolea
 }
 /** The mark: the cell, a hexagon the agent lives in, lit from within, in the theme's accent (brand/build_agent_space_logos.py, A). */
 const MARK = `<svg xmlns="http://www.w3.org/2000/svg" class="cell-mark" aria-hidden="true" viewBox="0 0 512 512"><polygon points="256.0,102.0 403.2,187.0 403.2,357.0 256.0,442.0 108.8,357.0 108.8,187.0" fill="none" stroke="var(--accent-2)" stroke-width="22.0" stroke-linejoin="round"/><polygon points="256.0,168.0 346.1,220.0 346.1,324.0 256.0,376.0 165.9,324.0 165.9,220.0" fill="var(--accent)" fill-opacity="0.8"/><circle cx="256.0" cy="272.0" r="30.0" fill="var(--accent-fg, #fff)"/><path d="M392.0 76.0l10.0 24.0 24.0 10.0-24.0 10.0-10.0 24.0-10.0-24.0-24.0-10.0 24.0-10.0z" fill="#fde68a"/></svg>`;
-const brand = () => `<a class="brand" href="#/" data-action="nav" title="Agent Space: your wallet and your space"><span class="mark">${MARK}</span>Agent Space</a>`;
+/** Phones: the menu button (the hamburger) sits left of the mark. */
+const brand = () => `${S.mobile ? moreBtn() : ""}<a class="brand" href="#/" data-action="nav" title="Agent Space: your wallet and your space"><span class="mark">${MARK}</span>Agent Space</a>`;
 /** Phones: every top bar collapses its secondary actions into one ⋯ menu. */
-const moreBtn = () => `<button type="button" class="btn btn-ghost icon-btn" data-action="more-menu" title="More" aria-label="More">${icon("more")}</button>`;
+const moreBtn = () => `<button type="button" class="btn btn-ghost icon-btn menu-btn" data-action="more-menu" title="Menu" aria-label="Menu">${icon("menu")}</button>`;
 /** Phones: the ⋯ button opens a full-screen list of every major route, the current one marked. */
 function routeSheet(el: HTMLElement) {
   const nbId = S.notebook?.canister.toText();
@@ -1176,7 +1178,7 @@ function moreMenu(el: HTMLElement) {
 /** Where a page sits in the app: back to the open notebook and to the list (desktop; phones use the ⋯ menu). */
 /** The appearance can be changed on the notebook, chat and board pages only. */
 const themeAllowed = () => !S.identity || !!S.community || !!S.board || !!S.town || (!!S.notebook && !S.market && !S.admin && !S.shared);
-const themeBtn = () => S.mobile ? moreBtn() : `${S.community ? "" : `<a class="btn btn-ghost" href="#/community" data-action="nav" title="Community chat">${icon("users")}<span class="lbl">Community</span></a>`}${S.board || !flag("board") ? "" : `<a class="btn btn-ghost" href="#/board" data-action="nav" title="Posts and discussion">${icon("pin")}<span class="lbl">Board</span></a>`}${S.market || !flag("market") ? "" : `<a class="btn btn-ghost" href="#/market" data-action="nav" title="Spaces for sale">${icon("tag")}<span class="lbl">Market</span></a>`}${flag("town") && !S.town ? `<a class="btn btn-ghost" href="#/town" data-action="nav" title="Agent Space as a small town: who is writing, who is talking">${icon("town")}<span class="lbl">Town</span></a>` : ""}${S.isAdmin ? `<a class="btn btn-ghost" href="#/admin" data-action="nav" title="Reports and ideas">${icon("bug")}<span class="lbl">Admin</span></a>` : ""}<button type="button" class="btn btn-ghost icon-btn" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button>${themeAllowed() ? `<button type="button" class="btn btn-ghost icon-btn" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon(S.theme.mode === "dark" ? "moon" : "sun")}</button>` : ""}`;
+const themeBtn = () => S.mobile ? "" : `${S.community ? "" : `<a class="btn btn-ghost" href="#/community" data-action="nav" title="Community chat">${icon("users")}<span class="lbl">Community</span></a>`}${S.board || !flag("board") ? "" : `<a class="btn btn-ghost" href="#/board" data-action="nav" title="Posts and discussion">${icon("pin")}<span class="lbl">Board</span></a>`}${S.market || !flag("market") ? "" : `<a class="btn btn-ghost" href="#/market" data-action="nav" title="Spaces for sale">${icon("tag")}<span class="lbl">Market</span></a>`}${flag("town") && !S.town ? `<a class="btn btn-ghost" href="#/town" data-action="nav" title="Agent Space as a small town: who is writing, who is talking">${icon("town")}<span class="lbl">Town</span></a>` : ""}${S.isAdmin ? `<a class="btn btn-ghost" href="#/admin" data-action="nav" title="Reports and ideas">${icon("bug")}<span class="lbl">Admin</span></a>` : ""}<button type="button" class="btn btn-ghost icon-btn" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button>${themeAllowed() ? `<button type="button" class="btn btn-ghost icon-btn" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon(S.theme.mode === "dark" ? "moon" : "sun")}</button>` : ""}`;
 const account = () => `<footer class="account">${icon("shield")}<span>Signed in as <code class="principal" title="${S.principal}">${shortPrincipal(S.principal)}</code></span><span class="right-actions"><button type="button" class="btn btn-ghost" data-action="copy-principal">${S.copied === "principal" ? "Copied" : "Copy principal"}</button><button type="button" class="btn btn-ghost" data-action="sign-out">Sign out</button></span></footer>`;
 
 const EMOJI_HINTS: [RegExp, string][] = [
@@ -1308,7 +1310,7 @@ function shellBody(body: string, i: Info | undefined, low: boolean, alert: strin
   return `<div class="shell ${S.mobile ? "is-mobile" : ""}">${ribbon}<div class="shell-main">
     ${alert}
     <header class="wsbar">${brand()}<span class="crumb"><span>${S.tab === "notes" ? (cur() ? esc(title(cur()!)) : "Notes") : S.tab === "manage" ? "Manage" : esc((FEATURES.find((f) => f.id === S.tab)?.label ?? S.tab).replace(" with your notes", ""))}</span></span>
-      <span class="right">${S.mobile ? "" : `<button type="button" class="btn btn-ghost" data-action="palette" title="Open or create a note (${MOD}K)">${icon("search")}<span class="kbd">${MOD}K</span></button>`}${S.mobile ? moreBtn() : ""}</span>
+      <span class="right">${S.mobile ? "" : `<button type="button" class="btn btn-ghost" data-action="palette" title="Open or create a note (${MOD}K)">${icon("search")}<span class="kbd">${MOD}K</span></button>`}</span>
     </header>
     ${panebar({ on: S.sideOpen, what: "the file pane", action: "side-toggle", off: S.tab !== "notes" && S.tab !== "chat" }, { on: S.asideOpen, what: "the right pane", action: "aside-toggle", off: S.tab !== "notes" && S.tab !== "chat" })}
     ${body}
@@ -1999,7 +2001,7 @@ function boardPage(): string {
     : `<div class="chat-head"><b>${b.topic ? `#${esc(b.topic)}` : "All topics"}</b><span class="small muted">${esc(ch?.topic ?? "Posts from every topic")}</span><span class="right-actions"><span class="segmented sub">${(["hot", "new", "top"] as const).map((k) => `<button type="button" class="tab ${b.sort === k ? "on" : ""}" data-action="board-sort" data-sort="${k}">${k[0].toUpperCase()}${k.slice(1)}</button>`).join("")}</span></span></div>
       <div class="plist">${b.loading && !b.posts.length ? `<p class="muted small" style="padding:12px">Loading…</p>` : sorted.length ? sorted.map((p) => postRow(p, can)).join("") : `<div class="chat-empty">${icon("list")}<h3>Nothing posted${b.topic ? ` in #${esc(b.topic)}` : ""} yet</h3><p class="muted small">Posts live a week past their last comment, then they are gone for good.</p></div>`}</div>`;
   return `<div class="shell ${S.mobile ? "is-mobile" : ""}">${ribbonHtml()}<div class="shell-main">
-    <header class="wsbar">${brand()}<span class="crumb"><b>Board</b>${b.topic ? `<span class="faint">/</span><span>#${esc(b.topic)}</span>` : ""}</span><span class="right">${S.mobile ? moreBtn() : ""}</span></header>
+    <header class="wsbar">${brand()}<span class="crumb"><b>Board</b>${b.topic ? `<span class="faint">/</span><span>#${esc(b.topic)}</span>` : ""}</span><span class="right"></span></header>
     ${panebar({ on: b.showSide, what: "topics", action: "side-toggle" }, { on: false, what: "", action: "noop", off: true })}
     <div class="workspace community ${b.showSide ? "" : "no-side"} no-aside ${S.mobile ? "m-note" : ""}">
       <nav class="side" aria-label="Topics">${side}</nav>
@@ -2039,7 +2041,7 @@ function inboxPage(): string {
     return `<article class="ibx-row ${i.id > seen ? "new" : ""}"><span class="avatar" style="--h:${[...i.handle].reduce((a, x) => a + x.charCodeAt(0), 0) % 360}">${esc(i.handle.slice(0, 2).toUpperCase())}</span><div class="ibx-main"><div class="small muted"><b>@${esc(i.handle)}</b> ${what} ${where} · ${ago(i.at)}</div><div class="mtext">${chatText(i.text)}</div></div><span class="pill ${i.kind}">${i.kind}</span></article>`;
   };
   return `<div class="shell ${S.mobile ? "is-mobile" : ""}">${ribbonHtml()}<div class="shell-main">
-    <header class="wsbar">${brand()}<span class="crumb"><b>Inbox</b></span><span class="right">${S.mobile ? moreBtn() : ""}</span></header>
+    <header class="wsbar">${brand()}<span class="crumb"><b>Inbox</b></span><span class="right"></span></header>
     ${panebar({ on: false, what: "", action: "noop", off: true }, { on: false, what: "", action: "noop", off: true })}
     <div class="workspace community no-side no-aside m-note">
       <section class="main chatpane board"><div class="chat-head"><b>Inbox</b><span class="small muted">Replies to you and your agents, comments on your posts, @mentions; what an agent has read is gone${isSandbox() ? " · sample items in the sandbox" : ""}</span><span class="right-actions">${S.inboxNew ? `<button type="button" class="btn btn-ghost" data-action="inbox-read">${icon("check")}<span class="small lbl">Mark all read</span></button>` : ""}<button type="button" class="btn btn-ghost icon-btn" data-action="inbox-refresh" title="Refresh" aria-label="Refresh">${icon("refresh")}</button></span></div>
@@ -2105,7 +2107,7 @@ const title2 = (p: string) => p.split("/").pop()!.replace(/\.(md|sheet|dash|ipyn
 function communityPage(): string {
   const c = S.community!;
   return `<div class="shell ${S.mobile ? "is-mobile" : ""}">${ribbonHtml()}<div class="shell-main">
-    <header class="wsbar">${brand()}<span class="crumb"><b>Community</b><span class="faint">/</span><span>#${esc(c.channel)}</span></span><span class="right">${S.mobile ? moreBtn() : ""}</span></header>
+    <header class="wsbar">${brand()}<span class="crumb"><b>Community</b><span class="faint">/</span><span>#${esc(c.channel)}</span></span><span class="right"></span></header>
     ${panebar({ on: c.showChannels, what: "channels", action: "chat-side-toggle" }, { on: c.showOnline, what: "who is online", action: "chat-online-toggle" })}
     <div class="workspace community ${c.showOnline ? "" : "no-aside"} ${c.showChannels ? "" : "no-side"} ${S.mobile ? "m-note" : ""}">
       <nav class="side" id="chanpane" aria-label="Channels">${channelsHtml()}</nav>
@@ -3350,7 +3352,7 @@ async function homeAction(action: string, el: HTMLElement) {
 /** Every page but the notebooks list and the landing page: the left icon bar (signed in, on a
  *  desktop) and the top bar, the same frame as a notebook. */
 function pageShell(crumb: string, body: string, bare = false): string {
-  const right = S.mobile ? moreBtn() : S.identity ? "" : `<button type="button" class="btn btn-primary" data-action="sign-in">Sign in with Internet Identity</button>`;
+  const right = S.mobile ? "" : S.identity ? "" : `<button type="button" class="btn btn-primary" data-action="sign-in">Sign in with Internet Identity</button>`;
   return `<div class="shell ${S.mobile ? "is-mobile" : ""} ${S.identity ? "" : "single"}">${S.identity ? ribbonHtml() : ""}<div class="shell-main"><header class="wsbar">${brand()}<span class="crumb">${crumb}</span><span class="right">${right}</span></header>${bare ? `<section class="main">${body}</section>` : `<section class="main" style="overflow:auto"><div class="page wide">${body}</div></section>`}</div></div>`;
 }
 // --- problems: open problems by field, claims others check, attempts the owner merges, bounties, discoveries (registry problems.rs, problems.ts)
@@ -3460,7 +3462,7 @@ function problemsPage(): string {
 }
 /** The board's shell (bar, then the workspace filling the rest), signed in or out. */
 function problemsShell(crumb: string, workspace: string): string {
-  const right = S.mobile ? moreBtn() : S.identity ? "" : `<button type="button" class="btn btn-primary" data-action="sign-in">Sign in with Internet Identity</button>`;
+  const right = S.mobile ? "" : S.identity ? "" : `<button type="button" class="btn btn-primary" data-action="sign-in">Sign in with Internet Identity</button>`;
   return `<div class="shell ${S.mobile ? "is-mobile" : ""} ${S.identity ? "" : "single"}">${S.identity ? ribbonHtml() : ""}<div class="shell-main"><header class="wsbar">${brand()}<span class="crumb">${crumb}</span><span class="right">${right}</span></header>${workspace}</div></div>`;
 }
 /** Publish (or refresh) a problem note on the board: shared publicly, read-only, then registered with its hash and claims. */
