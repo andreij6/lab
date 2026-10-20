@@ -8,12 +8,15 @@ import { frontmatter } from "./notes.ts";
 export type Card = { front: string; back: string };
 export type Question = { text: string; options: string[]; correct: number[]; explanation: string };
 
-export function quizKind(content: string): "cards" | "choice" | undefined {
+export type Blank = { text: string; answers: string[][]; explanation: string };
+
+export function quizKind(content: string): "cards" | "choice" | "blanks" | undefined {
   const q = (frontmatter(content).data.quiz ?? "").trim().toLowerCase();
-  return q === "cards" || q === "flashcards" ? "cards" : q === "choice" || q === "multiple-choice" ? "choice" : undefined;
+  return q === "cards" || q === "flashcards" ? "cards" : q === "choice" || q === "multiple-choice" ? "choice" : q === "blanks" || q === "fill" || q === "fill-in-the-blank" || q === "cloze" ? "blanks" : undefined;
 }
 
 export const NEW_CARDS = `---\nquiz: cards\n---\n\n# Flashcards\n\nOne card per paragraph: \`Front::Back\` on one line, or the front, a line with \`?\`, then the back.\n\nWhat keeps a canister alive?::Cycles\n\nWhich call turns ICP into cycles?\n?\nnotify_top_up on the cycles minting canister\n`;
+export const NEW_BLANKS = `---\nquiz: blanks\n---\n\n# Fill in the blanks\n\nOne item per paragraph: a sentence with the answer in double curly braces, alternatives separated by a vertical bar, and a quote line after it as the explanation.\n\nA canister pays for its own compute and storage in {{cycles}}.\n> Cycles are the Internet Computer's fuel; one XDR buys a trillion of them.\n\nThe {{registry}} canister spawns every space, and each space is its own {{canister|notebook canister}}.\n`;
 export const NEW_CHOICE = `---\nquiz: choice\n---\n\n# Quiz\n\n### What happens when a canister runs out of cycles?\n- [ ] It is deleted at once\n- [x] It freezes, then is deleted when the remaining cycles run out\n- [ ] Nothing, calls are free\n> A frozen canister keeps its data until its balance hits zero.\n\n### Which of these are ICRC standards? (pick all)\n- [x] ICRC-1\n- [x] ICRC-2\n- [ ] ERC-20\n`;
 
 /** Flashcards: blocks separated by blank lines; headings and prose without a `::` or `?` are skipped. */
@@ -69,6 +72,24 @@ export function parseChoice(content: string): Question[] {
   if (q && q.options.length) out.push(q);
   return out.filter((x) => x.correct.length);
 }
+
+const BLANK = /\{\{([^{}\n]+)\}\}/g;
+/** Fill in the blanks: a paragraph with `{{answer}}` blanks (`{{a|b}}` accepts either); `>` lines explain. */
+export function parseBlanks(content: string): Blank[] {
+  const body = frontmatter(content).body;
+  const out: Blank[] = [];
+  for (const block of body.split(/\n\s*\n/)) {
+    const lines = block.split("\n").map((l) => l.trim()).filter(Boolean);
+    const text = lines.filter((l) => !l.startsWith(">") && !l.startsWith("#")).join(" ");
+    const answers = [...text.matchAll(BLANK)].map((m) => m[1].split("|").map((a) => a.trim()).filter(Boolean)).filter((a) => a.length);
+    if (!answers.length) continue;
+    out.push({ text, answers, explanation: lines.filter((l) => l.startsWith(">")).map((l) => l.replace(/^>\s?/, "")).join(" ") });
+  }
+  return out;
+}
+/** A typed answer matches when it equals an accepted one, case, spacing and ending punctuation aside. */
+const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").replace(/[.,;:!?'"’]+$/, "").trim();
+export const gradeBlanks = (q: Blank, typed: string[]): boolean[] => q.answers.map((alts, i) => alts.some((a) => norm(a) === norm(typed[i] ?? "")));
 
 /** True when exactly the right options are picked. */
 export const graded = (q: Question, picked: Iterable<number>): boolean => {

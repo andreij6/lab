@@ -55,6 +55,7 @@ export function examples(tools: Set<string>, today: string): ExampleFile[] {
   if (has("study")) {
     add("Examples/Study/Flashcards.md", `---\nquiz: cards\n---\n# Flashcards\n\n${how("⋯ → New flashcard deck, or ⋯ on any note → Make flashcards. Study brings each card back just before you would forget it.")}What does a canister run on?::Cycles\n\nThe front of a card\n?\nThe back of a card, on the lines after a single ?\n`);
     add("Examples/Study/Quiz.md", NEW_CHOICE);
+    add("Examples/Study/Fill in the blanks.md", `---\nquiz: blanks\n---\n# Fill in the blanks\n\n${how("⋯ → New fill-in-the-blank quiz. One sentence per paragraph with the answer in double curly braces; a bar between alternatives; a quote line explains.")}A canister pays for its own compute and storage in {{cycles}}.\n> Cycles are the Internet Computer's fuel; one XDR buys a trillion of them.\n\nThe {{registry}} canister spawns every space, and each space is its own {{canister|notebook canister}}.\n`);
     add("Examples/Study/Glossary.md", `# Glossary\n\n${how("Write `Term:: definition` on its own line in any note. Terms are underlined in reading view and listed in Study.")}Spaced repetition:: reviewing just before you would forget.\n\nCloze:: a card made by hiding part of a sentence: ==highlight== a phrase and Make flashcards turns it into one.\n`);
   }
   if (has("work")) {

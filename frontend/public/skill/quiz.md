@@ -47,6 +47,25 @@ Read the note; for each claim worth testing write one question whose wrong optio
 mistakes, not nonsense, and whose explanation cites the note (`see [[Note#Heading]]`). Name it
 `<Note> (quiz).md` next to the note and link the source.
 
+## Fill in the blanks: `quiz: blanks`
+
+The other quiz kind. One item per paragraph: a sentence with the answer in `{{double braces}}`,
+several blanks allowed, `{{a|b}}` accepting either; a `>` line after it is the explanation. The
+reader types each answer (case, spacing and ending punctuation do not matter), checks, and sees the
+right word where they missed. Paragraphs and headings without braces are skipped.
+
+```markdown
+---
+quiz: blanks
+---
+# Cycles, the blanks
+
+A canister pays for its compute and storage in {{cycles}}.
+> One XDR buys a trillion of them.
+
+The {{registry}} canister spawns every space, and each space is its own {{canister|notebook canister}}.
+```
+
 ## Cost
 
 A quiz is a note: the call plus the bytes stored.

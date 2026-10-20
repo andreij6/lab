@@ -23,7 +23,7 @@ import { dailyPath, fillTemplate } from "./templates";
 import { ForceGraph } from "./graph";
 import { CITE, answer, cited, decide, excerpt, type Pick } from "./chat";
 import { NEW_BOARD, isKanban, moveCard, parseBoard, serializeBoard, type Board } from "./kanban";
-import { NEW_CARDS, NEW_CHOICE, graded, parseCards, parseChoice, quizKind, shuffled } from "./quiz";
+import { NEW_BLANKS, NEW_CARDS, NEW_CHOICE, gradeBlanks, graded, parseBlanks, parseCards, parseChoice, quizKind, shuffled } from "./quiz";
 import { countByDay, dayKey, gridWeeks, level, streak } from "./activity";
 import { examples } from "./examples";
 import { minDepositE8s } from "./pricing";
@@ -1047,6 +1047,7 @@ const COMMANDS: { label: string; kbd?: string; run: () => void }[] = [
   { label: "New dashboard", run: () => void newDashNote() },
   { label: "New flashcard deck", run: () => void newQuiz("cards") },
   { label: "New multiple-choice quiz", run: () => void newQuiz("choice") },
+  { label: "New fill-in-the-blank quiz", run: () => void newQuiz("blanks") },
   { label: "Highlight selection", kbd: `${MOD}⇧H`, run: () => toggleHighlight() },
   { label: "New folder", run: () => void newFolder("") },
   { label: "New note from template", run: () => void newFromTemplate() },
@@ -1490,7 +1491,7 @@ function editorBody(p: Pane): string {
     return `${S.mobile ? "" : `<div class="editor-bar"><input class="title" name="title" data-pane="${p.id}" value="${esc(title(c))}" aria-label="Quiz name" spellcheck="false" autocomplete="off"><span class="right-actions">${badges}<button type="button" class="btn btn-ghost" data-action="view" data-pane="${p.id}" title="Quiz or markdown source (${MOD}E)">${icon(asSrc ? "edit" : "check")}<span class="small lbl">${asSrc ? "Source" : kind === "cards" ? "Cards" : "Quiz"}</span></button><button type="button" class="btn btn-ghost icon-btn" data-action="menu-current" data-pane="${p.id}" title="More" aria-label="Note actions">${icon("more")}</button></span></div>
       <div class="path-hint">${esc(c)}</div>`}
       ${asSrc ? `<div class="editor-panes view-edit"><div class="cm-host" data-cm="${esc(c)}" data-pane="${p.id}"></div></div>` : `<div class="qz" data-quiz="${esc(c)}">${quizHtml(c, d.text)}</div>`}
-      <div class="statusbar"><span data-status-path="${esc(c)}"><i class="dot ${d.saving ? "saving" : d.dirty ? "dirty" : ""}"></i>${d.saving ? "Saving…" : d.dirty ? "Unsaved" : "Saved"}</span><span class="muted kb-hint">${kind === "cards" ? "Flashcards · tap a card to flip · Spaced Repetition plugin format" : "Multiple choice · pick, then Check"}</span></div>`;
+      <div class="statusbar"><span data-status-path="${esc(c)}"><i class="dot ${d.saving ? "saving" : d.dirty ? "dirty" : ""}"></i>${d.saving ? "Saving…" : d.dirty ? "Unsaved" : "Saved"}</span><span class="muted kb-hint">${kind === "cards" ? "Flashcards · tap a card to flip · Spaced Repetition plugin format" : kind === "blanks" ? "Fill in the blanks · type, then Check" : "Multiple choice · pick, then Check"}</span></div>`;
   }
   if (isDashPath(c)) {
     const asSrc = p.view === "edit";
@@ -1641,7 +1642,7 @@ function panesHtml(): string {
 
 // --- quizzes: flashcards and multiple choice
 
-type QuizState = { i: number; order: number[]; seed: number; flipped: boolean; good: number; again: number; picked: Set<number>; checked: boolean; right: number; mode: "due" | "all"; n: number };
+type QuizState = { i: number; order: number[]; seed: number; flipped: boolean; good: number; again: number; picked: Set<number>; typed: string[]; checked: boolean; right: number; mode: "due" | "all"; n: number };
 const isSharedKey = (p: string) => p.startsWith("shared:");
 /** Card schedules: the notebook's settings for your own decks; this device for decks shared with you. */
 function srsFor(path: string): Record<string, Sched> {
@@ -1673,7 +1674,7 @@ function quizState(path: string, n: number, reset = false, seed = 0, subset?: nu
   if (!st || reset || st.n !== n) {
     const base = subset ?? Array.from({ length: n }, (_, k) => k);
     const order = seed ? shuffled(base.length, seed).map((k) => base[k]) : base;
-    st = { i: 0, order, seed, flipped: false, good: 0, again: 0, picked: new Set(), checked: false, right: 0, mode: subset ? "due" : "all", n };
+    st = { i: 0, order, seed, flipped: false, good: 0, again: 0, picked: new Set(), typed: [], checked: false, right: 0, mode: subset ? "due" : "all", n };
     quizStates.set(path, st);
   }
   return st;
@@ -1706,6 +1707,26 @@ function quizHtml(path: string, text: string): string {
       <div class="qcard ${st.flipped ? "back" : ""}" data-action="qz-flip" data-path="${esc(path)}" role="button" tabindex="0" title="Tap to flip"><div class="qside md">${renderMd(st.flipped ? c.back : c.front, path)}</div><div class="qlabel">${st.flipped ? "answer" : "question"}</div></div>
       <div class="qz-actions">${st.flipped ? `<button type="button" class="btn" data-action="qz-rate" data-path="${esc(path)}" data-r="again" title="Forgot it: see it again today">${icon("x")}Again</button><button type="button" class="btn" data-action="qz-rate" data-path="${esc(path)}" data-r="hard" title="Barely: a little later">Hard</button><button type="button" class="btn btn-primary" data-action="qz-rate" data-path="${esc(path)}" data-r="good" title="Knew it">${icon("check")}Good</button><button type="button" class="btn" data-action="qz-rate" data-path="${esc(path)}" data-r="easy" title="Too easy: much later">Easy</button>` : `<button type="button" class="btn btn-primary" data-action="qz-flip" data-path="${esc(path)}">${icon("eye")}Show answer</button>`}</div>`;
   }
+  if (kind === "blanks") {
+    const qs = parseBlanks(text);
+    if (!qs.length) return `<div class="qz-empty">${icon("check")}<h3>No blanks yet</h3><p class="muted small">One sentence per paragraph with the answer in <code>{{double braces}}</code>, <code>{{several|alternatives}}</code> with a bar, a <code>&gt;</code> line as the explanation. ${MOD}E shows the source.</p></div>`;
+    const st = quizState(path, qs.length);
+    if (st.i >= qs.length) return `<div class="qz-done"><h3>Quiz finished</h3><p>${st.right} of ${qs.length} right · ${Math.round((st.right / qs.length) * 100)}%</p><div class="qz-actions">${isSharedKey(path) ? `<button type="button" class="btn btn-primary" data-action="shared-clone">${icon("copy")}Clone to my Agent Space &amp; track scores</button>` : ""}</div>${tools(qs.length)}</div>`;
+    const q = qs[st.order[st.i]];
+    const marks = st.checked ? gradeBlanks(q, st.typed) : [];
+    let k = 0;
+    const body = q.text.split(/(\{\{[^{}\n]+\}\})/).map((part) => {
+      if (!/^\{\{.*\}\}$/.test(part)) return esc(part);
+      const i = k++;
+      return `<input class="qblank ${st.checked ? (marks[i] ? "right" : "wrong") : ""}" name="qblank" data-path="${esc(path)}" data-blank="${i}" value="${esc(st.typed[i] ?? "")}" size="${Math.max(6, Math.max(...q.answers[i].map((a) => a.length)) + 2)}" autocomplete="off" autocapitalize="off" spellcheck="false" ${st.checked ? "disabled" : ""} aria-label="Blank ${i + 1}">${st.checked && !marks[i] ? `<span class="qanswer">${esc(q.answers[i][0])}</span>` : ""}`;
+    }).join("");
+    const ok = st.checked && marks.every(Boolean);
+    const filled = q.answers.every((_, i) => (st.typed[i] ?? "").trim());
+    return `<div class="qz-head"><span class="small muted">Question ${st.i + 1} of ${qs.length}${q.answers.length > 1 ? ` · ${q.answers.length} blanks` : ""}</span>${tools(qs.length)}</div>
+      <div class="qquestion qfill">${body}</div>
+      ${st.checked ? `<div class="qresult ${ok ? "ok" : "no"}">${ok ? `${icon("check")}Correct` : `${icon("x")}Not quite`}${q.explanation ? `<div class="small">${esc(q.explanation)}</div>` : ""}</div>` : ""}
+      <div class="qz-actions">${st.checked ? `<button type="button" class="btn btn-primary" data-action="qz-next" data-path="${esc(path)}">${icon("move")}${st.i + 1 < qs.length ? "Next" : "Finish"}</button>` : `<button type="button" class="btn btn-primary" data-action="qz-check" data-path="${esc(path)}" ${filled ? "" : "disabled"}>${icon("check")}Check</button>`}</div>`;
+  }
   const qs = parseChoice(text);
   if (!qs.length) return `<div class="qz-empty">${icon("check")}<h3>No questions yet</h3><p class="muted small">A <code>###</code> heading per question, task items as options, <code>[x]</code> on the right ones, an optional <code>&gt;</code> quote as the explanation. ${MOD}E shows the source.</p></div>`;
   const st = quizState(path, qs.length);
@@ -1730,13 +1751,13 @@ async function finishSession(pathKey: string, score: number, total: number) {
 function refreshQuiz(path: string) {
   document.querySelectorAll<HTMLElement>(`.qz[data-quiz="${CSS.escape(path)}"]`).forEach((h) => { h.innerHTML = quizHtml(path, draftOf(path).text); afterRender(h); });
 }
-function newQuiz(kind: "cards" | "choice", folder?: string) {
+function newQuiz(kind: "cards" | "choice" | "blanks", folder?: string) {
   const where = folder ?? (cur() ? dir(cur()!) : "");
   const have = new Set(paths());
-  const base = kind === "cards" ? "Flashcards" : "Quiz";
+  const base = kind === "cards" ? "Flashcards" : kind === "blanks" ? "Fill in the blanks" : "Quiz";
   let name = base;
   for (let i = 1; have.has(`${where ? `${where}/` : ""}${name}.md`); i++) name = `${base} ${i}`;
-  return newNote(`${where ? `${where}/` : ""}${name}.md`, where, undefined, kind === "cards" ? NEW_CARDS : NEW_CHOICE);
+  return newNote(`${where ? `${where}/` : ""}${name}.md`, where, undefined, kind === "cards" ? NEW_CARDS : kind === "blanks" ? NEW_BLANKS : NEW_CHOICE);
 }
 
 // --- the Community: channels, chat, who is online; posting needs ICP in the in-app wallet
@@ -3519,6 +3540,7 @@ function newMenu(el: HTMLElement, folder?: string) {
     { label: "Python space", icon: "command", action: () => void newPyNotebook(folder) },
     { label: "Flashcards", icon: "check", action: () => void newQuiz("cards", folder) },
     { label: "Quiz", icon: "list", action: () => void newQuiz("choice", folder) },
+    { label: "Fill in the blanks", icon: "edit", action: () => void newQuiz("blanks", folder) },
   ];
   contextMenu(r.left, r.bottom + 4, folder ? `New in ${folder}` : "New", items);
 }
@@ -4733,7 +4755,7 @@ setInterval(checkReminders, 60_000);
 function studyTab(): string {
   const today = new Date();
   const decks = deckPaths().map((p) => ({ path: p, due: dueCount(p, note(p)!.content), total: parseCards(note(p)!.content).length, stats: S.settings.deckStats[p] }));
-  const quizzes = (S.notes ?? []).filter((n) => n.path.endsWith(".md") && quizKind(n.content) === "choice").map((n) => n.path);
+  const quizzes = (S.notes ?? []).filter((n) => n.path.endsWith(".md") && ["choice", "blanks"].includes(quizKind(n.content) ?? "")).map((n) => n.path);
   const g = glossary(S.notes ?? []);
   const src = sources(S.notes ?? []);
   const week: string[] = []; for (let i = 0; i < 7; i++) { const d = new Date(today); d.setDate(today.getDate() - i); week.push(dayKey(d)); }
@@ -4754,7 +4776,7 @@ function studyTab(): string {
     <div class="card band">
       <h2>${icon("check")} Due today</h2>
       ${decks.length ? `<div class="runs">${decks.map((d) => `<div class="run"><span><b>${esc(title(d.path))}</b> <span class="small muted">${d.due} due of ${d.total}${d.stats?.reviews ? ` · ${Math.round((d.stats.good / d.stats.reviews) * 100)}% got it` : ""}</span></span><span class="row tight"><button type="button" class="btn ${d.due ? "btn-primary" : ""}" data-action="open" data-path="${esc(d.path)}">${icon(d.due ? "check" : "eye")}${d.due ? "Review" : "Study anyway"}</button><button type="button" class="btn btn-ghost icon-btn" data-action="anki" data-path="${esc(d.path)}" title="Export for Anki" aria-label="Export for Anki">${icon("download")}</button></span></div>`).join("")}</div>` : `<p class="small muted">No flashcard decks yet. Make one from the command palette, or open any note and choose "Make flashcards" from its menu.</p>`}
-      ${quizzes.length ? `<div class="band-title">Quizzes</div><div class="runs">${quizzes.map((q) => `<div class="run"><span><b>${esc(title(q))}</b> <span class="small muted">${parseChoice(note(q)!.content).length} questions${byQuiz.get(q)?.length ? ` · ${byQuiz.get(q)!.length} attempt${byQuiz.get(q)!.length === 1 ? "" : "s"} by others` : ""}</span></span><button type="button" class="btn" data-action="open" data-path="${esc(q)}">${icon("list")}Take it</button></div>`).join("")}</div>` : ""}
+      ${quizzes.length ? `<div class="band-title">Quizzes</div><div class="runs">${quizzes.map((q) => `<div class="run"><span><b>${esc(title(q))}</b> <span class="small muted">${(quizKind(note(q)!.content) === "blanks" ? parseBlanks(note(q)!.content) : parseChoice(note(q)!.content)).length} questions${byQuiz.get(q)?.length ? ` · ${byQuiz.get(q)!.length} attempt${byQuiz.get(q)!.length === 1 ? "" : "s"} by others` : ""}</span></span><button type="button" class="btn" data-action="open" data-path="${esc(q)}">${icon("list")}Take it</button></div>`).join("")}</div>` : ""}
     </div>
     ${S.attempts.length ? `<div class="card band"><h2>${icon("bot")} Attempts on your shared quizzes</h2><p class="muted small">People you shared a quiz or deck with, and how they did. Newest first.</p><div class="runs">${S.attempts.slice(0, 50).map((a) => `<div class="run"><span><b>${esc(title(a.path))}</b> <span class="small muted">${shortPrincipal(a.who.toText())}</span></span><span class="small muted">${when(a.at)}</span><span class="pill ${a.score * 2 >= a.total ? "ok" : "low"}">${a.score}/${a.total}</span></div>`).join("")}</div></div>` : ""}
     <form class="card band" data-form="goals">
@@ -8603,8 +8625,14 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
       st.picked.has(k) ? st.picked.delete(k) : st.picked.add(k);
       return refreshQuiz(el.dataset.path!);
     }
-    case "qz-check": { const st = quizStates.get(el.dataset.path!); if (st && st.picked.size) { st.checked = true; const q = parseChoice(draftOf(el.dataset.path!).text)[st.order[st.i]]; if (q && graded(q, st.picked)) st.right++; refreshQuiz(el.dataset.path!); } return; }
-    case "qz-next": { const p = el.dataset.path!; const st = quizStates.get(p); if (st) { st.i++; st.checked = false; st.picked = new Set(); if (st.i >= st.order.length) { if (!isSharedKey(p)) bumpStudy(st.order.length); void finishSession(p, st.right, st.order.length); } refreshQuiz(p); } return; }
+    case "qz-check": {
+      const p = el.dataset.path!, st = quizStates.get(p), text = draftOf(p).text;
+      if (!st) return;
+      if (quizKind(text) === "blanks") { const q = parseBlanks(text)[st.order[st.i]]; if (!q || !q.answers.every((_, i) => (st.typed[i] ?? "").trim())) return; st.checked = true; if (gradeBlanks(q, st.typed).every(Boolean)) st.right++; }
+      else { if (!st.picked.size) return; st.checked = true; const q = parseChoice(text)[st.order[st.i]]; if (q && graded(q, st.picked)) st.right++; }
+      return refreshQuiz(p);
+    }
+    case "qz-next": { const p = el.dataset.path!; const st = quizStates.get(p); if (st) { st.i++; st.checked = false; st.picked = new Set(); st.typed = []; if (st.i >= st.order.length) { if (!isSharedKey(p)) bumpStudy(st.order.length); void finishSession(p, st.right, st.order.length); } refreshQuiz(p); } return; }
     case "qz-restart": { const p = el.dataset.path!; const n = quizStates.get(p)?.n ?? 0; if (quizKind(draftOf(p).text) === "cards") deckSession(p, draftOf(p).text, true, 0, true); else quizState(p, n, true, 0); return refreshQuiz(p); }
     case "qz-shuffle": { const p = el.dataset.path!; const n = quizStates.get(p)?.n ?? 0; const seed = Date.now() % 100000 || 1; if (quizKind(draftOf(p).text) === "cards") deckSession(p, draftOf(p).text, true, seed, true); else quizState(p, n, true, seed); return refreshQuiz(p); }
     case "kb-del":
@@ -9091,7 +9119,22 @@ document.addEventListener("input", (ev) => {
     case "draft":
       onDraftInput((el as HTMLTextAreaElement).dataset.path!, v);
       break;
+    case "qblank": {
+      // typed answers go to the state; the Check button wakes once every blank has something (no re-render, or the field would lose focus)
+      const st = quizStates.get(el.dataset.path!);
+      if (!st) break;
+      st.typed[Number(el.dataset.blank)] = v;
+      const q = parseBlanks(draftOf(el.dataset.path!).text)[st.order[st.i]];
+      const btn = el.closest(".qz")?.querySelector<HTMLButtonElement>('[data-action="qz-check"]');
+      if (btn) btn.disabled = !q || !q.answers.every((_, i) => (st.typed[i] ?? "").trim());
+      break;
+    }
   }
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || !(e.target as HTMLElement).matches?.("input.qblank")) return;
+  e.preventDefault();
+  (e.target as HTMLElement).closest(".qz")?.querySelector<HTMLButtonElement>('[data-action="qz-check"]:not(:disabled), [data-action="qz-next"]')?.click();
 });
 document.addEventListener("change", (ev) => {
   const el = ev.target as HTMLInputElement;

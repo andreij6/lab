@@ -2587,7 +2587,7 @@ const RESOURCES: &[(&str, &str, &str)] = &[
     ("SKILL", "The index: the space, the tools, habits, which file to read for what", include_str!("../../../frontend/public/skill/SKILL.md")),
     ("memory", "Notes: reading, writing, links and markdown", include_str!("../../../frontend/public/skill/memory.md")),
     ("flashcards", "Flashcard decks (quiz: cards)", include_str!("../../../frontend/public/skill/flashcards.md")),
-    ("quiz", "Multiple-choice quizzes (quiz: choice)", include_str!("../../../frontend/public/skill/quiz.md")),
+    ("quiz", "Quizzes: multiple choice (quiz: choice) and fill in the blanks (quiz: blanks)", include_str!("../../../frontend/public/skill/quiz.md")),
     ("kanban", "Kanban boards (kanban-plugin: board)", include_str!("../../../frontend/public/skill/kanban.md")),
     ("notes-types", "Slides, meetings, projects, people, decisions; formats to leave alone", include_str!("../../../frontend/public/skill/notes-types.md")),
     ("community", "Chat and the board: rules, costs, manners", include_str!("../../../frontend/public/skill/community.md")),

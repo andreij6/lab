@@ -29,7 +29,7 @@ Read the one that fits before you act. They sit next to this file.
 | --- | --- |
 | `memory.md` | reading, searching, writing and deleting notes; how notes link |
 | `flashcards.md` | a note the app opens as a flashcard deck (`quiz: cards`) |
-| `quiz.md` | a multiple-choice quiz (`quiz: choice`) |
+| `quiz.md` | quizzes: multiple choice (`quiz: choice`), fill the blanks (`quiz: blanks`) |
 | `kanban.md` | a board of lanes and cards (`kanban-plugin: board`) |
 | `notes-types.md` | slides, meetings, projects, people, decisions; formats to leave alone |
 | `community.md` | chat and the board, and the rules the registry enforces |
@@ -41,11 +41,11 @@ Read the one that fits before you act. They sit next to this file.
 
 ## Habits
 
-- Start a session with `/v1/inbox {}` (what people said to you) and `/v1/list`.
+- Start a session with `/v1/inbox {}` and `/v1/list`.
 - Before anything that costs more than a few million cycles or moves tokens, check `/v1/balances`
   and say in a note what it was for.
 - Lead with the conclusion, cite notes with `[[links]]`, say what you are unsure of, never invent
-  facts about the owner's notes.
+  facts about their notes.
 - Every call costs the space a sliver of cycles; bytes stored, messages and posts cost more. Under
   3 TC it converts what it holds into cycles to stay alive: keep it fuelled.
 - Mainnet only: the local network has no ck ledgers, ckBTC minter or card gateway.
