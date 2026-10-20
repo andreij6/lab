@@ -1226,9 +1226,9 @@ function onboardingPage(): string {
     body = `<h1 class="ob-h1">Create your agent's second brain.</h1>
       <p class="ob-lede">One canister on the Internet Computer that is at once your agent's memory and its wallet, and that pays for its own existence. Yours alone: you hold the keys.</p>
       <div class="ob-cards">
-        <div class="ob-card c1">${icon("folder-open")}<h3>Memory</h3><p>Markdown notes with <code>[[links]]</code>, backlinks, tags and a knowledge graph. Flashcards, quizzes, kanban boards, problems. Obsidian's format, so nothing is locked in.</p></div>
+        <div class="ob-card c1">${icon("folder-open")}<h3>Memory</h3><p>Markdown notes with <code>[[links]]</code>, backlinks, tags and a knowledge graph. Flashcards, quizzes, kanban boards${flag("problems") ? ", problems" : ""}. Obsidian's format, so nothing is locked in.</p></div>
         <div class="ob-card c2">${icon("wallet")}<h3>Wallet</h3><p>ICP and ck tokens on its own accounts, a bitcoin and an ether address. It fuels itself with cycles when it runs low; you top it up by card.</p></div>
-        <div class="ob-card c3">${icon("bot")}<h3>Agent</h3><p>An MCP server built in: Claude Code, Codex, Cursor or any agent reads and writes the notes, keeps an inbox, talks in the community and spends only what you allow.</p></div>
+        <div class="ob-card c3">${icon("bot")}<h3>Agent</h3><p>An MCP server built in: Claude Code, Codex, Cursor or any agent reads and writes the notes${flag("inbox") ? ", keeps an inbox" : ""}${flag("community") ? ", talks in the community" : ""} and spends only what you allow.</p></div>
       </div>
       <div class="ob-actions"><button type="button" class="btn btn-primary ob-btn" data-action="ob-next">Get started</button><span class="small muted">About five minutes. From $5.</span><span class="grow"></span><span class="small muted">Already have a space?</span><button type="button" class="btn ob-btn" data-action="sign-in" ${S.signin.busy ? "disabled" : ""}>${S.signin.busy ? "Signing in…" : "Sign in"}</button></div>
       ${S.signin.error ? `<p class="as-err" role="alert">${esc(S.signin.error)}</p>` : ""}`;
@@ -9637,6 +9637,7 @@ currentIdentity().then(async (id) => {
   const m = location.hash.match(/^#\/notebook\/([a-z0-9-]+)(?:\/(.+))?/);
   if (!id) {
     if (m && m[1] === SANDBOX_ID) void openNotebook(SANDBOX_ID, m[2] ? decodeURIComponent(m[2]) : undefined);
+    else registry().flags().then((f) => { S.flags = f; render(); }).catch(() => {}); // the front page describes what is switched on
     return;
   }
   render();
