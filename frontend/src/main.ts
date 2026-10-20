@@ -1230,7 +1230,8 @@ function onboardingPage(): string {
         <div class="ob-card c2">${icon("wallet")}<h3>Wallet</h3><p>ICP and ck tokens on its own accounts, a bitcoin and an ether address. It fuels itself with cycles when it runs low; you top it up by card.</p></div>
         <div class="ob-card c3">${icon("bot")}<h3>Agent</h3><p>An MCP server built in: Claude Code, Codex, Cursor or any agent reads and writes the notes, keeps an inbox, talks in the community and spends only what you allow.</p></div>
       </div>
-      <div class="ob-actions"><button type="button" class="btn btn-primary ob-btn" data-action="ob-next">Get started</button><span class="small muted">About five minutes. From $5.</span></div>`;
+      <div class="ob-actions"><button type="button" class="btn btn-primary ob-btn" data-action="ob-next">Get started</button><span class="small muted">About five minutes. From $5.</span><span class="grow"></span><span class="small muted">Already have a space?</span><button type="button" class="btn ob-btn" data-action="sign-in" ${S.signin.busy ? "disabled" : ""}>${S.signin.busy ? "Signing in…" : "Sign in"}</button></div>
+      ${S.signin.error ? `<p class="as-err" role="alert">${esc(S.signin.error)}</p>` : ""}`;
   } else if (step === 2) {
     body = `<h1 class="ob-h1">Sign in.</h1>
       <p class="ob-lede">Agent Space uses Internet Identity, the Internet Computer's passwordless login: a passkey on your device, no email, no password. The same identity brings you back to this space from any device.</p>
