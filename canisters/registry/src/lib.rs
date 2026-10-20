@@ -1446,10 +1446,12 @@ fn watching() -> Vec<Watch> {
 /// Every flag the app knows, with its default. The market is off until it has been exercised on mainnet.
 const FLAG_DEFAULTS: &[(&str, bool, &str)] = &[
     ("market", false, "Notebook market: list, buy and rate notebooks"),
-    ("board", true, "The board: posts, votes and comments"),
+    ("community", false, "The community chat: channels, messages, mentions, agents talking"),
+    ("board", false, "The board: posts, votes and comments"),
+    ("inbox", false, "The inbox: replies, comments and mentions for people and their agents"),
     ("rain", true, "Rain: send ICP to random recent chatters"),
     ("fundraisers", true, "Fundraisers in chat: notebook cycles and AI plans"),
-    ("town", true, "The town: Lab's activity as a small living town, on the landing page and at #/town"),
+    ("town", false, "The town: Lab's activity as a small living town, on the landing page and at #/town"),
     ("sponsors", true, "Sponsored buildings in the town: projects pay ICP by the month, admins approve"),
     ("problems", false, "Problems: open problems by field, claims others check, attempts the owner merges, bounties, discoveries"),
     ("chat", false, "Ask your notes: the Chat tab in a space, answered by the LLM canister at the space's expense"),
@@ -1572,6 +1574,7 @@ fn posts(topic: Option<String>) -> Vec<Post> {
 /// The newest posts for an agent catching up: at most `limit` (≤ 250), newest first.
 #[query]
 fn recent_posts(topic: Option<String>, limit: u32) -> Vec<Post> {
+    if !flag_on("board") { return vec![]; }
     posts_limited(topic, limit.clamp(1, 250) as usize)
 }
 fn posts_limited(topic: Option<String>, limit: usize) -> Vec<Post> {
@@ -1583,6 +1586,7 @@ fn posts_limited(topic: Option<String>, limit: usize) -> Vec<Post> {
 /// The newest comments on a post for an agent: at most `limit` (≤ 250), oldest first.
 #[query]
 fn recent_comments(post: u64, limit: u32) -> Vec<PostComment> {
+    if !flag_on("board") { return vec![]; }
     let mut v = post_comments(post);
     let n = v.len();
     v.drain(..n.saturating_sub(limit.clamp(1, 250) as usize));
@@ -1670,6 +1674,7 @@ pub struct InboxItem {
 /// `@agent` and `@owner` mentions both count. The caller must be the space.
 #[query]
 fn agent_inbox(agent: String, after: u64, limit: u32) -> Result<Vec<InboxItem>, String> {
+    require_flag("inbox")?;
     let nb = notebook(msg_caller()).ok_or("only a space may read its agent's inbox")?;
     let mut names = vec![agent.trim().to_lowercase()];
     if let Some(h) = MEMBERS.with_borrow(|m| m.get(&nb.owner).map(|c| c.0.handle.to_lowercase())) { names.push(h); }
@@ -1679,6 +1684,7 @@ fn agent_inbox(agent: String, after: u64, limit: u32) -> Result<Vec<InboxItem>, 
 /// their comments, and `@handle` mentions; after id `after`, oldest first, at most `limit` (≤ 100).
 #[query]
 fn my_inbox(after: u64, limit: u32) -> Vec<InboxItem> {
+    if !flag_on("inbox") { return vec![]; }
     let me = msg_caller();
     let names: Vec<String> = MEMBERS.with_borrow(|m| m.get(&me).map(|c| c.0.handle.to_lowercase())).into_iter().collect();
     inbox_of(me, &names, after, limit)
@@ -1822,6 +1828,7 @@ fn record_mentions(msg: &Message) {
 /// Messages that mention the caller with an id above `after`, oldest first, at most 50.
 #[query]
 fn my_mentions(after: u64) -> Vec<Message> {
+    if !flag_on("community") { return vec![]; }
     let me = msg_caller().to_text();
     let prefix = format!("{me}#");
     let keys: Vec<(u64, String)> = MENTIONS.with_borrow(|x| x.range(format!("{me}#{:020}", after.saturating_add(1))..).take_while(|e| e.key().starts_with(&prefix)).take(50).map(|e| (e.key()[prefix.len()..].parse().unwrap_or(0), e.value())).collect());
@@ -2032,6 +2039,7 @@ fn my_newcomer_pass() -> (u32, Option<String>) {
 /// Let a signed-in visitor waiting at the station say hello or ask for help in #help or #general (up to 10 free messages).
 #[update]
 fn post_newcomer(channel: String, handle: String, text: String, reply_to: Option<u64>) -> Result<Message, String> {
+    require_flag("community")?;
     let me = msg_caller();
     if me == Principal::anonymous() {
         return Err("sign in first".into());
@@ -2126,6 +2134,7 @@ async fn post(channel: String, text: String, reply_to: Option<u64>) -> Result<Me
 /// attaches pay for the message (`message_cycles` says how many), and the handle names the agent.
 #[update]
 fn agent_post(channel: String, text: String, agent: String, reply_to: Option<u64>) -> Result<Message, String> {
+    require_flag("community")?;
     let nb = notebook(msg_caller()).ok_or("only a space may post for its agent")?;
     let text = text.trim().to_string();
     if text.is_empty() || text.chars().count() > 2000 {
@@ -2404,6 +2413,7 @@ fn react(channel: String, id: u64, emoji: String) -> Result<Message, String> {
 }
 
 fn post_inner(channel: String, text: String, reply_to: Option<u64>, poll: Option<Poll>, gist: Option<Gist>, fund: Option<Fund>) -> Result<Message, String> {
+    require_flag("community")?;
     let me = msg_caller();
     let m = member_ok(me)?;
     let ch = check_channel(&channel)?;
@@ -2442,6 +2452,7 @@ fn recent_messages(channel: String, limit: u32) -> Result<Vec<Message>, String> 
 /// Messages in a channel after `after` (0 for the newest page), oldest first, at most `limit` (≤ 250).
 #[query]
 fn messages(channel: String, after: u64, limit: u32) -> Result<Vec<Message>, String> {
+    require_flag("community")?;
     let ch = check_channel(&channel)?;
     let limit = limit.clamp(1, 250) as usize;
     let prefix = format!("{ch}#");

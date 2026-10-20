@@ -181,7 +181,7 @@ function tracked<T extends object>(actor: T): T {
 }
 /** A feature flag from the registry; unknown or not yet loaded flags count as on, except the market. */
 /** Off until the registry says otherwise: the market ships switched off. */
-const OFF_BY_DEFAULT = ["market", "problems", "chat"];
+const OFF_BY_DEFAULT = ["market", "problems", "chat", "community", "board", "inbox", "town"];
 const flag = (name: string): boolean => { const f = S.flags.find((x) => x.name === name); return f ? f.on : !OFF_BY_DEFAULT.includes(name); };
 
 // --- Browser Sandbox Notebook ("local-sandbox"): full zero-ICP browser workspace, mintable to an on-chain canister any time
@@ -1127,9 +1127,9 @@ function routeSheet(el: HTMLElement) {
     ...(flag("problems") ? [{ label: "Problems", icon: "target", on: !!S.problems, go: () => { location.hash = "#/problems"; } } as R] : []),
   ] : [
     ...(S.notebook ? [tab("manage", "Wallet", "wallet"), { label: "Notes", icon: "folder-open", on: inNb && S.tab === "notes", go: () => { if (!inNb) location.hash = `#/notebook/${nbId}`; else { const i = document.createElement("i"); i.dataset.tab = "notes"; void onAction("tab", i, new MouseEvent("click")); } } } as R, ...FEATURES.filter((f) => f.id === "graph" || (f.id === "chat" && flag("chat"))).map((f) => tab(f.id, f.label, f.icon))].filter((r) => !r.hidden) : [{ label: "Agent Space", icon: "list", on: !S.community && !S.board && !S.inbox && !S.market && !S.admin && !S.town && !S.problems, go: () => { location.hash = "#/"; } }]),
-    { label: "Community", icon: "users", on: !!S.community, go: () => { location.hash = "#/community"; } },
+    ...(flag("community") ? [{ label: "Community", icon: "users", on: !!S.community, go: () => { location.hash = "#/community"; } } as R] : []),
     ...(flag("board") ? [{ label: "Board", icon: "pin", on: !!S.board, go: () => { location.hash = "#/board"; } } as R] : []),
-    { label: S.inboxNew ? `Inbox · ${S.inboxNew} new` : "Inbox", icon: "inbox", on: !!S.inbox, go: () => { location.hash = "#/inbox"; } },
+    ...(flag("inbox") ? [{ label: S.inboxNew ? `Inbox · ${S.inboxNew} new` : "Inbox", icon: "inbox", on: !!S.inbox, go: () => { location.hash = "#/inbox"; } } as R] : []),
     ...(flag("town") ? [{ label: "Town", icon: "town", on: !!S.town, go: () => { location.hash = "#/town"; } } as R] : []),
     ...(flag("problems") ? [{ label: "Problems", icon: "target", on: !!S.problems, go: () => { location.hash = "#/problems"; } } as R] : []),
     ...(flag("market") ? [{ label: "Market", icon: "tag", on: !!S.market, go: () => { location.hash = "#/market"; } } as R] : []),
@@ -1166,9 +1166,9 @@ function moreMenu(el: HTMLElement) {
   if (S.notebook && !S.market && !S.admin) items.push({ label: "Search or open a note", icon: "search", action: () => openPalette() });
   if (S.notebook && (S.market || S.admin || S.community)) items.push({ label: "Back to the space", icon: "notebook", action: go(`#/notebook/${S.notebook.canister.toText()}`) });
   if (S.notebook || S.market || S.admin || S.community) items.push({ label: "Agent Space", icon: "list", action: go("#/") });
-  if (!S.community) items.push({ label: "Community chat", icon: "users", action: go("#/community") });
+  if (!S.community && flag("community")) items.push({ label: "Community chat", icon: "users", action: go("#/community") });
   if (!S.market && flag("market")) items.push({ label: "Space market", icon: "tag", action: go("#/market") });
-  if (!S.board) items.push({ label: "Board", icon: "pin", action: go("#/board") });
+  if (!S.board && flag("board")) items.push({ label: "Board", icon: "pin", action: go("#/board") });
   if (!S.town && flag("town")) items.push({ label: "Town", icon: "town", action: go("#/town") });
   if (!S.problems && flag("problems")) items.push({ label: "Problems", icon: "target", action: go("#/problems") });
   if (S.isAdmin && !S.admin) items.push({ label: "Admin · reports and ideas", icon: "bug", action: go("#/admin") });
@@ -1301,7 +1301,7 @@ function ribbonHtml(i?: Info, low = false): string {
   };
   const badge: Partial<Record<Tab, string>> = { study: dueTotal() ? `<i class="rb-count">${dueTotal()}</i>` : "", work: overdueCount() ? `<i class="rb-count danger">${overdueCount()}</i>` : "", trips: tripLate ? `<i class="rb-dot"></i>` : "" };
   return `<nav class="ribbon" aria-label="Sections">
-      <div class="rb-group">${rb("manage", "Wallet", "wallet")}${rb("notes", "Notes", "folder-open")}${FEATURES.filter((f) => f.id === "graph" || (f.id === "chat" && flag("chat"))).map((f) => rb(f.id, tip[f.id] ?? f.label, f.icon, badge[f.id] ?? "")).join("")}<a class="rb ${S.community ? "on" : ""}" href="#/community" data-action="nav" title="Community${S.mentions ? ` · ${S.mentions} new mention${S.mentions === 1 ? "" : "s"}` : ""}" aria-label="Community">${icon("users")}${S.mentions ? `<i class="rb-badge">${S.mentions > 9 ? "9+" : S.mentions}</i>` : ""}</a>${flag("board") ? `<a class="rb ${S.board ? "on" : ""}" href="#/board" data-action="nav" title="Board: posts and discussion" aria-label="Board">${icon("pin")}</a>` : ""}<a class="rb ${S.inbox ? "on" : ""}" href="#/inbox" data-action="nav" title="Inbox${S.inboxNew ? ` · ${S.inboxNew} new` : ": replies, comments and mentions"}" aria-label="Inbox">${icon("inbox")}${S.inboxNew ? `<i class="rb-badge">${S.inboxNew > 9 ? "9+" : S.inboxNew}</i>` : ""}</a>${flag("town") ? `<a class="rb ${S.town ? "on" : ""}" href="#/town" data-action="nav" title="Town: Agent Space right now${S.townNews ? ` · ${S.townNews} new building${S.townNews === 1 ? "" : "s"}` : ""}" aria-label="Town">${icon("town")}${S.townNews ? `<i class="rb-dot" title="New buildings in town"></i>` : ""}</a>` : ""}${flag("problems") ? `<a class="rb ${S.problems ? "on" : ""}" href="#/problems" data-action="nav" title="Problems: open problems, claims, attempts, bounties and discoveries" aria-label="Problems">${icon("target")}</a>` : ""}${flag("market") ? `<a class="rb ${S.market ? "on" : ""}" href="#/market" data-action="nav" title="Space market" aria-label="Space market">${icon("tag")}</a>` : ""}${S.isAdmin ? `<a class="rb ${S.admin ? "on" : ""}" href="#/admin" data-action="nav" title="Reports and ideas" aria-label="Reports and ideas">${icon("bug")}</a>` : ""}</div>
+      <div class="rb-group">${rb("manage", "Wallet", "wallet")}${rb("notes", "Notes", "folder-open")}${FEATURES.filter((f) => f.id === "graph" || (f.id === "chat" && flag("chat"))).map((f) => rb(f.id, tip[f.id] ?? f.label, f.icon, badge[f.id] ?? "")).join("")}${flag("community") ? `<a class="rb ${S.community ? "on" : ""}" href="#/community" data-action="nav" title="Community${S.mentions ? ` · ${S.mentions} new mention${S.mentions === 1 ? "" : "s"}` : ""}" aria-label="Community">${icon("users")}${S.mentions ? `<i class="rb-badge">${S.mentions > 9 ? "9+" : S.mentions}</i>` : ""}</a>` : ""}${flag("board") ? `<a class="rb ${S.board ? "on" : ""}" href="#/board" data-action="nav" title="Board: posts and discussion" aria-label="Board">${icon("pin")}</a>` : ""}${flag("inbox") ? `<a class="rb ${S.inbox ? "on" : ""}" href="#/inbox" data-action="nav" title="Inbox${S.inboxNew ? ` · ${S.inboxNew} new` : ": replies, comments and mentions"}" aria-label="Inbox">${icon("inbox")}${S.inboxNew ? `<i class="rb-badge">${S.inboxNew > 9 ? "9+" : S.inboxNew}</i>` : ""}</a>` : ""}${flag("town") ? `<a class="rb ${S.town ? "on" : ""}" href="#/town" data-action="nav" title="Town: Agent Space right now${S.townNews ? ` · ${S.townNews} new building${S.townNews === 1 ? "" : "s"}` : ""}" aria-label="Town">${icon("town")}${S.townNews ? `<i class="rb-dot" title="New buildings in town"></i>` : ""}</a>` : ""}${flag("problems") ? `<a class="rb ${S.problems ? "on" : ""}" href="#/problems" data-action="nav" title="Problems: open problems, claims, attempts, bounties and discoveries" aria-label="Problems">${icon("target")}</a>` : ""}${flag("market") ? `<a class="rb ${S.market ? "on" : ""}" href="#/market" data-action="nav" title="Space market" aria-label="Space market">${icon("tag")}</a>` : ""}${S.isAdmin ? `<a class="rb ${S.admin ? "on" : ""}" href="#/admin" data-action="nav" title="Reports and ideas" aria-label="Reports and ideas">${icon("bug")}</a>` : ""}</div>
       <div class="rb-group bottom"><button type="button" class="rb" data-action="theme-menu" title="Appearance" aria-label="Appearance">${icon("palette")}</button><button type="button" class="rb" data-action="help" title="Help and support" aria-label="Help and support">${icon("help")}</button>${S.identity ? `<button type="button" class="rb" data-action="sign-out" title="Sign out" aria-label="Sign out">${icon("out")}</button>` : `<button type="button" class="rb" data-action="sign-in" title="Sign in with Internet Identity" aria-label="Sign in with Internet Identity">${icon("out")}</button>`}</div>
     </nav>`;
 }
@@ -2327,7 +2327,7 @@ setInterval(checkRain, 30_000);
 const notifyOn = () => store("nb-notify") !== "0";
 /** Every 20 s, anywhere in the app: new @mentions of me become a toast (click opens the channel), a browser notification when the tab is hidden, and a badge on the Community icon. */
 async function checkMentions() {
-  if (!S.identity || !notifyOn()) return;
+  if (!S.identity || !notifyOn() || !flag("community")) return;
   try {
     const last = BigInt(store("nb-mention-seen") ?? "0");
     const ms = await registry().my_mentions(last);
@@ -2359,7 +2359,7 @@ function mentionToast(text: string, channel: string) {
 }
 /** Alongside the mentions: how many inbox items are above the last mark, on the Inbox icon. */
 async function checkInbox() {
-  if (!S.identity || S.inbox) return;
+  if (!S.identity || S.inbox || !flag("inbox")) return;
   try {
     const seen = inboxSeen(), read = await agentsRead();
     const n = (await registry().my_inbox(read > seen ? read : seen, 100)).length;
@@ -9559,9 +9559,9 @@ window.addEventListener("hashchange", () => {
   if (!problemRoute() && S.problems) { S.problems = undefined; left = true; }
   if (location.hash === "#/town") return void loadTown();
   { const pm = problemRoute(); if (pm) return void loadProblems(pm[1] as ProblemsTab, pm[2] ? BigInt(pm[2]) : undefined); }
-  if (location.hash === "#/inbox") { if (S.identity || isSandbox()) return void loadInbox(); location.hash = "#/"; return; }
+  if (location.hash === "#/inbox") { if (!flag("inbox")) { toast("The inbox is switched off right now.", "info"); location.hash = "#/"; return; } if (S.identity || isSandbox()) return void loadInbox(); location.hash = "#/"; return; }
   const bm = /^#\/board(?:\/(\d+))?$/.exec(location.hash);
-  if (bm) { if (S.identity) return void loadBoard(undefined, bm[1] ? BigInt(bm[1]) : undefined); location.hash = "#/"; return; }
+  if (bm) { if (!flag("board")) { toast("The board is switched off right now.", "info"); location.hash = "#/"; return; } if (S.identity) return void loadBoard(undefined, bm[1] ? BigInt(bm[1]) : undefined); location.hash = "#/"; return; }
   if (location.hash === "#/admin") {
     if (S.isAdmin) return void loadAdmin();
     toast("Admins only.", "error");
@@ -9575,6 +9575,7 @@ window.addEventListener("hashchange", () => {
     return;
   }
   if (location.hash === "#/community") {
+    if (!flag("community")) { toast("The community is switched off right now.", "info"); location.hash = "#/"; return; }
     if (S.identity) return void loadCommunity();
     location.hash = "#/";
     return;
