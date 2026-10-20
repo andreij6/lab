@@ -4080,7 +4080,7 @@ async function loadNotebooks() {
     S.notebooks = await registry().my_notebooks();
     S.error = "";
     // home is the space itself once there is one; without one, the gate ends on the Fuel step
-    if (location.hash === "#/" && S.notebooks[0]) { location.hash = `#/notebook/${S.notebooks[0].canister.toText()}`; return; }
+    if ((location.hash === "#/" || !location.hash) && S.notebooks[0]) { location.hash = `#/notebook/${S.notebooks[0].canister.toText()}`; return; }
     if (S.identity && !S.notebooks[0] && S.as.step < 3) S.as.step = 3;
     if (!S.notebooks[0]) resumeOrder();
     render();
