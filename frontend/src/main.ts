@@ -2088,7 +2088,7 @@ function promptsCard(): string {
   return `<div class="card band">
     <h2>${icon("chat")} Prompts</h2>
     <p class="muted small">Paste one into your agent once it is connected (Agent tab). Replace the <code>&lt;placeholders&gt;</code> with a note or folder of yours; the agent knows this space from its tools.</p>
-    <div class="runs">${PROMPTS.map((p) => `<div class="run prompt-row"><span><b>${esc(p.title)}</b> <span class="small muted">· ${esc(p.desc)}</span><div class="small prompt-text">${esc(fill(p.text))}</div></span><button type="button" class="btn btn-ghost" data-action="copy-cmd" data-value="${esc(fill(p.text))}" title="Copy the prompt">${icon("copy")}Copy</button></div>`).join("")}</div>
+    <div class="runs">${PROMPTS.filter((p) => !p.flag || flag(p.flag)).map((p) => `<div class="run prompt-row"><span><b>${esc(p.title)}</b> <span class="small muted">· ${esc(p.desc)}</span><div class="small prompt-text">${esc(fill(p.text))}</div></span><button type="button" class="btn btn-ghost" data-action="copy-cmd" data-value="${esc(fill(p.text))}" title="Copy the prompt">${icon("copy")}Copy</button></div>`).join("")}</div>
   </div>`;
 }
 /** The sandbox has no community behind it: a handful of items so the page can be seen. */
