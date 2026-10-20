@@ -27,8 +27,8 @@ expect() {
   if printf '%s' "$out" | grep -F -- "$want" >/dev/null; then echo "  ok: $d"; PASS=$((PASS+1)); else echo "FAIL: $d"; echo "  wanted: $want"; echo "  got: $(printf '%s' "$out" | tr -s ' \n' ' ' | head -c 600)"; exit 1; fi
 }
 reg() { icp canister call registry "$@" --identity "$OWNER"; }
-# an ICRC-2 approval to the registry's subaccount for one caller (how OISY approves for a sign-in)
 LEDGER_ID=ryjl3-tyaaa-aaaaa-aaaba-cai
+# an ICRC-2 approval to the registry's subaccount for one caller (how OISY approves for a sign-in)
 subblob() { python3 -c 'import sys,base64; t=sys.argv[1].replace("-","").upper(); t+="="*(-len(t)%8); b=base64.b32decode(t)[4:]; s=bytes([len(b)])+b; s+=bytes(32-len(s)); print("".join("\\%02x"%x for x in s))' "$1"; }
 bound_approve() { icp canister call $LEDGER_ID icrc2_approve "(record { spender = record { owner = principal \"$(icp canister status registry -i)\"; subaccount = opt blob \"$(subblob "$3")\" }; amount = $2 : nat; fee = null; memo = null; from_subaccount = null; created_at_time = null; expected_allowance = null; expires_at = null })" --identity "$1"; }
 
@@ -54,51 +54,9 @@ expect "wrote daily note" "Ok" notebook write '("Daily/2026-10-10.md", "Today I 
 expect "wrote Ideas" "Ok" notebook write '("Ideas.md", "# Ideas\nSee [[Daily/2026-10-10|today]] and [[Ideas#Heading]]")'
 expect "read back" "# Ideas" notebook read '("Ideas.md")' --query
 expect "read_all returns content" "journal" notebook read_all '()' --query
-# the town: a house for each person with a notebook edited lately; counts only, nothing that names anyone
-expect "the registry knows the town flag" 'name = "town"' icp canister call registry flags '()' --query
-icp canister call registry set_flag '("town", true)' >/dev/null   # switching it on counts the houses now
-sleep 4
-expect "the owner's lot is theirs" "mine = opt" reg town '()' --query
-expect "their notebook was edited today: a lit house" "lit = 2" reg town '()' --query
-expect "anonymous gets the town without a lot of its own" "mine = null" icp canister call registry town '()' --query --identity anonymous
-if icp canister call registry town '()' --query --identity anonymous | grep -q 'principal "'; then echo "FAIL: the town names someone"; exit 1; else echo "  ok: the town names nobody"; PASS=$((PASS+1)); fi
-icp canister call registry set_flag '("town", false)' >/dev/null
-expect "switched off, the town is closed" "switched off" icp canister call registry town '()' --query --identity anonymous
-icp canister call registry set_flag '("town", true)' >/dev/null
 # quests: the notebook counts links, streaks and active days, nothing from inside the notes
 expect "usage counts the links and today's writing" "streak = 1" notebook usage '()' --query
 expect "and the links" "links =" notebook usage '()' --query
-# sponsored buildings: propose, admin approves, pay; nothing shows until paid
-expect "a sponsor needs an https link" "https://" icp canister call registry sponsor '(record { name = "Bad Co"; blurb = ""; url = "http://x.io"; color = "#29abe2" })' --identity "$OTHER"
-expect "a proposal is taken" "approved = false" icp canister call registry sponsor '(record { name = "E2E Co"; blurb = "An e2e sponsor"; url = "https://internetcomputer.org"; color = "#29abe2" })' --identity "$OTHER"
-SPID=$(icp canister call registry my_sponsors '()' --query --identity "$OTHER" | grep -o 'id = [0-9_]*' | head -1 | tr -dc '0-9')
-expect "paying before approval is refused" "not approved" icp canister call registry pay_sponsor "($SPID : nat64, 1 : nat8)" --identity "$OTHER"
-expect "the town shows no sponsor yet" "sponsors = vec {}" icp canister call registry town '()' --query --identity anonymous
-expect "only an admin reviews" "admin only" icp canister call registry review_sponsor "($SPID : nat64, true)" --identity "$OTHER"
-expect "the admin approves" "Ok" icp canister call registry review_sponsor "($SPID : nat64, true)"
-expect "the admin sets the price" "Ok" icp canister call registry set_sponsor_price '(100_000_000 : nat64)'
-icp token approve 1.0002 "$(icp canister status registry -i)" --identity "$OTHER" >/dev/null 2>&1 || true
-expect "the sponsor pays for a month" "paid_until" icp canister call registry pay_sponsor "($SPID : nat64, 1 : nat8)" --identity "$OTHER"
-expect "and the town shows the building, without a principal" 'name = "E2E Co"' icp canister call registry town '()' --query --identity anonymous
-
-# problems: a note published to the board; nobody checks their own claims; a solve becomes a discovery
-icp canister call registry set_flag '("problems", true)' >/dev/null
-expect "the fields have channels" 'name = "mathematics"' icp canister call registry channels '()' --query --identity anonymous
-notebook write '("Problems/E2E.md", "---\ntype: problem\nfield: mathematics\nstatus: open\n---\n# E2E\n\n## Statement\n\nIs 7 prime?\n\n## Claims\n\n### Claim 1: yes\n")' >/dev/null
-notebook set_share '(record { path = "Problems/E2E.md"; public = true; public_role = opt variant { View }; viewers = vec {}; commenters = vec {}; editors = vec {} })' >/dev/null
-HASH=$(printf 'x%.0s' $(seq 1 64))
-expect "a problem needs a known field" "field must be one of" reg publish_problem "(record { notebook = principal \"$V\"; path = \"Problems/E2E.md\"; title = \"E2E\"; field = \"alchemy\"; statement = \"Is 7 prime?\"; status = variant { Open }; claims = 1 : nat32; depends = vec {}; note_hash = \"$HASH\" })"
-expect "the owner publishes it" "mathematics" reg publish_problem "(record { notebook = principal \"$V\"; path = \"Problems/E2E.md\"; title = \"E2E\"; field = \"mathematics\"; statement = \"Is 7 prime? a < b holds\"; status = variant { Open }; claims = 1 : nat32; depends = vec {}; note_hash = \"$HASH\" })"
-PID=$(icp canister call registry problems_of "(principal \"$V\")" --query | grep -o 'id = [0-9_]*' | head -1 | tr -dc '0-9')
-expect "the owner can't check their own claim" "your own claims" reg check_claim "($PID : nat64, 1 : nat32, true, \"\", null)"
-expect "someone else can" "checked = true" icp canister call registry check_claim "($PID : nat64, 1 : nat32, true, \"ran it\", null)" --identity "$OTHER"
-expect "links are refused in comments" "links and images" icp canister call registry comment_problem "($PID : nat64, \"see https://x.y\", null, null)" --identity "$OTHER"
-expect "maths is not" "Comment" icp canister call registry comment_problem "($PID : nat64, \"for a < b and c > d it holds\", opt (1 : nat32), null)" --identity "$OTHER"
-expect "only the owner solves it" "owner" icp canister call registry solve_problem "($PID : nat64, vec { \"p:$OTHERP\" })" --identity "$OTHER"
-expect "solved: a numbered discovery" "discovery = opt" reg solve_problem "($PID : nat64, vec { \"p:$OTHERP\" })"
-expect "the ledger lists it" '"E2E"' icp canister call registry discoveries '()' --query --identity anonymous
-expect "and the town counts it" "discoveries = opt (1" icp canister call registry town '()' --query --identity anonymous
-expect "turning one down removes it" "Ok" icp canister call registry review_sponsor "($SPID : nat64, false)"
 [ "$(notebook list '()' --query | grep -c 'path = ')" = 4 ] && echo "  ok: four files listed (index.md and the seeded project included)" || { echo "FAIL: list"; exit 1; }
 expect "overwrite keeps one file" "size = 7" notebook write '("Ideas.md", "# Ideas")'
 expect "still four files" "files = 4" notebook info '()' --query
@@ -219,18 +177,6 @@ echo "== delete"
 expect "deleted" "Ok" notebook delete '("Projects/Big Ideas.md")'
 expect "second delete is NotFound" "NotFound" notebook delete '("Projects/Big Ideas.md")'
 expect "info counts 7 files (index.md, the seeded project, the daily note, the Lean note, the paper and two clips)" "files = 7" notebook info '()' --query
-echo "== chat with notes: the notebook asks the LLM canister (locally the Ollama stand-in)"
-LLM=$(icp canister status llm -i 2>/dev/null || true)
-if [ -n "$LLM" ]; then
-  ASKSRC='vec { record { path = "Ideas.md"; excerpt = "Ideas: a reading list and a habit tracker." } }'
-  expect "a stranger cannot ask someone else's notebook" "Unauthorized" icp canister call "$V" ask "(principal \"$LLM\", \"qwen3:32b\", \"what ideas?\", $ASKSRC)" --identity "$OTHER"
-  expect "an empty question is refused" "1-1000 characters" notebook ask "(principal \"$LLM\", \"qwen3:32b\", \"  \", $ASKSRC)"
-  expect "too many notes are refused" "at most 10 notes" notebook ask "(principal \"$LLM\", \"qwen3:32b\", \"q\", vec { $(for i in 1 2 3 4 5 6 7 8 9 10 11; do printf 'record { path = "a.md"; excerpt = "x" };'; done) })"
-  if curl -s -m 2 localhost:11434/api/tags >/dev/null; then
-    expect "with no matching notes it answers from its own knowledge" '"text" =' notebook ask "(principal \"$LLM\", \"qwen3:32b\", \"What is 2 + 2? Answer with the number.\", vec {})"
-    expect "the notebook answers from its notes, citing them" '[1]' notebook ask "(principal \"$LLM\", \"qwen3:32b\", \"What ideas are in my notes? Cite the note.\", $ASKSRC)"
-  else echo "  skip: Ollama is not running, so the live answer is not checked"; fi
-fi
 
 echo "== keep it running: ICP sent to the notebook account becomes cycles"
 C0=$(notebook info '()' --query | grep -o 'cycles = [0-9_]*' | head -1 | tr -d 'cycles =_')
@@ -334,7 +280,6 @@ expect "the owner lists attempts on the note" "$OTHERP" notebook attempts '("Sha
 expect "the owner lists every attempt" "total = 5" notebook all_attempts '()' --query
 expect "a sharee only lists their own" "score = 3" icp canister call "$V" attempts '("Shared/Team.md")' --query --identity "$OTHER"
 expect "all_attempts is owner only" "Unauthorized" icp canister call "$V" all_attempts '()' --query --identity "$OTHER"
-expect "the audit counts decks" "decks =" notebook audit '()' --query
 
 echo "== permissions: view, comment, edit; what the link allows"
 expect "a viewer is view-only: reading works" "team note" icp canister call "$V" read_shared '("Shared/Team.md")' --query --identity "$OTHER"
@@ -430,204 +375,12 @@ CA=$(reg notebook_status "(principal \"$V\")" | grep -o 'cycles = [0-9_]*' | hea
 expect "the sweep is recorded" "TCYCLES" notebook deposits '()' --query
 expect "a second sweep finds nothing" "nothing to convert" notebook sweep_deposits '()'
 
-echo "== community: chat for anyone with a notebook, channels and presence (a notebook pays each message in cycles)"
-expect "a short message costs a few million cycles" "_" icp canister call registry message_cycles '(200)' --query
-icp token transfer 1 "$OTHERP" -q >/dev/null; icp token approve 0.5 "$(icp canister status registry -i)" --identity "$OTHER" -q >/dev/null; icp token approve 0.5 "$(icp canister status registry -i)" -q >/dev/null
-SUF=$(date +%s | tail -c 5)
-expect "six channels exist" "general" icp canister call registry channels '()' --query
-expect "#careers is seeded for the Career kit" 'name = "careers"; section = opt "Lab"' icp canister call registry channels '()' --query
-expect "#crypto is seeded for the Crypto kit" 'name = "crypto"; section = opt "Lab"' icp canister call registry channels '()' --query
-expect "#creators is seeded for the Creator kit" 'name = "creators"; section = opt "Lab"' icp canister call registry channels '()' --query
-expect "the built-in channels sit in sections" 'section = opt "Lab"' icp canister call registry channels '()' --query
-expect "only admins move channels between sections" "admin only" reg set_channel_section '("help", opt "Support")'
-expect "an admin moves one" 'section = opt "Support"' icp canister call registry set_channel_section '("help", opt "Support")'
-expect "section names are short and clean" "1-24" icp canister call registry set_channel_section '("help", opt "")'
-expect "and it goes back" 'section = opt "Lab"' icp canister call registry set_channel_section '("help", opt "Lab")'
-expect "anonymous cannot join" "sign in" icp canister call registry join_community '("anon")' --identity anonymous
-expect "someone without a notebook cannot join" "need a notebook" icp canister call registry join_community '("thirdy")' --identity "$OWNER2"
-ON=$(icp canister call registry create_notebook '("Other notes")' --identity "$OTHER" | grep -o 'canister = principal "[^"]*"' | head -1 | sed 's/.*"\(.*\)"/\1/')
-expect "a notebook owner joins" "handle = \"owner$SUF\"" reg join_community "(\"owner$SUF\")"
-expect "a taken handle is refused" "taken" icp canister call registry join_community "(\"Owner$SUF\")" --identity "$OTHER"
-expect "the other joins too" "handle = \"other$SUF\"" icp canister call registry join_community "(\"other$SUF\")" --identity "$OTHER"
-expect "a non-member cannot post" "join the community" icp canister call registry post '("general", "hi", null)' --identity "$OWNER2"
-expect "a member posts" '"text" = "hello from e2e"' reg post '("general", "hello from e2e", null)'
-MID=$(icp canister call registry messages '("general", 0, 5)' --query | grep -o 'id = [0-9_]*' | tail -1 | sed 's/id = //; s/_//g')
-expect "links are refused" "links and images" reg post '("general", "see https://example.com now", null)'
-expect "markdown images are refused" "links and images" reg post '("general", "![x](y)", null)'
-expect "wiki links are refused" "links and images" reg post '("general", "read [[My Note]]", null)'
-expect "html is refused" "links and images" reg post '("general", "<b>bold</b>", null)'
-expect "foul language is refused" "keep it clean" reg post '("general", "this is sh1t", null)'
-expect "obfuscated foul language is refused" "keep it clean" reg post '("general", "f.u.c.k that", null)'
-expect "a foul handle is refused" "cleaner handle" icp canister call registry join_community '("b1tchface")' --identity "$OTHER"
-expect "ordinary words with blocked substrings pass" '"text" = "the assistant and the cockpit class"' reg post '("general", "the assistant and the cockpit class", null)'
-expect "a poll posts with its options" 'options = vec { "lean"; "rust" }' reg post_poll '("general", "next topic?", vec { "lean"; "rust" })'
-expect "a poll needs two options" "2-10 options" reg post_poll '("general", "q?", vec { "only" })'
-expect "poll options are filtered too" "links and images" reg post_poll '("general", "q?", vec { "a"; "https://x.y" })'
-POLL=$(reg messages '("general", 0, 100)' --query | tr -d '\n' | grep -o 'id = [0-9_]* : nat64;[^}]*poll = opt record' | tail -1 | grep -o 'id = [0-9_]*' | head -1 | tr -dc '0-9')
-expect "a member votes" "votes = vec {" reg vote "(\"general\", $POLL, 1)"
-expect "re-voting moves the vote" "1 : nat32" reg vote "(\"general\", $POLL, 1)"
-expect "a vote needs a real option" "no such option" reg vote "(\"general\", $POLL, 9)"
-expect "a non-member cannot vote" "join the community" icp canister call registry vote "(\"general\", $POLL, 0)" --identity "$OWNER2"
-expect "a reaction is added" 'emoji = "👍"' reg react "(\"general\", $POLL, \"👍\")"
-expect "reacting again removes it" "reactions = opt vec {}" reg react "(\"general\", $POLL, \"👍\")"
-expect "reactions must be emoji" "reactions are emoji" reg react "(\"general\", $POLL, \"lol\")"
-expect "a gist carries a note snapshot" 'title = "Plan"' reg post_gist "(\"general\", \"thoughts?\", \"Plan\", \"# Plan\\n\\nStep one.\", principal \"$V\", \"Plan.md\")"
-expect "a gist may have no comment" 'gist = opt record' reg post_gist "(\"general\", \"\", \"Plan\", \"body\", principal \"$V\", \"Plan.md\")"
-expect "a gist needs a known notebook" "unknown notebook" reg post_gist '("general", "", "T", "body", principal "aaaaa-aa", "x.md")'
-expect "a gist body is filtered for language" "keep it clean" reg post_gist "(\"general\", \"\", \"T\", \"this is sh1t\", principal \"$V\", \"x.md\")"
-expect "only the owner raises for a notebook" "not your notebook" icp canister call registry post_fund "(\"general\", \"help\", principal \"$V\", 100_000_000)" --identity "$OTHER"
-expect "goals are bounded" "between 0.01 and 1000" reg post_fund "(\"general\", \"help\", principal \"$V\", 100)"
-expect "a fundraiser opens" "raised_e8s = 0" reg post_fund "(\"general\", \"keep it up\", principal \"$V\", 100_000_000)"
-FUND=$(reg messages '("general", 0, 100)' --query | tr -d '\n' | grep -o 'id = [0-9_]* : nat64;[^}]*fund = opt record' | tail -1 | grep -o 'id = [0-9_]*' | head -1 | tr -dc '0-9')
-icp token transfer 1 "$OTHERP" -q >/dev/null; icp token approve 0.1001 "$(icp canister status registry -i)" --identity "$OTHER" -q >/dev/null
-expect "a donation is minted into the notebook" "raised_e8s = 5_000_000" icp canister call registry donate "(\"general\", $FUND, 5_000_000)" --identity "$OTHER"
-expect "a donation has a floor" "minimum donation" icp canister call registry donate "(\"general\", $FUND, 10)" --identity "$OTHER"
-expect "a stranger cannot close it" "not your fundraiser" icp canister call registry close_fund "(\"general\", $FUND)" --identity "$OTHER"
-expect "the owner closes it" "closed = true" reg close_fund "(\"general\", $FUND)"
-expect "a closed fundraiser takes nothing" "is closed" icp canister call registry donate "(\"general\", $FUND, 5_000_000)" --identity "$OTHER"
-expect "the developers channel is seeded and gated" 'gate = opt "github"' icp canister call registry channels '()' --query
-expect "a member without a linked GitHub cannot post there" "link your GitHub first" reg post '("developers", "hi", null)'
-expect "the repository is admin-only" "admin only" reg set_github_repo '("dfinity/ic")'
-expect "the admin sets the repository" "Ok" icp canister call registry set_github_repo '("dfinity/ic")'
-expect "a bad login is refused before any outcall" "not a GitHub login" reg link_github '("no spaces!")'
-expect "an unknown GitHub user is refused (live outcall)" "GitHub has no user" reg link_github '("no-such-user-zz9q8x7w")'
-expect "a login whose bio lacks the principal is refused" "in the bio of github.com/torvalds" reg link_github '("torvalds")'
-expect "plan fundraisers only live in developers" "live in #developers" reg post_plan_fund '("general", "help", "Claude Max", 100_000_000)'
-expect "notebook fundraisers do not live in developers" "raises for AI plans" reg post_fund "(\"developers\", \"help\", principal \"$V\", 100_000_000)"
-expect "a plan must be one of the known plans" "plans are Claude Max" reg post_plan_fund '("developers", "help", "Everything Unlimited", 100_000_000)'
-expect "a mention is recorded for the mentioned member" "hey @other$SUF look" reg post "(\"general\", \"hey @other$SUF look\", null)"
-expect "the mentioned member sees it" "hey @other$SUF look" icp canister call registry my_mentions '(0)' --query --identity "$OTHER"
-expect "mentioning yourself is not a notification" "(vec {})" icp canister call registry my_mentions "($(icp canister call registry my_mentions '(0)' --query --identity "$OTHER" | grep -o 'id = [0-9_]* : nat64' | tail -1 | tr -dc '0-9'))" --query --identity "$OTHER"
-reg post '("general", "typo hre", null)' >/dev/null
-MID=$(reg messages '("general", 0, 100)' --query | grep -o 'id = [0-9_]*' | tail -1 | tr -dc '0-9')
-expect "the author edits a message" '"text" = "typo here"' reg edit_message "(\"general\", $MID, \"typo here\")"
-expect "an edit is marked" "edited = opt" reg edit_message "(\"general\", $MID, \"typo here!\")"
-expect "edits are filtered too" "links and images" reg edit_message "(\"general\", $MID, \"see https://x.y\")"
-expect "someone else cannot edit it" "not your message" icp canister call registry edit_message "(\"general\", $MID, \"mine now\")" --identity "$OTHER"
-expect "the author pins a message" "pinned = opt true" reg pin_message "(\"general\", $MID, true)"
-expect "pinned messages are listed" "typo here!" icp canister call registry pinned '("general")' --query
-expect "a stranger cannot pin" "only the author or an admin" icp canister call registry pin_message "(\"general\", $MID, true)" --identity "$OTHER"
-echo "== board: paid posts, votes, comments, weekly expiry"
-expect "a board post's cycle cost grows with its size" "_" icp canister call registry post_cycles '(1000)' --query
-expect "a non-member cannot post" "join the community" icp canister call registry create_post '("general", "Hello board", "first post", null)' --identity "$OWNER2"
-icp token approve 0.0101 "$(icp canister status registry -i)" --identity "$OWNER" -q >/dev/null
-expect "a member posts" 'title = "Hello board"' reg create_post '("general", "Hello board", "first post, what do you think?", null)'
-expect "links are refused on the board" "links and images" reg create_post '("general", "Look", "https://x.y", null)'
-expect "foul titles are refused" "keep it clean" reg create_post '("general", "this is sh1t", "x", null)'
-PID=$(reg posts '(null)' --query | grep -o 'id = [0-9_]*' | head -1 | tr -dc '0-9')
-expect "the post is readable by id" 'title = "Hello board"' reg get_post "($PID)" --query
-expect "another member comments" '"text" = "I like it"' icp canister call registry comment_post "($PID, null, \"I like it\")" --identity "$OTHER"
-expect "the comment count moved" "comments = 1" reg get_post "($PID)" --query
-expect "a downvote replaces the upvote" "ups = vec {}" reg vote_post "($PID, -1)"
-expect "a stranger cannot delete the post" "not your post" icp canister call registry delete_post "($PID)" --identity "$OTHER"
-expect "a post can be shared into chat" "📰 Hello board" reg share_post "(\"general\", $PID)"
-expect "the author deletes the post" "Ok" reg delete_post "($PID)"
-expect "its comments went with it" "(vec {})" reg post_comments "($PID)" --query
-echo "== trip check-ins: leave a plan with a community member"
-RET=$(( ($(date +%s) + 2 * 86400) * 1000000000 ))
-expect "the contact must be a member" "no community member" reg set_watch "(\"nobody-zz9\", \"Lost Coast\", \"https://x/plan\", $RET : nat64, opt 24)"
-expect "the return must be in the future" "next 120 days" reg set_watch "(\"other$SUF\", \"Lost Coast\", \"https://x/plan\", 1 : nat64, null)"
-expect "a plan is left with a contact" 'contact_handle = "other' reg set_watch "(\"other$SUF\", \"Lost Coast\", \"https://x/plan\", $RET : nat64, opt 24)"
-WID=$(reg my_watches '()' --query | grep -o 'id = [0-9_]*' | head -1 | tr -dc '0-9')
-expect "the contact sees it, not overdue" "overdue = false" icp canister call registry watching '()' --query --identity "$OTHER"
-expect "someone else cannot check in" "not your trip" icp canister call registry check_in "($WID, null)" --identity "$OWNER2"
-expect "the owner checks in" "last_check_in = opt" reg check_in "($WID, null)"
-expect "back home closes it" "closed = true" reg close_watch "($WID)"
-expect "a reply must point into the channel" "reply target" reg post '("general", "x", opt 999999)'
-expect "a reply works" "reply_to = opt" icp canister call registry post "(\"general\", \"welcome\", opt $MID)" --identity "$OTHER"
-expect "an unknown channel is refused" "unknown channel" reg post '("nope", "x", null)'
-expect "messages page after an id" '"text" = "welcome"' icp canister call registry messages "(\"general\", $MID, 10)" --query
-expect "a member cannot delete another's message" "not your message" icp canister call registry delete_message "(\"general\", $MID)" --identity "$OTHER"
-expect "the author deletes it" "Ok" reg delete_message "(\"general\", $MID)"
-expect "deleted messages keep their slot blank" "deleted = true" icp canister call registry messages '("general", 0, 50)' --query
-expect "ping lists who is here" "handle = \"owner$SUF\"" reg ping_chat '("general")'
-expect "only admins make channels" "admin only" reg create_channel '("x", "y")'
-expect "the controller makes one" "name = \"lean$SUF\"" icp canister call registry create_channel "(\"Lean$SUF\", \"proofs\")"
-expect "general cannot be deleted" "general stays" icp canister call registry delete_channel '("general")'
-echo "== rain: ICP over random recent chatters"
-expect "eligibility counts recent chatters" "nat32" reg rain_eligible '()' --query
-expect "count must be 1-10" "1 to 10" reg rain "(\"general\", 10_000_000, 11)"
-expect "too little per person is refused" "under 0.001" reg rain "(\"general\", 20_000, 1)"
-expect "without an allowance the pull fails" "payment refused" reg rain "(\"general\", 10_000_000, 3)"
-icp token transfer 1 "$ME" -q >/dev/null; icp token approve 0.5001 "$(icp canister status registry -i)" --identity "$OWNER" -q >/dev/null
-expect "rain falls on everyone who chatted recently (up to 10)" "each_e8s =" reg rain "(\"general\", 50_000_000, 10)"
-expect "the recipient's feed shows it" "from_handle = \"owner$SUF\"" icp canister call registry my_rain '(0)' --query --identity "$OTHER"
-expect "the giver's feed does not" "(vec {})" reg my_rain '(0)' --query
-expect "the channel announces it" "rained" icp canister call registry messages '("general", 0, 50)' --query
-expect "recent_rain lists it" "recipients = vec" icp canister call registry recent_rain '(5)' --query
-echo "== chat is paid by the member's notebook in cycles, not ICP"
-cyc() { icp canister status "$1" --identity "$2" 2>&1 | grep -o 'Cycles: [0-9_]*' | tr -d 'Cycles: _'; }
-COST=$(icp canister call registry message_cycles '(17)' --query | grep -o '[0-9_]*' | head -1 | tr -d _)
-RB=$(icp canister status registry 2>&1 | grep -o 'Cycles: [0-9_]*' | tr -d 'Cycles: _')
-NB=$(cyc "$ON" "$OTHER")
-expect "a message posts with no ICP allowance at all" '"text" = "paid in cycles!!"' icp canister call registry post '("general", "paid in cycles!!", null)' --identity "$OTHER"
-NA=$(cyc "$ON" "$OTHER"); RA=$(icp canister status registry 2>&1 | grep -o 'Cycles: [0-9_]*' | tr -d 'Cycles: _')
-[ $((NB - NA)) -ge "$COST" ] && { echo "  ok: the notebook paid at least the message's cost ($COST cycles; it spent $((NB - NA)))"; PASS=$((PASS+1)); } || { echo "FAIL: the notebook spent $((NB - NA)), cost $COST"; exit 1; }
-expect "only the registry can bill a notebook" "Unauthorized" icp canister call "$ON" pay_registry '(1_000_000)' --identity "$OTHER"
-icp canister settings update "$ON" --freezing-threshold 1000000d --identity "$OTHER" >/dev/null
-expect "a member whose notebooks cannot pay is refused" "too low on cycles" icp canister call registry post '("general", "nope", null)' --identity "$OTHER"
-icp canister settings update "$ON" --freezing-threshold 90d --identity "$OTHER" >/dev/null
-echo "== unread counts for every channel in one query"
-icp canister call registry post '("help", "is anyone around?", null)' --identity "$OTHER" >/dev/null
-expect "a channel with messages after what you saw is counted" 'record { "help";' reg unread_counts '(vec { record { "general"; 0 : nat64 } })' --query
-HELPID=$(icp canister call registry messages '("help", 0, 100)' --query | grep -o 'id = [0-9_]*' | tail -1 | sed 's/id = //; s/_//g')
-if reg unread_counts "(vec { record { \"help\"; $HELPID : nat64 } })" --query | grep -qF '"help"'; then echo "FAIL: a channel read to its last message still counted"; exit 1; else echo "  ok: read to the last message, the channel drops out"; PASS=$((PASS+1)); fi
-echo "== rain is paid from a registered wallet (OISY), not the sign-in account"
+echo "== a registered wallet (OISY) pays instead of the sign-in account"
 OWNER2P=$(icp identity principal --identity "$OWNER2"); icp token transfer 1 "$OWNER2P" -q >/dev/null
-expect "a member registers their wallet" "Ok" reg set_wallet "(opt principal \"$OWNER2P\")"
+expect "the owner registers their wallet" "Ok" reg set_wallet "(opt principal \"$OWNER2P\")"
 expect "my_wallet shows it" "$OWNER2P" reg my_wallet '()' --query
-bal() { icp token balance --of-principal "$1" 2>&1 | grep -o '[0-9.]* ICP' | head -1 | tr -d ' ICP' | python3 -c 'import sys; print(round(float(sys.stdin.read())*1e8))'; }
-expect "without the wallet's bound allowance rain is refused" "payment refused" reg rain '("general", 2_000_000, 1)'
-expect "the wallet approves the registry subaccount for this member" "Ok" bound_approve "$OWNER2" 2_010_000 "$ME"
-WB=$(bal "$OWNER2P")
-expect "now it rains" "each_e8s" reg rain '("general", 2_000_000, 1)'
-WA=$(bal "$OWNER2P")
-[ $((WB - WA)) -eq 2010000 ] && { echo "  ok: the wallet paid the rain plus one ledger fee ($WB -> $WA)"; PASS=$((PASS+1)); } || { echo "FAIL: wallet paid $((WB - WA)) e8s, expected 2010000"; exit 1; }
 expect "forgetting the wallet works" "Ok" reg set_wallet '(null)'
 expect "and my_wallet is empty again" "(null)" reg my_wallet '()' --query
-
-echo "== feature flags"
-expect "flags are listed with the market off" 'name = "market"' icp canister call registry flags '()' --query
-icp canister call registry set_flag '("market", false)' >/dev/null  # a previous run may have left it on
-expect "the market is closed while its flag is off" "switched off" reg list_notebook "(principal \"$V\", \"ICP\", 1_000_000, \"x\")"
-expect "only an admin flips a flag" "admin only" reg set_flag '("market", true)'
-expect "an unknown flag is refused" "unknown flag" icp canister call registry set_flag '("teleport", true)'
-expect "the admin opens the market" "on = true" icp canister call registry set_flag '("market", true)'
-echo "== tokenised notebooks: ICRC-7, the judge, the market, ratings"
-expect "the notebook has an ICRC-7 token id" "opt" reg token_id "(principal \"$V\")" --query
-TID=$(reg token_id "(principal \"$V\")" --query | grep -oE '[0-9_]+ : nat64' | sed 's/ : nat64//; s/_//g')
-expect "icrc7_owner_of names the owner" "$ME" icp canister call registry icrc7_owner_of "(vec { $TID : nat })" --query
-expect "icrc7_tokens_of lists it for the owner" "$TID : nat" icp canister call registry icrc7_tokens_of "(record { owner = principal \"$ME\"; subaccount = null }, null, null)" --query
-expect "the collection has a name" "Notebooks" icp canister call registry icrc7_name '()' --query
-expect "the judge scores the notebook" "structural-v1" reg attest "(principal \"$V\")"
-expect "the attestation is readable" "grade" reg attestation "(principal \"$V\")" --query
-expect "a stranger cannot attest" "not your notebook" icp canister call registry attest "(principal \"$V\")" --identity "$OTHER"
-expect "listing in an unknown token is refused" "unknown token" reg list_notebook "(principal \"$V\", \"DOGE\", 1_000_000, \"x\")"
-expect "a price must cover fees" "cover" reg list_notebook "(principal \"$V\", \"ICP\", 10, \"x\")"
-expect "the owner lists it for 0.3 ICP" 'blurb = "Research notes"' reg list_notebook "(principal \"$V\", \"ICP\", 30_000_000, \"Research notes\")"
-expect "listings show it with the attestation" "structural-v1" icp canister call registry listings '()' --query
-expect "the seller cannot buy it" "already own" reg buy "(principal \"$V\", null)"
-expect "a buyer without an allowance is refused" "payment refused" icp canister call registry buy "(principal \"$V\", null)" --identity "$OTHER"
-expect "nobody can rate before buying" "only buyers" icp canister call registry rate "(principal \"$V\", 5, \"great\")" --identity "$OTHER"
-icp token transfer 1 "$OTHERP" -q >/dev/null; icp token approve 0.3001 "$(icp canister status registry -i)" --identity "$OTHER" -q >/dev/null
-SELLER_BAL=$(icp token balance --of-principal "$ME" -q 2>/dev/null | head -1)
-expect "the buyer buys it and becomes the owner" "owner = principal \"$OTHERP\"" icp canister call registry buy "(principal \"$V\", null)" --identity "$OTHER"
-expect "the buyer's my_notebooks lists it" "$V" icp canister call registry my_notebooks '()' --query --identity "$OTHER"
-reg my_notebooks '()' --query | grep -qF "$V" && { echo "FAIL: the seller still lists the sold notebook"; exit 1; } || { echo "  ok: the seller's my_notebooks no longer lists it"; PASS=$((PASS+1)); }
-expect "the buyer reads the notes" "journal" icp canister call "$V" read '("Daily/2026-10-10.md")' --query --identity "$OTHER"
-expect "the seller is locked out" "Unauthorized" notebook read '("Daily/2026-10-10.md")' --query
-expect "the buyer is a controller now" "$OTHERP" icp canister status "$V"
-icp canister call registry listings '()' --query | grep -qF "$V" && { echo "FAIL: the listing is still up after the sale"; exit 1; } || { echo "  ok: the listing is gone"; PASS=$((PASS+1)); }
-expect "the seller got paid in ICP" "ICP" icp token balance --of-principal "$ME"
-expect "stars must be 1-5" "1-5" icp canister call registry rate "(principal \"$V\", 9, \"\")" --identity "$OTHER"
-expect "the buyer rates it" "Ok" icp canister call registry rate "(principal \"$V\", 4, \"solid notes\")" --identity "$OTHER"
-expect "ratings are listed" "solid notes" icp canister call registry ratings "(principal \"$V\")" --query
-expect "bought() is true for the buyer" "true" icp canister call registry bought "(principal \"$V\")" --query --identity "$OTHER"
-expect "icrc7_owner_of follows the sale" "$OTHERP" icp canister call registry icrc7_owner_of "(vec { $TID : nat })" --query
-expect "the old owner cannot transfer the token" "Unauthorized" reg icrc7_transfer "(vec { record { from_subaccount = null; to = record { owner = principal \"$ME\"; subaccount = null }; token_id = $TID : nat; memo = null; created_at_time = null } })"
-expect "the buyer gives it back with icrc7_transfer" "Ok" icp canister call registry icrc7_transfer "(vec { record { from_subaccount = null; to = record { owner = principal \"$ME\"; subaccount = null }; token_id = $TID : nat; memo = null; created_at_time = null } })" --identity "$OTHER"
-expect "the original owner reads again" "journal" notebook read '("Daily/2026-10-10.md")' --query
-expect "a market fee needs the controller" "controller only" reg set_market_fee '(100)'
 
 echo "== documents from the web: the notebook fetches a public PDF for its owner"
 expect "a stranger cannot make the notebook fetch" "Unauthorized" icp canister call "$V" fetch_url '("https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf")' --identity "$OTHER"
@@ -674,5 +427,4 @@ expect "forget_notebook refuses a stranger" "not your notebook" icp canister cal
 expect "forget_notebook works for the owner" "Ok" reg forget_notebook "(principal \"$V\")"
 for PAIDID in $(reg my_notebooks '()' --query | grep -o 'canister = principal "[^"]*"' | sed 's/.*"\(.*\)"/\1/'); do reg forget_notebook "(principal \"$PAIDID\")" >/dev/null; done
 expect "notebooks no longer listed" "(vec {})" reg my_notebooks '()' --query
-icp canister call registry set_flag '("market", false)' >/dev/null  # leave the market closed, as shipped
 echo "E2E OK ($PASS checks)"

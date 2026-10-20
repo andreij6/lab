@@ -15,7 +15,7 @@ import { records, workouts } from "./fitness.ts";
 import { items, upkeep } from "./home.ts";
 import { frontmatter } from "./notes.ts";
 
-const ALL = new Set(["chat", "graph", "study", "work", "organize", "research", "writing", "care", "software", "career", "crypto", "money", "creator", "fitness", "home", "trips"]);
+const ALL = new Set(["graph", "study", "work", "organize", "research", "writing", "care", "software", "career", "crypto", "money", "creator", "fitness", "home", "trips"]);
 
 test("every notebook gets one working example of each core note type", () => {
   const files = new Map(examples(new Set(), "2026-10-12"));

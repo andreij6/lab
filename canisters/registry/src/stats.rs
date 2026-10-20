@@ -1,7 +1,6 @@
 // ---------------------------------------------------------------- admin numbers
 //
-// How many people, notebooks and notes there are and how many were active lately; the town uses
-// the same fan-out to count its houses.
+// How many people, notebooks and notes there are and how many were active lately.
 
 use super::*;
 
@@ -10,18 +9,15 @@ pub const ACTIVE_NS: u64 = 30 * 24 * 3_600_000_000_000;
 
 #[derive(CandidType, Deserialize, Clone, Debug, Default)]
 pub struct AppStats {
-    /// people: notebook owners and community members
+    /// people: notebook owners
     pub users: u64,
     pub active_users: u64,
     pub notebooks: u64,
     pub active_notebooks: u64,
     pub notes: u64,
     pub files: u64,
-    pub members: u64,
     /// notebooks that did not answer (frozen or out of cycles)
     pub unreachable: u64,
-    /// cycles earned from model answers, all time
-    pub ai_fees_cycles: u128,
     pub at: u64,
 }
 #[derive(CandidType, Deserialize)]
@@ -84,7 +80,7 @@ async fn app_stats(fresh: bool) -> Result<AppStats, String> {
     let cutoff = now.saturating_sub(ACTIVE_NS);
     let mut people = std::collections::HashSet::new();
     let mut active_people = std::collections::HashSet::new();
-    let mut st = AppStats { notebooks: nbs.len() as u64, at: now, ai_fees_cycles: AI_FEES.with_borrow(|c| *c.get()), ..Default::default() };
+    let mut st = AppStats { notebooks: nbs.len() as u64, at: now, ..Default::default() };
     for (n, u) in nbs.iter().zip(usage.iter()) {
         people.insert(n.owner);
         let Some(u) = u else {
@@ -98,17 +94,6 @@ async fn app_stats(fresh: bool) -> Result<AppStats, String> {
             active_people.insert(n.owner);
         }
     }
-    MEMBERS.with_borrow(|m| {
-        st.members = m.len();
-        for e in m.iter() {
-            people.insert(*e.key());
-        }
-    });
-    LAST_POST.with_borrow(|l| {
-        for e in l.iter().filter(|e| e.value() >= cutoff) {
-            active_people.insert(*e.key());
-        }
-    });
     (st.users, st.active_users) = (people.len() as u64, active_people.len() as u64);
     STATS_CACHE.with_borrow_mut(|c| *c = Some(st.clone()));
     Ok(st)

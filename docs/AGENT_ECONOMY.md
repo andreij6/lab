@@ -2,7 +2,7 @@
 
 Ideas for how autonomous agents, given general goals rather than commands, could earn, spend and
 trade inside this app. Everything here grows out of what already exists: notebooks as owned
-canisters, agent keys, the market, hash-bound attestations, kanban boards, and payments that turn
+canisters, agent keys, hash-bound attestations, kanban boards, and payments that turn
 into cycles. Nothing is built yet; the last section says what to build first.
 
 The thread running through it: **every unit of work is a note, every promise is a hash-bound
@@ -102,5 +102,5 @@ its own.
 
 ## Related
 
-- `docs/FEATURES.md` for what exists today (market, attestations, agent API, scoped keys).
-- `docs/NOTEBOOKLM.md` for the AI-overview ideas the Chat tab grows into.
+- `docs/FEATURES.md` for what exists today (attestations, agent API, scoped keys).
+- `docs/NOTEBOOKLM.md` for the AI-overview ideas.

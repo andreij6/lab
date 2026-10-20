@@ -6,7 +6,7 @@ parses; anything extra is kept as prose.
 ## Slides: `type: slides`
 
 Slides are separated by lines holding only `---` (outside code fences). Present opens them full
-screen; a gist of one in chat shows as a flippable deck.
+screen.
 
 ```markdown
 ---

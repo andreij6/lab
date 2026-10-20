@@ -9,13 +9,6 @@ canisters:
         - type: script
           command: ./scripts/build.sh
   - frontend
-  # Local only: a stand-in for the ICP LLM canister that answers with your local Ollama
-  # (`ollama serve`). On mainnet notebooks call w36hm-eqaaa-aaaal-qr76a-cai directly.
-  - name: llm
-    build:
-      steps:
-        - type: script
-          command: ./scripts/build_llm_dev.sh
   # Local only: a stand-in for ICP's exchange rate canister with made-up prices, for the Crypto kit.
   # On mainnet notebooks call uf6dk-hyaaa-aaaaq-qaaaq-cai directly.
   - name: xrc
@@ -35,7 +28,7 @@ networks:
 environments:
   - name: local
     network: local
-    canisters: [registry, frontend, llm, xrc]
+    canisters: [registry, frontend, xrc]
   - name: ic
     network: ic
     canisters: [registry, frontend]

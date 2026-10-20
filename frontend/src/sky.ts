@@ -1,9 +1,5 @@
-// Lab's living skies: one engine, three intensities.
+// Lab's living skies: one engine, two intensities.
 //
-// - chat: the community chat's background. Stars drift on three depths and lean toward the pointer;
-//   near ones are linked like notes in the graph; an aurora in the channel's colours moves behind
-//   them; people online are the bright stars; each new message sends a wave of light from its
-//   author's star.
 // - notes: an open notebook's empty view. Every note is a star and every [[link]] a line, laid out
 //   by a small force simulation so related notes gather; the most-linked shine brightest; a new note
 //   is born with a wave along its own links. Hover a star for its title; click it to open the note.
@@ -16,14 +12,10 @@ export type RGB = [number, number, number];
 type Star = { x: number; y: number; vx: number; vy: number; z: number; r: number; tw: number; ph: number; ax?: number; ay?: number };
 type Pulse = { from: number; at: number; edges: [number, number, number][] };
 export type SkyGraph = { nodes: { id: string; label: string; degree: number }[]; edges: { source: string; target: string }[] };
-export type SkyOpts = { mode: "chat" | "notes"; key: string; online?: string[]; graph?: SkyGraph; dark: boolean; accent: string; onOpen?: (id: string) => void };
+export type SkyOpts = { key: string; graph?: SkyGraph; dark: boolean; accent: string; onOpen?: (id: string) => void };
 
-/** Each channel's sky: two aurora colours. Others get a pair from their name. */
-const SKIES: Record<string, [string, string]> = {
-  general: ["#6d7cff", "#b46cff"], help: ["#38bdf8", "#5eead4"], careers: ["#2dd4bf", "#38bdf8"], crypto: ["#f5c542", "#34d399"],
-  creators: ["#f472b6", "#fb923c"], notebooks: ["#818cf8", "#22d3ee"], study: ["#a78bfa", "#818cf8"], agents: ["#4ade80", "#22d3ee"],
-  market: ["#fbbf24", "#f472b6"], developers: ["#fb923c", "#f43f5e"],
-};
+/** The notes sky's two aurora colours. */
+const NOTES_SKY: [string, string] = ["#818cf8", "#22d3ee"];
 /** Each kit's band. */
 export const KIT_SKIES: Record<string, [string, string]> = {
   study: ["#a78bfa", "#818cf8"], work: ["#60a5fa", "#2dd4bf"], organize: ["#94a3b8", "#22d3ee"], research: ["#818cf8", "#38bdf8"],
@@ -33,14 +25,6 @@ export const KIT_SKIES: Record<string, [string, string]> = {
 };
 export const hex = (h: string): RGB => { const m = /^#?([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i.exec(h.trim()); return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : [110, 124, 255]; };
 export const hashOf = (s: string) => { let h = 2166136261; for (const c of s) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return h >>> 0; };
-const hsl = (h: number, s: number, l: number): RGB => { const k = (n: number) => (n + h / 30) % 12, a = s * Math.min(l, 1 - l); const f = (n: number) => l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1)); return [f(0) * 255, f(8) * 255, f(4) * 255]; };
-/** The two aurora colours of `channel`, known or derived from its name. */
-export function skyColours(channel: string): [RGB, RGB] {
-  const known = SKIES[channel];
-  if (known) return [hex(known[0]), hex(known[1])];
-  const h = hashOf(channel) % 360;
-  return [hsl(h, 0.75, 0.62), hsl((h + 55) % 360, 0.75, 0.6)];
-}
 export const mix = (a: RGB, b: RGB, t: number): RGB => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 export const rgba = (c: RGB, a: number) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${Math.max(0, Math.min(1, a)).toFixed(3)})`;
 export const rng = (seed: number) => { let r = seed | 1; return () => ((r = Math.imul(r ^ (r >>> 15), 2246822519) ^ Math.imul(r ^ (r >>> 13), 3266489917)) >>> 0) / 4294967296; };
@@ -96,22 +80,20 @@ const S = {
   canvas: undefined as HTMLCanvasElement | undefined,
   ctx: undefined as CanvasRenderingContext2D | undefined,
   w: 0, h: 0, dpr: 1,
-  mode: "chat" as SkyOpts["mode"], key: "",
+  key: "",
   stars: [] as Star[],
   // notes mode: what each star is
   ids: [] as string[], labels: [] as string[], deg: [] as number[], adj: [] as number[][], edges: [] as [number, number][], sig: "",
   anchors: new Map<string, [number, number]>(), known: new Set<string>(),
   hover: -1, onOpen: undefined as ((id: string) => void) | undefined,
-  people: new Map<string, number>(),
   from: [hex("#6d7cff"), hex("#b46cff")] as [RGB, RGB], to: [hex("#6d7cff"), hex("#b46cff")] as [RGB, RGB], fadeAt: 0,
   dark: true, accent: hex("#6d7cff"),
   pointer: { x: 0.5, y: 0.5, on: false, sx: 0.5, sy: 0.5 },
-  pulses: [] as Pulse[], comet: undefined as { x: number; y: number; dx: number; dy: number; at: number } | undefined, nextComet: 0,
+  pulses: [] as Pulse[],
   raf: 0, last: 0, t0: performance.now(),
   still: still(),
   ro: undefined as ResizeObserver | undefined,
 };
-const LINK = 132;
 
 const fieldSize = () => Math.round(Math.max(44, Math.min(110, (S.w * S.h) / 7500)));
 function seedField() {
@@ -145,21 +127,19 @@ function size() {
   S.dpr = Math.min(2, window.devicePixelRatio || 1);
   const w = Math.max(1, Math.round(box.width)), h = Math.max(1, Math.round(box.height));
   if (w === S.w && h === S.h && c.width === Math.round(w * S.dpr)) return;
-  const reseed = S.mode === "chat" && (!S.stars.length || Math.abs(w * h - S.w * S.h) > S.w * S.h * 0.5);
   S.w = w; S.h = h;
   c.width = Math.round(w * S.dpr); c.height = Math.round(h * S.dpr);
-  if (reseed) seedField();
   if (S.still) frame(performance.now());
 }
 /** Where star `st` is on screen now, with its depth's lean toward the pointer. */
 function pos(st: Star): [number, number] {
-  const lean = 18 * st.z * (S.mode === "notes" ? 0.4 : 1);
+  const lean = 7 * st.z;
   return [st.x * S.w + (S.pointer.sx - 0.5) * lean, st.y * S.h + (S.pointer.sy - 0.5) * lean];
 }
 function frame(now: number) {
   const ctx = S.ctx!, w = S.w, h = S.h, t = (now - S.t0) / 1000, dt = Math.min(0.1, (now - (S.last || now)) / 1000);
   S.last = now;
-  const moving = !S.still, notes = S.mode === "notes";
+  const moving = !S.still;
   ctx.setTransform(S.dpr, 0, 0, S.dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
   const fade = Math.min(1, (now - S.fadeAt) / 1400);
@@ -172,11 +152,11 @@ function frame(now: number) {
     const x = w * (0.5 + 0.38 * Math.sin(t * fx + i * 2.1)), y = h * (0.5 + 0.34 * Math.cos(t * fy + i * 1.3));
     const r = Math.max(w, h) * rad;
     const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-    g.addColorStop(0, rgba(col, a * k * (notes ? 0.8 : 1))); g.addColorStop(1, rgba(col, 0));
+    g.addColorStop(0, rgba(col, a * k * 0.8)); g.addColorStop(1, rgba(col, 0));
     ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
   });
   ctx.globalCompositeOperation = "source-over";
-  // stars drift and wrap (chat), or breathe around their place in the graph (notes)
+  // stars breathe around their place in the graph; the far field drifts and wraps
   if (moving) for (const st of S.stars) {
     if (st.ax !== undefined) { st.x = st.ax + 0.004 * Math.sin(t * st.tw * 0.5 + st.ph); st.y = st.ay! + 0.004 * Math.cos(t * st.tw * 0.4 + st.ph); }
     else { st.x = (st.x + st.vx * dt + 1) % 1; st.y = (st.y + st.vy * dt + 1) % 1; }
@@ -186,30 +166,15 @@ function frame(now: number) {
   const P = S.stars.map(pos);
   const ink: RGB = dark ? [225, 230, 255] : [40, 48, 90];
   ctx.lineWidth = 1;
-  if (notes) {
-    // the real links, the hovered note's brighter
+  // the real links, the hovered note\'s brighter
     for (const [a, b] of S.edges) {
       const hot = a === S.hover || b === S.hover;
       ctx.strokeStyle = rgba(mix(ink, hot ? c2 : c1, hot ? 0.6 : 0.45), (hot ? 0.55 : 0.2) * k);
       ctx.lineWidth = hot ? 1.4 : 1;
       ctx.beginPath(); ctx.moveTo(P[a][0], P[a][1]); ctx.lineTo(P[b][0], P[b][1]); ctx.stroke();
     }
-    ctx.lineWidth = 1;
-  } else {
-    // links: near stars on the same depth band or the next one, fainter with distance
-    for (let i = 0; i < P.length; i++) for (let j = i + 1; j < P.length; j++) {
-      const dx = P[i][0] - P[j][0], dy = P[i][1] - P[j][1], d2 = dx * dx + dy * dy;
-      if (d2 > LINK * LINK || Math.abs(S.stars[i].z - S.stars[j].z) > 0.35) continue;
-      ctx.strokeStyle = rgba(mix(ink, c1, 0.35), (1 - Math.sqrt(d2) / LINK) * 0.22 * k * Math.min(S.stars[i].z, S.stars[j].z));
-      ctx.beginPath(); ctx.moveTo(P[i][0], P[i][1]); ctx.lineTo(P[j][0], P[j][1]); ctx.stroke();
-    }
-    // the pointer: a lantern that ties nearby stars to it
-    if (S.pointer.on && moving) {
-      const px = S.pointer.x * w, py = S.pointer.y * h;
-      for (const [x, y] of P) { const d = Math.hypot(x - px, y - py); if (d < 150) { ctx.strokeStyle = rgba(mix(ink, c2, 0.5), (1 - d / 150) * 0.22 * k); ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(x, y); ctx.stroke(); } }
-    }
-  }
-  // waves of light: from a new message's author, or a new note along its links
+  ctx.lineWidth = 1;
+  // waves of light: a new note along its links
   const lit = new Map<number, number>();
   S.pulses = S.pulses.filter((p) => t - p.at < 3.2);
   for (const p of S.pulses) {
@@ -230,14 +195,13 @@ function frame(now: number) {
     lit.set(p.from, Math.max(lit.get(p.from) ?? 0, life));
   }
   ctx.lineWidth = 1;
-  // the stars: people (chat) and the most linked notes (notes) brightest
-  const personOf = new Set(S.people.values());
-  const hub = notes ? Math.max(3, ...S.deg) * 0.6 : Infinity;
+  // the stars: the most linked notes brightest
+  const hub = Math.max(3, ...S.deg) * 0.6;
   S.stars.forEach((st, i) => {
     const [x, y] = P[i];
     const tw = moving ? 0.55 + 0.45 * Math.sin(t * st.tw + st.ph) : 0.8;
-    const glow = lit.get(i) ?? 0, bright = personOf.has(i) || (notes && (S.deg[i] ?? 0) >= hub) || i === S.hover;
-    const r = st.r * (personOf.has(i) ? 2.1 : 1) + glow * 2.4 + (i === S.hover ? 1.5 : 0);
+    const glow = lit.get(i) ?? 0, bright = (S.deg[i] ?? 0) >= hub || i === S.hover;
+    const r = st.r + glow * 2.4 + (i === S.hover ? 1.5 : 0);
     if (bright || glow > 0) {
       const halo = ctx.createRadialGradient(x, y, 0, x, y, r * 7);
       halo.addColorStop(0, rgba(bright ? S.accent : c2, (0.3 + glow * 0.4) * k)); halo.addColorStop(1, rgba(c2, 0));
@@ -247,27 +211,13 @@ function frame(now: number) {
     ctx.beginPath(); ctx.arc(x, y, r, 0, 6.283); ctx.fill();
   });
   // the hovered note's title
-  if (notes && S.hover >= 0 && P[S.hover]) {
+  if (S.hover >= 0 && P[S.hover]) {
     const [x, y] = P[S.hover], label = S.labels[S.hover] ?? "";
     ctx.font = "600 12px system-ui, -apple-system, sans-serif";
     const tw = ctx.measureText(label).width, bx = Math.min(w - tw - 18, Math.max(6, x + 10)), by = Math.max(6, y - 28);
     ctx.fillStyle = dark ? "rgba(20,22,34,.85)" : "rgba(255,255,255,.92)";
     ctx.beginPath(); ctx.roundRect(bx, by, tw + 12, 20, 6); ctx.fill();
     ctx.fillStyle = dark ? "#e8eaf6" : "#1f2440"; ctx.fillText(label, bx + 6, by + 14);
-  }
-  // now and then, a shooting star (chat only)
-  if (moving && !notes) {
-    if (!S.comet && t > S.nextComet) { S.comet = { x: 0.2 + Math.random() * 0.8, y: -0.05, dx: -(0.35 + Math.random() * 0.25), dy: 0.45 + Math.random() * 0.2, at: t }; S.nextComet = t + 16 + Math.random() * 22; }
-    if (S.comet) {
-      const c = S.comet, u = (t - c.at) / 1.1;
-      if (u > 1) S.comet = undefined;
-      else {
-        const x = (c.x + c.dx * u) * w, y = (c.y + c.dy * u) * h, tx = x - c.dx * 0.12 * w, ty = y - c.dy * 0.12 * h;
-        const g = ctx.createLinearGradient(tx, ty, x, y);
-        g.addColorStop(0, rgba(c2, 0)); g.addColorStop(1, rgba([255, 255, 255], 0.7 * Math.sin(u * Math.PI) * k));
-        ctx.strokeStyle = g; ctx.lineWidth = 1.8; ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(x, y); ctx.stroke(); ctx.lineWidth = 1;
-      }
-    }
   }
 }
 function loop(now: number) {
@@ -293,9 +243,8 @@ function cssRgb(css: string): RGB | undefined {
 const accentCache = new Map<string, RGB>();
 export const accentOf = (css: string) => { if (!accentCache.has(css)) accentCache.set(css, cssRgb(css) ?? hex("#6d7cff")); return accentCache.get(css)!; };
 
-/** Put the sky on `canvas` (again after a re-render: the stars and waves carry on). Chat: `key` is
- *  the channel and `online` the principals there. Notes: `key` is the notebook and `graph` its notes;
- *  notes that were not there last time are born with a wave. */
+/** Put the sky on `canvas` (again after a re-render: the stars and waves carry on). `key` is the
+ *  notebook and `graph` its notes; notes that were not there last time are born with a wave. */
 export function attachSky(canvas: HTMLCanvasElement, o: SkyOpts) {
   const fresh = S.canvas !== canvas;
   if (fresh) {
@@ -309,7 +258,6 @@ export function attachSky(canvas: HTMLCanvasElement, o: SkyOpts) {
     host.addEventListener("pointermove", (e) => {
       const b = canvas.getBoundingClientRect();
       S.pointer.x = (e.clientX - b.left) / b.width; S.pointer.y = (e.clientY - b.top) / b.height; S.pointer.on = e.pointerType === "mouse";
-      if (S.mode !== "notes") return;
       // the nearest star within reach is the hovered note (not over the view's own buttons and text)
       const over = (e.target as HTMLElement).closest("button, a, input, textarea, form, .hints, h2, h3, p");
       let best = -1, bd = 14;
@@ -317,23 +265,22 @@ export function attachSky(canvas: HTMLCanvasElement, o: SkyOpts) {
       if (best !== S.hover) { S.hover = best; host.style.cursor = best >= 0 ? "pointer" : ""; if (S.still) frame(performance.now()); }
     });
     host.addEventListener("pointerleave", () => { S.pointer.on = false; S.pointer.x = S.pointer.y = 0.5; S.hover = -1; host.style.cursor = ""; });
-    host.addEventListener("click", (e) => { if (S.mode === "notes" && S.hover >= 0 && !(e.target as HTMLElement).closest("button, a, input, textarea, form")) S.onOpen?.(S.ids[S.hover]); });
+    host.addEventListener("click", (e) => { if (S.hover >= 0 && !(e.target as HTMLElement).closest("button, a, input, textarea, form")) S.onOpen?.(S.ids[S.hover]); });
   }
   S.dark = o.dark;
   S.accent = accentOf(o.accent);
   S.onOpen = o.onOpen;
-  const switched = o.mode !== S.mode || o.key !== S.key;
+  const switched = o.key !== S.key;
   if (switched) {
     const now = performance.now(), fade = Math.min(1, (now - S.fadeAt) / 1400);
     S.from = [mix(S.from[0], S.to[0], fade), mix(S.from[1], S.to[1], fade)];
-    S.to = o.mode === "notes" ? [mix(skyColours("notebooks")[0], S.accent, 0.35), skyColours("notebooks")[1]] : skyColours(o.key);
+    S.to = [mix(hex(NOTES_SKY[0]), S.accent, 0.35), hex(NOTES_SKY[1])];
     if (!S.key) S.from = S.to;
-    if (o.mode !== S.mode || o.mode === "notes") { S.anchors = new Map(); S.known = new Set(); S.sig = ""; }
-    S.mode = o.mode; S.key = o.key; S.fadeAt = now; S.pulses = []; S.hover = -1;
-    if (o.mode === "chat") seedField();
+    S.anchors = new Map(); S.known = new Set(); S.sig = "";
+    S.key = o.key; S.fadeAt = now; S.pulses = []; S.hover = -1;
   }
   size();
-  if (o.mode === "notes" && o.graph) {
+  if (o.graph) {
     const sig = `${o.graph.nodes.map((n) => n.id).join("\u0000")}|${o.graph.edges.length}`;
     if (sig !== S.sig) {
       const before = S.known;
@@ -345,25 +292,18 @@ export function attachSky(canvas: HTMLCanvasElement, o: SkyOpts) {
     }
     if (!S.ids.length) seedField();
   }
-  // people get stars of their own, the same one each time
-  S.people.clear();
-  if (o.mode === "chat") {
-    const n = S.stars.length, taken = new Set<number>();
-    for (const p of o.online ?? []) { let i = hashOf(p) % n; while (taken.has(i) && taken.size < n) i = (i + 1) % n; taken.add(i); S.people.set(p, i); }
-  }
   start();
   // a re-render hands over a blank canvas: paint it now rather than at the next tick
   if (fresh || switched) frame(performance.now());
 }
 
-/** A wave of light from a star: a message's author (chat) or a note (notes), six hops out. */
+/** A wave of light from a note's star along its links, six hops out. */
 export function skyPulse(from: string) {
   if (S.still || !S.stars.length) return;
-  const n = S.stars.length;
-  const origin = S.mode === "notes" ? S.ids.indexOf(from) : S.people.get(from) ?? hashOf(from) % n;
+  const origin = S.ids.indexOf(from);
   if (origin < 0) return;
   const P = S.stars.map(pos);
-  const near = (a: number) => S.mode === "notes" ? S.adj[a] ?? [] : P.flatMap((_, b) => (b !== a && Math.hypot(P[a][0] - P[b][0], P[a][1] - P[b][1]) < LINK * 1.15 ? [b] : []));
+  const near = (a: number) => S.adj[a] ?? [];
   const seen = new Set([origin]), edges: [number, number, number][] = [];
   let ring = [origin];
   for (let h = 1; h <= 6 && ring.length; h++) {

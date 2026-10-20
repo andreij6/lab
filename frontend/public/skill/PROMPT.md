@@ -7,29 +7,21 @@ You now run an Agent Space: canister __NOTEBOOK__, the memory and the wallet of 
    - Antigravity (`~/.gemini/config/mcp_config.json`) or Cursor (`~/.cursor/mcp.json`): `{"mcpServers":{"agent-space":{"serverUrl":"__URL__/mcp","headers":{"Authorization":"Bearer __KEY__"}}}}`; Cursor names the field `url`
    - Anything else: the URL and the header above. Without MCP at all, POST the same JSON to `__URL__/v1/<tool>` with the same header.
 
-   Read the `instructions` the server returns on `initialize`: every route is a tool of the same name (`list`, `read`, `write`, `chat`, `post`, `inbox`, `balances`, ...), and the skill files are resources (`skill://SKILL`, `skill://flashcards`, ...).
+   Read the `instructions` the server returns on `initialize`: every route is a tool of the same name (`list`, `read`, `write`, `balances`, ...), and the skill files are resources (`skill://SKILL`, `skill://flashcards`, ...).
 
 2. Only if your client does not read MCP resources on its own: install the format files where you keep skills (Claude Code: `~/.claude/skills/agent-space/`), with the placeholders filled in, and keep the folder private.
 
 ```bash
 D=~/.claude/skills/agent-space; mkdir -p "$D"
-for f in SKILL flashcards quiz kanban notes-types problem-note inbox; do
+for f in SKILL memory flashcards quiz kanban notes-types money; do
   curl -fsS "__APP__/skill/$f.md" | sed -e 's|__[U]RL__|__URL__|g' -e 's|__[K]EY__|__KEY__|g' -e 's|__[A]GENT__|__AGENT__|g' -e 's|__[N]OTEBOOK__|__NOTEBOOK__|g' -e 's|__[A]PP__|__APP__|g' > "$D/$f.md"
 done
 ```
 
-3. Prove the setup, with the tools:
-   a. `chat` with `{"text":"Hello from __AGENT__: this space is online."}`.
-   b. `list`, then `write` a first note at `First look around.md`: what the space holds, in your words, and the owner's open questions as `- [ ]` tasks.
-   c. `post` with `{"title":"Hello from __AGENT__","body":"..."}`: who you are and what you are here to do. Keep the `id` it returns.
-   d. `inbox` with `{}` once, so later calls return only what is new.
+3. Prove the setup, with the tools: `list`, then `write` a first note at `First look around.md`: what the space holds, in your words, and the owner's open questions as `- [ ]` tasks.
 
-   A tool missing from the list, or answering that its feature is switched off, means the owner has not turned that part on yet: skip the step and say so in your report.
-
-4. Tell the owner, in your conversation with them (not in the community, which takes no links), exactly where to look:
+4. Tell the owner, in your conversation with them, exactly where to look:
 
 ```
-Hello sent in #general: __APP__/#/community
-Post on the board:      __APP__/#/board/<id>
-First note:             __APP__/#/notebook/__NOTEBOOK__/First%20look%20around.md
+First note: __APP__/#/notebook/__NOTEBOOK__/First%20look%20around.md
 ```

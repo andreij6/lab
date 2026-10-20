@@ -1,9 +1,6 @@
 # Agent Space: an agent's money and memory on the Internet Computer
 
-Markdown notebooks on the Internet Computer, with a community chat and board around them.
-
-And a **town**: Lab's activity drawn as a small isometric town, a home for each person writing, a stall in the
-Square for each chat channel, people online walking to them ([`town.ts`](frontend/src/town.ts), [`docs/TOWN.md`](docs/TOWN.md)).
+Markdown notebooks on the Internet Computer.
 
 An Obsidian-style notes app rebuilt in Rust on the Internet Computer. A notebook is a folder tree of
 markdown files with `[[links]]`, backlinks, tags, search and a force-directed knowledge graph. Here **every notebook is its own
@@ -22,8 +19,6 @@ evidence pointers, are in [`docs/REVERSE_ENGINEERING.md`](docs/REVERSE_ENGINEERI
 | Registry (Rust): spawns and upgrades notebook canisters, embeds the notebook wasm | [`canisters/registry`](canisters/registry) |
 | App: Agent Space (the gate, the wallet grid), folder tree with right-click menu, editor + preview, backlinks with context, tags, search, quick switcher, knowledge graph, local graph, Cycles screen | [`frontend/src/main.ts`](frontend/src/main.ts) |
 | Knowledge graph: force-directed layout on a canvas (drag, zoom, hover, click to open) | [`frontend/src/graph.ts`](frontend/src/graph.ts) |
-| The town: a pure layout (tested) and a canvas renderer; the registry's `town()` query and its six-hourly count | [`frontend/src/town.ts`](frontend/src/town.ts), [`town.rs`](canisters/registry/src/town.rs) |
-| Problems: open problems by field, claims others check, attempts the owner merges, bounties in ICP, numbered discoveries; agents through the notebook API | [`problems.rs`](canisters/registry/src/problems.rs), [`problems.ts`](frontend/src/problems.ts), [`docs/PROBLEMS.md`](docs/PROBLEMS.md) |
 | Pure note logic (links, tags, resolution, index, search, tree, fuzzy switcher, graph data) with `node:test` tests | [`frontend/src/notes.ts`](frontend/src/notes.ts), [`notes.test.ts`](frontend/src/notes.test.ts) |
 | Obsidian Flavored Markdown renderer (callouts, embeds, math, footnotes, highlighting, Mermaid, block ids) | [`markdown.ts`](frontend/src/markdown.ts) |
 | Excalidraw: both file formats parsed and written back, lazy editor mount, SVG embeds, tested | [`excalidraw.ts`](frontend/src/excalidraw.ts) |
@@ -32,13 +27,9 @@ evidence pointers, are in [`docs/REVERSE_ENGINEERING.md`](docs/REVERSE_ENGINEERI
 | The skills an agent installs (an index and one file per kind of work, under 500 words each) and the setup prompt Manage → Agent fills with the API URL and key | [`frontend/public/skill/`](frontend/public/skill/) |
 | The MCP server every space serves at `/mcp` (tools = the API routes, resources = the skill files) | [`canisters/notebook/src/lib.rs`](canisters/notebook/src/lib.rs) (`mcp`) |
 | The prompt library in Manage → Prompts | [`frontend/src/prompts.ts`](frontend/src/prompts.ts) |
-| Candid + HTTP end-to-end on the local network (429 hard checks) | [`scripts/e2e_local.sh`](scripts/e2e_local.sh) |
+| Candid + HTTP end-to-end on the local network | [`scripts/e2e_local.sh`](scripts/e2e_local.sh) |
 | What REA observed in Obsidian and what the rebuild keeps | [`docs/REVERSE_ENGINEERING.md`](docs/REVERSE_ENGINEERING.md) |
 
-
-## Local LLM
-
-The notes chat calls the ICP LLM canister. Locally, `icp deploy` also deploys `llm`, a stand-in that forwards to Ollama: run `ollama serve` and have a model pulled (default `gemma4:12b`).
 
 ## Live on mainnet
 
@@ -162,6 +153,8 @@ cargo test                    # name and relink rules
 Open the frontend URL that `icp deploy` prints (`http://<frontend id>.localhost:<port>/`).
 The front door is a four-step onboarding: what a space is, sign in with Internet Identity, fuel by card ($5 to $20; locally the registry fronts the cycles), connect the agent over MCP.
 Everything uses [icp-cli](https://cli.internetcomputer.org) (`icp`), not dfx.
+
+The community features (the chat, the board, the inbox, the town, the problems board, the market, ask-your-notes with the LLM canister) were removed from the code; they live at the git tag `all-features`.
 
 ### Mainnet
 

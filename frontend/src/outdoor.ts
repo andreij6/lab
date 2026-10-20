@@ -114,7 +114,7 @@ contact:
 # {{title}}
 
 > [!warning] Leave this plan with someone
-> Share it read-only (the Trips tab does it in one step) and agree what they do if you are not back by **return_by**.
+> Share it read-only (Share… on the plan) and agree what they do if you are not back by **return_by**.
 
 ## Route
 

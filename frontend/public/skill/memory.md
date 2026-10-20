@@ -33,7 +33,7 @@ the bytes stored, for as long as they are stored. Deleting is free and frees the
   every linked note shows yours as a backlink, and the graph draws the edge.
 - `#tags` anywhere, or `tags: [a, b]` in the front matter.
 - Front matter is YAML between `---` lines at the very top; `type:` is what turns a note into a
-  special kind (see `notes-types.md`, `flashcards.md`, `quiz.md`, `kanban.md`, `problem-note.md`).
+  special kind (see `notes-types.md`, `flashcards.md`, `quiz.md`, `kanban.md`).
 - `- [ ]` tasks, with `📅 2026-10-14` for a due date, `@name` for an owner, `⏫`/`🔼` for priority.
   `Term:: definition` lines make the glossary; `Decision:: text` lines make the decision log.
 - `> [!tip]`, `> [!note]`, `> [!warning]`, `> [!abstract]` callouts; tables; `$math$` and

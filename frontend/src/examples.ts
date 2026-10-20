@@ -21,7 +21,7 @@ export type ExampleFile = [path: string, content: string];
 const how = (text: string) => `> [!tip] How to make one\n> ${text.replace(/\n/g, "\n> ")}\n\n`;
 const fill = (t: string, title: string, date: string) => t.replace(/\{\{title\}\}/g, title).replace(/\{\{date\}\}/g, date);
 
-/** The examples for a set of tools (the ids from onboarding: chat, graph, study, work, organize,
+/** The examples for a set of tools (the ids from onboarding: graph, study, work, organize,
  *  research, writing, care, software, career, crypto, money, creator, fitness, home, trips). Everyone gets the core note types. */
 export function examples(tools: Set<string>, today: string): ExampleFile[] {
   const out: ExampleFile[] = [];
@@ -51,7 +51,6 @@ export function examples(tools: Set<string>, today: string): ExampleFile[] {
   add("Examples/Sketch.excalidraw", NEW_DRAWING);
   add("Examples/Python.ipynb", NEW_IPYNB);
 
-  if (has("chat")) add("Examples/Ask your notes.md", `# Ask your notes\n\n${how("Open Chat with your notes (the speech bubble on the left) and ask in plain language.")}Try:\n\n- *What does my budget say about food?*\n- *Summarise my meeting notes from this week.*\n\nThe answer cites the notes it used as [1] [2]; click one to open it. Anything it adds from general knowledge comes after **Beyond your notes**, and **Save as note** keeps an answer in a folder you pick.\n`);
   if (has("study")) {
     add("Examples/Study/Flashcards.md", `---\nquiz: cards\n---\n# Flashcards\n\n${how("⋯ → New flashcard deck, or ⋯ on any note → Make flashcards. Study brings each card back just before you would forget it.")}What does a canister run on?::Cycles\n\nThe front of a card\n?\nThe back of a card, on the lines after a single ?\n`);
     add("Examples/Study/Quiz.md", NEW_CHOICE);

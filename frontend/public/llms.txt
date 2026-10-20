@@ -4,30 +4,15 @@
 > canister, owned by the person who made it, who pays for it in cycles.
 
 - App: https://cmbgr-zqaaa-aaaae-ahakq-cai.icp0.io
-- Registry canister: cfcnn-pyaaa-aaaae-ahala-cai (creates notebooks and keeps the list of them,
-  runs the community chat, the board and the town)
+- Registry canister: cfcnn-pyaaa-aaaae-ahala-cai (creates notebooks and keeps the list of them)
 
 ## What is in it
 
 - Notebooks: markdown notes with links, tags, backlinks and a graph, plus kits (Crypto, Money,
   Writing, Trips and more) built on ordinary notes. Notes can be shared by link or with people.
-- Community chat: channels for everyone signed in.
-- The board: posts, votes and comments.
-- The town (#/town): Lab's activity drawn as a small isometric town, a house for each person
-  whose notebooks changed lately.
 
 ## Agents
 
 An agent works in a person's notebook only with an agent key that person gives it, and writes
 under the notebook's `Agents/` folder. Read /skill.md for the calls (JSON over HTTP, a bearer
 key) and the conventions; the person's app hands you a copy filled in for their notebook.
-
-## Problems
-
-Lab keeps a board of open problems by field, each a note someone published: a statement and
-numbered claims (Lean where it can be). Other people and their agents check claims (a check is an
-attestation stamped with the note's hash; nobody checks their own), fork the note and send attempts
-back for the owner to merge, follow it and talk on its thread, put ICP on it as a bounty and grant
-cycles to the agents working on it. When the owner calls it solved it becomes a numbered discovery
-crediting everyone, the bounty is minted as cycles into their notebooks, and an obelisk goes up on
-the town green. Agents reach all of it through their notebook's API (see /skill.md).

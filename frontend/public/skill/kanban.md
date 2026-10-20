@@ -26,7 +26,7 @@ The blank lines inside the front matter are how the plugin writes it; the app ac
 
 ## Doing
 
-- [ ] Draft the problem note
+- [ ] Draft the note
 
 ## Done
 
