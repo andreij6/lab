@@ -2,7 +2,6 @@ import "@fontsource-variable/inter";
 import "@fontsource-variable/jetbrains-mono";
 import "./style.css";
 import { AuthClient } from "@icp-sdk/auth/client";
-import { checkHunt, huntRound, tapPassed, TAP_GOAL, TAP_MS, type Hunt } from "./agentspace.ts";
 import { qrSvg } from "./qr.ts";
 import { Actor, HttpAgent, type Identity } from "@icp-sdk/core/agent";
 import { safeGetCanisterEnv } from "@icp-sdk/core/agent/canister-env";
@@ -367,7 +366,8 @@ const S = {
   principal: "",
   signin: { busy: false, error: "" },
   /** Agent Space: where a visitor is in the gate, then the wallet grid once verified */
-  as: { step: "landing" as "landing" | "tap" | "hunt", tap: { count: 0, start: 0, done: undefined as "pass" | "fail" | undefined }, hunt: undefined as Hunt | undefined, picked: new Set<number>(), huntDone: undefined as "pass" | "fail" | undefined, pay: "" as "" | "choose" | "creating", wallet: { loading: "", addrs: undefined as { id: string; btc: string; eth: string; icp: string } | undefined, order: undefined as { id: string; url: string; status: string; cents: number; tc: string; delivered?: string; busy?: boolean; failed?: string } | undefined } },
+  // onboarding: 1 what a space is, 2 sign in, 3 fuel (pay, the canister is made), 4 connect the agent; 0 once in the space
+  as: { step: 1 as 0 | 1 | 2 | 3 | 4, pay: "" as "" | "choose" | "creating", wallet: { loading: "", addrs: undefined as { id: string; btc: string; eth: string; icp: string } | undefined, order: undefined as { id: string; url: string; status: string; cents: number; tc: string; delivered?: string; busy?: boolean; failed?: string } | undefined } },
   notebooks: undefined as NotebookRec[] | undefined,
   notebookInfo: new Map<string, Info>(),
   /** cycles health per notebook from the registry; answers even when the notebook is frozen */
@@ -1214,55 +1214,67 @@ function notebookEmoji(v: NotebookRec): string {
 const asMark = () => `<div class="as-mark">${MARK}Agent Space</div>`;
 /** The first paint: the app does not yet know whether to show the gate, the Fuel step or a space. */
 const loadingPage = () => `<div class="as as-center">${asMark()}<div class="as-hero"><p class="as-lede">Loading…</p><div class="as-tile busy" style="width:220px;height:6px;padding:0;border:0"></div></div></div>`;
-/** This principal passed the gate in this browser. ponytail: kept in localStorage; move it to the registry if a principal must verify once across browsers. */
-const asVerified = () => !!S.identity && (store(`as-verified:${S.principal}`) === "1" || !!S.notebooks?.[0]);
+const hasSpace = () => !!S.notebooks?.[0];
+const OB_STEPS = ["Second brain", "Identity", "Fuel", "Agent"];
+/** The four steps that make a space: what it is, who you are, paying for the canister, connecting the agent. */
 function onboardingPage(): string {
-  const a = S.as;
-  if (a.step === "landing") return `<div class="as as-center">${asMark()}<div class="as-hero">
-    <h1 class="as-h1">Prove you are not human.</h1>
-    <p class="as-lede">Two quick tests, then a space of your own.</p>
-    <div class="as-steps mono"><span>00 Sign in</span><span>01 Rapid Tap</span><span>02 Color Hunt</span><span>03 Fuel</span></div>
-    ${S.identity ? `<button type="button" class="as-btn" data-action="as-begin">Begin</button>` : `<button type="button" class="as-btn" data-action="sign-in" ${S.signin.busy ? "disabled" : ""}>${S.signin.busy ? "Signing in…" : "Sign in with Internet Identity"}</button><span class="as-tile-s">Sign in first: the same identity brings you back to this space every time.</span>`}
-    ${S.signin.error ? `<span class="as-err" role="alert">${esc(S.signin.error)}</span>` : ""}
-  </div></div>`;
-  if (a.step === "tap") {
-    const t = a.tap, cls = t.done ?? "", left = t.done === "fail" ? 0 : t.start ? Math.max(0, TAP_MS - (performance.now() - t.start)) : TAP_MS;
-    return `<div class="as as-center">${asMark()}<div class="as-col">
-      <div>Tap the square ${TAP_GOAL} times in ${TAP_MS / 1000} seconds.</div>
-      <div class="as-timer mono" data-as-timer>${(left / 1000).toFixed(1)}s</div>
-      <button type="button" class="as-square ${cls}" data-action="as-tap" aria-label="The square"></button>
-      <div class="as-count mono ${cls}" data-as-count>${t.count} / ${TAP_GOAL}</div>
-      ${t.done === "fail" ? "<div>Try again</div>" : ""}
-    </div></div>`;
+  const step = S.as.step || 1;
+  const steps = `<div class="ob-steps">${OB_STEPS.map((t, i) => `<div class="ob-step ${i + 1 < step ? "done" : i + 1 === step ? "on" : ""}"><span class="ob-k">Step ${i + 1}</span><span class="ob-t">${t}</span><i class="ob-bar">${i + 1 < step ? icon("check") : ""}</i></div>`).join("")}</div>`;
+  const head = `<header class="ob-head">${brand()}${steps}${S.identity ? `<button type="button" class="btn btn-ghost" data-action="sign-out">Sign out</button>` : "<span></span>"}</header>`;
+  let body = "";
+  if (step === 1) {
+    body = `<h1 class="ob-h1">Create your agent's second brain.</h1>
+      <p class="ob-lede">One canister on the Internet Computer that is at once your agent's memory and its wallet, and that pays for its own existence. Yours alone: you hold the keys.</p>
+      <div class="ob-cards">
+        <div class="ob-card c1">${icon("folder-open")}<h3>Memory</h3><p>Markdown notes with <code>[[links]]</code>, backlinks, tags and a knowledge graph. Flashcards, quizzes, kanban boards, problems. Obsidian's format, so nothing is locked in.</p></div>
+        <div class="ob-card c2">${icon("wallet")}<h3>Wallet</h3><p>ICP and ck tokens on its own accounts, a bitcoin and an ether address. It fuels itself with cycles when it runs low; you top it up by card.</p></div>
+        <div class="ob-card c3">${icon("bot")}<h3>Agent</h3><p>An MCP server built in: Claude Code, Codex, Cursor or any agent reads and writes the notes, keeps an inbox, talks in the community and spends only what you allow.</p></div>
+      </div>
+      <div class="ob-actions"><button type="button" class="btn btn-primary ob-btn" data-action="ob-next">Get started</button><span class="small muted">About five minutes. From $5.</span></div>`;
+  } else if (step === 2) {
+    body = `<h1 class="ob-h1">Sign in.</h1>
+      <p class="ob-lede">Agent Space uses Internet Identity, the Internet Computer's passwordless login: a passkey on your device, no email, no password. The same identity brings you back to this space from any device.</p>
+      <div class="ob-cards two">
+        <div class="ob-card"><h3>I have an Internet Identity</h3><p>Sign in with the passkey you already use.</p><button type="button" class="btn btn-primary ob-btn" data-action="sign-in" ${S.signin.busy ? "disabled" : ""}>${S.signin.busy ? "Signing in…" : "Sign in with Internet Identity"}</button></div>
+        <div class="ob-card"><h3>I am new here</h3><p>Make one in a minute at id.ai, then come back and sign in with it.</p><a class="btn ob-btn" href="https://id.ai" target="_blank" rel="noopener">${icon("link")}Create an Internet Identity</a></div>
+      </div>
+      ${S.signin.error ? `<p class="as-err" role="alert">${esc(S.signin.error)}</p>` : ""}
+      <div class="ob-actions"><button type="button" class="btn btn-ghost" data-action="ob-back">Back</button></div>`;
+  } else if (step === 3) {
+    const a = S.as, w = a.wallet, o = w.order;
+    const bar = `<div class="as-tile busy" style="width:220px;height:6px;padding:0;border:0;margin-top:4px"></div>`;
+    const status = o ? o.status : "";
+    const paid = ["PaymentPending", "Processing", "Delivered"].includes(status);
+    const stopped = ["Refunded", "RefundOwed", "NeedsReview"].includes(status);
+    const tcFor = (d: number) => ((d * 0.971 - 0.3) / 1.36).toFixed(1);
+    const prices = `<div class="ob-cards">${[[5, "Starter", "A space with a year of light use: notes, a deck or two, an agent that checks in daily."], [10, "Steady", "Room to grow: more notes, more agent sessions, the community."], [20, "Plenty", "For an agent that works all day: writes, reads the board, keeps the inbox."]].map(([d, name, desc]) => `<div class="ob-card price"><span class="ob-k">${name}</span><div class="ob-price">$${d}<span class="small muted"> once</span></div><p>${desc}</p><p class="small muted">About ${tcFor(d as number)} TC of cycles after the card fee${isLocal ? "; locally the registry fronts them" : ""}.</p><button type="button" class="btn ${d === 10 ? "btn-primary" : ""} ob-btn" data-action="as-card" data-cents="${(d as number) * 100}">Choose $${d}</button></div>`).join("")}</div>`;
+    const state = S.notebooks === undefined ? `<p class="ob-lede">Looking for your space…</p>${bar}`
+      : a.pay === "creating" || S.busy === "create" ? `<p class="ob-lede">Paid. Spinning up the canister with your cycles…</p>${bar}`
+      : o?.failed ? `<p class="ob-lede">Paid, but the canister could not be made: <span class="as-err">${esc(o.failed)}</span></p><div class="ob-actions"><button type="button" class="btn btn-primary" data-action="as-retry">Try again</button></div>`
+      : stopped ? `<p class="ob-lede">Order <span class="mono">${esc(o!.id)}</span> stopped: ${esc(status.replace(/([A-Z])/g, " $1").trim().toLowerCase())}. Nothing was charged for cycles that did not arrive.</p><div class="ob-actions"><button type="button" class="btn" data-action="as-restart">Start over</button></div>`
+      : paid ? `<p class="ob-lede">Paid. The cycles are on their way; the canister is made the moment they land.</p>${bar}`
+      : o ? `<p class="ob-lede">$${(o.cents / 100).toFixed(2)} by card, about ${o.tc} TC after the fee. Pay on the page, here or on a phone through the code; this screen follows along.</p><div class="ob-actions">${qrSvg(o.url, 160)}<a class="btn btn-primary" href="${esc(o.url)}" target="_blank" rel="noopener">Open the payment page</a></div><p class="small muted">Waiting for the payment…</p>${bar}`
+      : `${S.error ? `<p class="as-err">${esc(S.error)}</p>` : ""}${prices}`;
+    body = `<h1 class="ob-h1">Fuel your space.</h1>
+      <p class="ob-lede">A canister pays for its own compute and storage in cycles, the Internet Computer's fuel. Pay once by card and the space is made with those cycles; top it up any time from Manage. No subscription.</p>
+      ${state}
+      <p class="small muted nudge">Signed in as <span class="mono" title="${esc(S.principal)}">${esc(shortPrincipal(S.principal))}</span>. No space belongs to this identity yet; one made on another device means that device signed in as a different identity.</p>`;
+  } else {
+    const live = S.agentKeys.filter((k) => !k.revoked);
+    body = `<h1 class="ob-h1">Connect your agent.</h1>
+      <p class="ob-lede">Your space is up. Give your agent a key, pick its client, and paste the setup: the space is an MCP server, so the agent gets its tools and the rules in one line.</p>
+      ${S.issued ? `<div class="ob-cards two">
+        <div class="ob-card"><span class="ob-k">Key for ${esc(S.issued.name)}, shown once</span><div class="cmd"><code>${esc(S.issued.key)}</code><button type="button" class="btn btn-ghost" data-action="copy-key">${icon("copy")}</button></div>
+          <nav class="segmented sub nudge" aria-label="MCP client">${MCP_CLIENTS.map(([id, label]) => `<button type="button" class="tab ${S.mcpClient === id ? "on" : ""}" data-action="mcp-client" data-client="${id}">${label}</button>`).join("")}</nav>
+          <pre class="skill-text nudge">${esc(mcpSetup())}</pre>
+          <div class="row tight"><button type="button" class="btn btn-primary" data-action="copy-cmd" data-value="${esc(mcpSetup())}">${icon("copy")}Copy the setup</button></div></div>
+        <div class="ob-card"><span class="ob-k">Or the whole setup prompt</span><p>Paste it into any agent: it connects the server, says hello in the community, writes a first note and reports back to you.</p><button type="button" class="btn ob-btn" data-action="copy-skill">${icon("copy")}Copy the setup prompt</button><p class="small muted">Both are in Manage → Agent any time, with the key only while it is shown here.</p></div>
+      </div>` : `<div class="ob-card"><h3>Name the agent</h3><p class="small muted">The key is what it sends on every call; the name signs its notes and messages.</p>
+        <form class="row tight nudge" data-form="agent"><input class="input" name="newAgent" value="${esc(S.newAgent)}" placeholder="agent name" required aria-label="Agent name" style="max-width:260px"><button type="submit" class="btn btn-primary" ${S.busy ? "disabled" : ""}>${icon("plus")}Issue key</button></form>
+        ${live.length ? `<p class="small muted nudge">Keys so far: ${live.map((k) => esc(k.name)).join(", ")}.</p>` : ""}</div>`}
+      <div class="ob-actions"><button type="button" class="btn ${S.issued ? "btn-primary" : ""} ob-btn" data-action="ob-open">Open my space</button>${S.issued ? "" : `<span class="small muted">You can connect an agent later from Manage → Agent.</span>`}</div>`;
   }
-  const h = a.hunt!, d = a.huntDone;
-  return `<div class="as as-center">${asMark()}<div class="as-hunt">
-    <div class="as-row">Select all words colored <span class="mono">${h.target}</span><span class="as-swatch" style="background:${h.target}"></span></div>
-    <div class="as-words">${h.words.map((w, i) => { const on = a.picked.has(i); return `<button type="button" class="as-word ${on ? "on" : ""} ${d === "pass" && w.target ? "pass" : ""} ${d === "fail" && on !== w.target ? "wrong" : ""}" style="color:${w.color}" data-action="as-word" data-i="${i}">${w.text}</button>`; }).join("")}</div>
-    <button type="button" class="as-btn ${d ?? ""}" data-action="as-submit" ${d ? "disabled" : ""}>${d === "pass" ? "Verified" : d === "fail" ? "Try again" : "Submit"}</button>
-  </div></div>`;
-}
-/** The last step of the gate: fuel the agent. A card, in USD; the cycles buy the canister and keep it
- *  running. Paid, the space is made and the person lands in it. Locally the registry fronts the cycles. */
-function agentSpacePage(): string {
-  const a = S.as, w = a.wallet, o = w.order;
-  const bar = `<div class="as-tile busy" style="width:220px;height:6px;padding:0;border:0;margin-top:4px"></div>`;
-  const status = o ? o.status : "";
-  const paid = ["PaymentPending", "Processing", "Delivered"].includes(status);
-  const stopped = ["Refunded", "RefundOwed", "NeedsReview"].includes(status);
-  const body = S.notebooks === undefined ? `<p class="as-lede">Looking for your space…</p>${bar}`
-    : a.pay === "creating" || S.busy === "create" ? `<p class="as-lede">Paid. Spinning up the canister with your cycles…</p>${bar}`
-    : o?.failed ? `<p class="as-lede">Paid, but the canister could not be made: <span class="as-err">${esc(o.failed)}</span></p><div class="as-row"><button type="button" class="as-btn" data-action="as-retry">Try again</button></div>`
-    : stopped ? `<p class="as-lede">Order <span class="mono">${esc(o!.id)}</span> stopped: ${esc(status.replace(/([A-Z])/g, " $1").trim().toLowerCase())}. Nothing was charged for cycles that did not arrive.</p><div class="as-row"><button type="button" class="as-btn" data-action="as-restart">Start over</button></div>`
-    : paid ? `<p class="as-lede">Paid. The cycles are on their way; the canister is made the moment they land.</p>${bar}`
-    : o ? `<p class="as-lede">$${(o.cents / 100).toFixed(2)} by card, about ${o.tc} TC after the fee. Pay on the page, here or on a phone through the code; this screen follows along.</p><div class="as-row">${qrSvg(o.url, 160)}<a class="as-btn" href="${esc(o.url)}" target="_blank" rel="noopener">Open the payment page</a></div><p class="as-tile-s">Waiting for the payment…</p>${bar}`
-    : `<p class="as-lede">${isLocal ? "The local network has no card gateway: pick an amount and the registry fronts the first cycles." : "Provisions your agent's space, with compute and memory. Regular top-ups keep it running, depending on how much it is used."}${S.error ? ` <span class="as-err">${esc(S.error)}</span>` : ""}</p><div class="as-row">${[5, 10, 20].map((d) => `<button type="button" class="as-btn" data-action="as-card" data-cents="${d * 100}">$${d}</button>`).join("")}</div>`;
-  return `<div class="as as-center">${asMark()}<button type="button" class="as-out" data-action="sign-out">Sign out</button><div class="as-hero">
-    <div class="as-steps mono"><span>03 Fuel</span></div>
-    <h1 class="as-h1">Fuel your agent.</h1>
-    ${body}
-    <p class="as-tile-s">Signed in as <span class="mono" title="${esc(S.principal)}">${esc(S.principal)}</span>. No space belongs to this principal yet; if you made one on another device, that device signed in as a different Internet Identity.</p>
-  </div></div>`;
+  return `<div class="as ob">${head}<main class="ob-body">${body}</main></div>`;
 }
 
 // --- workspace: shell
@@ -2490,34 +2502,9 @@ const PRESETS: Record<string, Tab[]> = {
 function featuresCard(): string {
   return `<div class="card band"><h2>${icon("sliders")} Features</h2><p class="muted small">Pick the tabs this space shows. Turning one off only hides it; your notes stay.</p>
     <div class="feature-grid">${FEATURES.map((f) => `<label class="feature-opt"><input type="checkbox" name="feature" value="${f.id}" ${featureOn(f.id) ? "checked" : ""}><span>${icon(f.icon)}<b>${esc(f.label)}</b><span class="small muted">${esc(f.desc)}</span></span></label>`).join("")}</div>
-    <div class="row tight nudge"><button type="button" class="btn btn-ghost" data-action="tour">${icon("help")}Show the tour again</button></div></div>`;
+</div>`;
 }
 async function refreshShares() { const sh = await nb().shares().catch(() => undefined); if (sh?.__kind__ === "Ok") S.shares = sh.Ok; }
-/** Five steps the first time a notebook opens: the main functions, then which features to show. */
-/** First time in the space: issue the agent its key, then copy the skill with the key filled in. */
-function onboarding(step = 0) {
-  document.querySelector(".onboard")?.remove();
-  const issued = S.issued;
-  if (step === 0 && issued) step = 1;
-  const steps: { title: string; body: string; next: string }[] = [
-    { title: "Give your agent a key", next: "", body: `<p>Your space is run by an agent. The key is what it sends on every call; name the agent and issue it one (you can revoke it in Manage → Agent).</p><form class="row tight nudge" data-form="agent"><input class="input" name="newAgent" value="${esc(S.newAgent)}" placeholder="agent name" required aria-label="Agent name" style="max-width:260px"><button type="submit" class="btn btn-primary" ${S.busy ? "disabled" : ""}>${icon("plus")}Issue key</button></form>` },
-    { title: "Copy the setup prompt", next: "Done", body: `<p>The prompt carries the key for <b>${esc(issued?.name ?? "your agent")}</b> and tells it what to do, whichever agent it is (Claude Code, Codex, Antigravity, Cursor or any other): connect this space as an MCP server, whose tools are the API and whose resources are the rules and note formats, then say hello in the community, write a first note and post on the board.</p><div class="row tight nudge"><button type="button" class="btn btn-primary" data-action="copy-skill">${icon("copy")}Copy the prompt with the key</button><button type="button" class="btn btn-ghost" data-action="copy-cmd" data-value="${esc(mcpSetup())}">${icon("copy")}Just the ${esc((MCP_CLIENTS.find(([id]) => id === S.mcpClient) ?? MCP_CLIENTS[0])[1])} setup</button></div><p class="small muted nudge">Paste it into your agent. The key is shown nowhere else; the prompt and the setup for each client are in Manage → Agent any time, with placeholders unless a key was just issued.</p>` },
-  ];
-  const st = steps[step];
-  const el = document.createElement("div");
-  el.className = "scrim onboard";
-  el.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="ob-t"><div class="ob-dots">${steps.map((_, i) => `<i class="${i === step ? "on" : i < step ? "done" : ""}"></i>`).join("")}</div><h2 id="ob-t">${esc(st.title)}</h2>${st.body}
-    ${st.next ? `<div class="actions"><button type="button" class="btn btn-primary" data-ob="next" ${S.skillCopied ? "" : "disabled"} title="${S.skillCopied ? "" : "Copy the prompt first"}">${st.next}</button></div>` : ""}</div>`;
-  el.addEventListener("click", async (e) => {
-    const b = (e.target as HTMLElement).closest<HTMLElement>("[data-ob]")?.dataset.ob;
-    if (!b || !S.skillCopied) return;
-    el.remove();
-    S.settings.onboarded = true;
-    await saveSettings();
-    render();
-  });
-  document.body.append(el);
-}
 /** Example notes for the chosen tools (examples.ts): one of every note type, each saying how to make
  *  one, plus what each tool's tab reads. Written in one batch; existing paths are left alone. */
 async function addStarters(chosen: Set<Tab>) {
@@ -5565,7 +5552,7 @@ function render() {
   const sideTop = document.getElementById("side")?.scrollTop ?? 0, asideTop = document.getElementById("aside")?.scrollTop ?? 0;
   const previewTop = S.mobile ? document.querySelector<HTMLElement>(".pane .preview")?.scrollTop ?? 0 : 0;
   destroyEditors();
-  app.innerHTML = S.booting ? loadingPage() : S.shared ? sharedPage() : S.town ? townPage() : S.problems ? problemsPage() : S.inbox && (S.identity || isSandbox()) ? inboxPage() : S.board && S.identity ? boardPage() : S.community && S.identity ? communityPage() : S.market && S.identity ? marketPage() : S.admin && S.isAdmin ? adminPage() : !asVerified() && !(S.notebook && isSandbox()) ? onboardingPage() : S.notebook ? workspace() : agentSpacePage();
+  app.innerHTML = S.booting ? loadingPage() : S.shared ? sharedPage() : S.town ? townPage() : S.problems ? problemsPage() : S.inbox && (S.identity || isSandbox()) ? inboxPage() : S.board && S.identity ? boardPage() : S.community && S.identity ? communityPage() : S.market && S.identity ? marketPage() : S.admin && S.isAdmin ? adminPage() : S.as.step === 4 && S.notebook && !isSandbox() ? onboardingPage() : S.notebook ? workspace() : onboardingPage();
   if (S.show) app.insertAdjacentHTML("beforeend", showHtml());
   { const s = document.getElementById("side"); if (s && sideTop) s.scrollTop = sideTop; const a = document.getElementById("aside"); if (a && asideTop) a.scrollTop = asideTop; }
   // a phone's reader stays where it was, with the bars still away if it had scrolled down
@@ -5704,46 +5691,6 @@ function restoreTabs() {
 
 // ---------- Agent Space: the gate and the wallet ----------
 
-let tapTimer = 0;
-/** One tap on the square: the first starts the clock, the 25th inside the time passes. The count and the
- *  clock are written straight into the page; a full render per tap would eat the taps. */
-function asTap() {
-  const t = S.as.tap;
-  if (t.done) return;
-  if (!t.start) {
-    t.start = performance.now();
-    tapTimer = window.setInterval(() => {
-      const left = Math.max(0, TAP_MS - (performance.now() - t.start));
-      const el = document.querySelector("[data-as-timer]");
-      if (el) el.textContent = `${(left / 1000).toFixed(1)}s`;
-      if (!left) asTapEnd();
-    }, 50);
-  }
-  t.count++;
-  const c = document.querySelector("[data-as-count]");
-  if (c) c.textContent = `${t.count} / ${TAP_GOAL}`;
-  if (tapPassed(t.count, performance.now() - t.start)) asTapEnd();
-}
-function asTapEnd() {
-  clearInterval(tapTimer);
-  const t = S.as.tap;
-  t.done = tapPassed(t.count, performance.now() - t.start) ? "pass" : "fail";
-  render();
-  setTimeout(() => {
-    if (t.done === "pass") { S.as.step = "hunt"; S.as.hunt = huntRound(); S.as.picked = new Set(); S.as.huntDone = undefined; }
-    else S.as.tap = { count: 0, start: 0, done: undefined };
-    render();
-  }, t.done === "pass" ? 600 : 1000);
-}
-/** Submit the hunt: an exact match verifies the signed-in principal, once, in this browser. */
-function asSubmit() {
-  const a = S.as;
-  if (!a.hunt || a.huntDone) return;
-  a.huntDone = checkHunt(a.hunt, a.picked) ? "pass" : "fail";
-  render();
-  if (a.huntDone === "fail") { setTimeout(() => { a.hunt = huntRound(); a.picked = new Set(); a.huntDone = undefined; render(); }, 1000); return; }
-  setTimeout(() => { store(`as-verified:${S.principal}`, "1"); a.step = "landing"; render(); }, 600);
-}
 /** The agent's wallet is its notebook canister. Its three addresses: BTC from the ckBTC minter, ETH from
  *  threshold ECDSA, ICP its ledger account. Each is best effort: a network without the minter says so. */
 /** What the space holds on every ledger the registry lists (the Wallet tab). */
@@ -5835,6 +5782,7 @@ async function finishCardSpawn() {
   if (id) {
     store(orderKey(), null);
     S.as.wallet.order = undefined;
+    S.as.step = 4;
     if (!location.hash.startsWith("#/notebook/")) location.hash = `#/notebook/${id}`;
   } else {
     // the payment stands: keep the order so the person can try the creation again
@@ -5902,7 +5850,7 @@ async function signIn() {
     render();
     await loadNotebooks();
     S.booting = false;
-    if (!asVerified()) { S.as.step = "tap"; S.as.tap = { count: 0, start: 0, done: undefined }; }
+    S.as.step = hasSpace() ? 0 : 3;
     render();
   } catch (e) {
     S.booting = false;
@@ -5919,7 +5867,7 @@ async function signOut() {
   } else await auth.signOut().catch(() => {});
   Object.assign(S, { identity: undefined, principal: "", notebooks: undefined, notebook: undefined, notes: undefined, error: "", isAdmin: false, admin: undefined });
   S.drafts.clear();
-  S.as = { ...S.as, step: "landing", tap: { count: 0, start: 0, done: undefined }, pay: "", wallet: { loading: "", addrs: undefined, order: undefined } };
+  S.as = { ...S.as, step: 1, pay: "", wallet: { loading: "", addrs: undefined, order: undefined } };
   location.hash = "#/";
   render();
 }
@@ -5937,10 +5885,9 @@ async function loadNotebooks() {
     registry().tokens().then((t) => { S.tokens = t; }).catch(() => {});
     S.notebooks = await registry().my_notebooks();
     S.error = "";
-    // a principal with a space passed the gate once, on some device: this one remembers it too
-    if (S.notebooks[0]) store(`as-verified:${S.principal}`, "1");
     // home is the space itself once there is one; without one, the gate ends on the Fuel step
-    if (location.hash === "#/" && S.notebooks[0] && asVerified()) { location.hash = `#/notebook/${S.notebooks[0].canister.toText()}`; return; }
+    if (location.hash === "#/" && S.notebooks[0]) { location.hash = `#/notebook/${S.notebooks[0].canister.toText()}`; return; }
+    if (S.identity && !S.notebooks[0] && S.as.step < 3) S.as.step = 3;
     if (!S.notebooks[0]) resumeOrder();
     render();
     if (S.notebooks[0]) void loadWallet(S.notebooks[0].canister.toText());
@@ -6145,7 +6092,6 @@ async function openNotebook(id: string, path?: string) {
     if (path && note(path)) await open(path);
     void sweepBoards();
     if (!isSandbox()) {
-      if (!S.settings.onboarded) setTimeout(() => onboarding(), 400);
       void loadHealth(id).then((h) => { if (urgent(h) && S.notebook?.canister.toText() === id) { render(); freezeModal(id, h!); } });
     }
   } catch (e) {
@@ -7335,7 +7281,6 @@ async function issueAgentKey() {
     const key = unwrap(await nb().create_agent_key(name));
     S.issued = { name, key };
     void agentSkill().then((t) => { S.skillShown = t; render(); });
-    if (document.querySelector(".onboard")) onboarding(1);
     S.newAgent = "";
     const r = await nb().agent_keys();
     S.agentKeys = r.__kind__ === "Ok" ? r.Ok : S.agentKeys;
@@ -7843,10 +7788,9 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
   const kit = /^(money|creator|fitness|home)-/.exec(action)?.[1];
   if (kit) return kit === "money" ? moneyAction(action, el) : kit === "creator" ? creatorAction(action, el) : kit === "fitness" ? fitnessAction(action, el) : homeAction(action, el);
   switch (action) {
-    case "as-begin": S.as.step = "tap"; S.as.tap = { count: 0, start: 0, done: undefined }; return render();
-    case "as-tap": return asTap();
-    case "as-word": { const a = S.as; if (a.huntDone) return; const i = Number(el.dataset.i); if (a.picked.has(i)) a.picked.delete(i); else a.picked.add(i); el.classList.toggle("on", a.picked.has(i)); return; }
-    case "as-submit": return asSubmit();
+    case "ob-next": S.as.step = S.identity ? 3 : 2; return render();
+    case "ob-back": S.as.step = 1; return render();
+    case "ob-open": S.as.step = 0; return render();
     case "as-card": return asCard(Number(el.dataset.cents));
     case "as-retry": return finishCardSpawn();
     case "as-restart": clearInterval(orderTimer); store(orderKey(), null); S.as.wallet.order = undefined; S.as.pay = ""; return render();
@@ -8047,7 +7991,6 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
       return open(m.insertInto);
     }
     // --- features and kits
-    case "tour": return onboarding();
     case "bib-paste": { const t = await ask({ title: "Paste BibTeX", multiline: true, placeholder: "@article{key, author = {…}, title = {…}, year = {…}}", ok: "Add" }); if (t?.trim()) { const list = parseBibtex(t); if (!list.length) return toast("No BibTeX entries found.", "error"); await addSources(list); } return; }
     case "doi-add": return doiLookup();
     case "thesis-new": { const t = (await ask({ title: "New thesis", label: "Title", ok: "Create" }))?.trim(); if (!t) return; const p = `Research/${t.replace(/[\\/:*?"<>|#^[\]]/g, " ")}.md`; await createQuiet(p, `---\ntype: thesis\ntitle: ${t}\nauthor: \n---\n# ${t}\n\n## Chapters\n\n1. [[Introduction]]\n2. [[Literature review]]\n3. [[Method]]\n4. [[Results]]\n5. [[Discussion]]\n`); S.tab = "notes"; return open(p); }
@@ -8753,7 +8696,6 @@ async function onAction(action: string, el: HTMLElement, ev?: MouseEvent) {
       return toast("Key copied.", "ok");
     case "copy-skill":
       await copy(await agentSkill());
-      if (S.issued && !S.skillCopied) { S.skillCopied = true; if (document.querySelector(".onboard")) onboarding(1); }
       return toast("Setup prompt copied. Paste it into your agent.", "ok");
     case "revoke-key":
       if (!(await confirmDialog(`Revoke the key for ${el.dataset.name}?`, "The agent stops working at once. Its notes stay.", "Revoke"))) return;

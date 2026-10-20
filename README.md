@@ -160,7 +160,7 @@ cargo test                    # name and relink rules
 ```
 
 Open the frontend URL that `icp deploy` prints (`http://<frontend id>.localhost:<port>/`).
-Sign-in is Agent Space's gate (Rapid Tap, then Color Hunt); passing it makes a browser-held key your principal. Add `?ii` to use Internet Identity instead.
+The front door is a four-step onboarding: what a space is, sign in with Internet Identity, fuel by card ($5 to $20; locally the registry fronts the cycles), connect the agent over MCP.
 Everything uses [icp-cli](https://cli.internetcomputer.org) (`icp`), not dfx.
 
 ### Mainnet
